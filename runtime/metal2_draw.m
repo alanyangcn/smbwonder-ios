@@ -154,6 +154,12 @@ static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct 
     if (!t) unsupported(d, "render target creation failed for serial", (long)s->texture.serial);
     return t;
 }
+// CPU-uploaded textures: shared on iOS; macOS (the GPU tests) does not allow shared textures, managed works with replaceRegion.
+#if TARGET_OS_OSX
+#define CPU_TEXTURE_STORAGE MTLStorageModeManaged
+#else
+#define CPU_TEXTURE_STORAGE MTLStorageModeShared
+#endif
 static int device_samples_bc(void) {
     const char *force = getenv("WONDER_TEST_NO_BC"); if (force && *force && strcmp(force, "0")) return 0;
 #if TARGET_OS_OSX
@@ -192,7 +198,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         if (!tex || sampled_hash[key].unsignedLongLongValue != hash) {
             MTLPixelFormat pf = (MTLPixelFormat)(bc ? bc_pf : mtl);
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:t->desc.width height:t->desc.height mipmapped:t->desc.levels > 1];
-            td.mipmapLevelCount = t->desc.levels ? t->desc.levels : 1; td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; td.storageMode = MTLStorageModeShared;
+            td.mipmapLevelCount = t->desc.levels ? t->desc.levels : 1; td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; td.storageMode = CPU_TEXTURE_STORAGE;
             tex = [device newTextureWithDescriptor:td];
             if (!tex) unsupported(d, "sampled texture allocation, serial", (long)t->serial);
             for (unsigned level = 0; level < td.mipmapLevelCount; level++) {
@@ -212,11 +218,13 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
             sampled[key] = tex; sampled_hash[key] = @(hash);
         }
     }
-    NSUInteger levels = tex.mipmapLevelCount, base = 0, count = levels, slices = tex.textureType == MTLTextureType2DArray ? tex.arrayLength : 1, first = 0, layers = slices;
+    NSUInteger levels = tex.mipmapLevelCount, base = 0, count = levels;
+    NSRange all = wonder_host_view_slices(tex.textureType, tex.arrayLength, 0, 0), range = all;
     if (v && v->set_levels) { base = v->base_level; count = v->levels ? v->levels : levels - base; }
-    if (v && v->set_layers) { first = (NSUInteger)v->min_layer; layers = v->layers > 0 ? (NSUInteger)v->layers : slices - first; }
+    if (v && v->set_layers) range = wonder_host_view_slices(tex.textureType, tex.arrayLength, (NSUInteger)MAX(0, v->min_layer), (NSUInteger)MAX(0, v->layers));
     if (base >= levels || count > levels - base) unsupported(d, "texture view levels beyond the texture, serial", (long)t->serial);
-    if (first >= slices || layers > slices - first) unsupported(d, "texture view layers beyond the texture, serial", (long)t->serial);
+    if (!range.length) unsupported(d, "texture view layers not representable (cube views need whole cubes), serial", (long)t->serial);
+    NSUInteger first = range.location, layers = range.length, slices = all.length;
     const uint8_t *z = v && v->set_swizzle ? v->swizzle : t->swizzle;   // NVN swizzle values equal MTLTextureSwizzle (ZERO 0, ONE 1, R 2, G 3, B 4, A 5)
     int identity = z[0] == 2 && z[1] == 3 && z[2] == 4 && z[3] == 5, unset = !(z[0] | z[1] | z[2] | z[3]);
     if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
@@ -263,7 +271,7 @@ static int bisect_dummy_textures;   // diagnostic bisect only
 static id<MTLTexture> dummy_texture(void) {
     static id<MTLTexture> t; if (t) return t;
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
-    td.storageMode = MTLStorageModeShared; t = [device newTextureWithDescriptor:td]; uint32_t px = 0xffffffff;
+    td.storageMode = CPU_TEXTURE_STORAGE; t = [device newTextureWithDescriptor:td]; uint32_t px = 0xffffffff;
     [t replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:&px bytesPerRow:4]; return t;
 }
 static struct wonder_host_span cpu_copy(struct wonder_host_span s) {   // bisect: same bytes in a fresh shared buffer
@@ -513,6 +521,14 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     return 0;
 }
 
+NSRange wonder_host_view_slices(MTLTextureType type, NSUInteger array_length, NSUInteger first, NSUInteger count) {
+    int cube = type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray;
+    NSUInteger total = type == MTLTextureTypeCube ? 6 : type == MTLTextureTypeCubeArray ? 6 * array_length : type == MTLTextureType2DArray ? array_length : 1;
+    if (!count) count = first < total ? total - first : 0;
+    if (cube) { if (first % 6) return NSMakeRange(0, 0); count = (count + 5) / 6 * 6; }
+    if (first >= total || count > total - first || !count) return NSMakeRange(0, 0);
+    return NSMakeRange(first, count);
+}
 MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t, MTLPixelFormat format) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     NSUInteger depth = t->depth ? t->depth : 1;

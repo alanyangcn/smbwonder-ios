@@ -14,4 +14,7 @@ const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 // Render target descriptor for an NVN texture: 2D / rectangle, 2D array, cube and cube array (depth = layer-faces,
 // 6 per cube; NVN layer-face index = Metal slice). nil for targets the host does not render to.
 MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *d, MTLPixelFormat format);
+// Metal slice range of an NVN view's layers (min_layer, layers; layers 0 = the rest). Cube and cube-array views must
+// cover whole cubes: a cube-aligned range is rounded up to whole cubes. Length 0 = not representable.
+NSRange wonder_host_view_slices(MTLTextureType type, NSUInteger array_length, NSUInteger min_layer, NSUInteger layers);
 #endif
