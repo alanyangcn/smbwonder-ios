@@ -42,7 +42,7 @@ uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBuffer
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
 void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
-#define EXPECTED_IMPLEMENTED 266
+#define EXPECTED_IMPLEMENTED 267
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
@@ -509,6 +509,9 @@ int main(void) {
     ((void (*)(void *, int))slot("nvnTextureBuilderSetDepthStencilMode"))(gtb, 0);
     ((void (*)(void *, int))slot("nvnTextureBuilderSetFlags"))(gtb, 0);
     EXPECT_STOP(wonder_nvnTextureBuilderSetDefaults(NULL), "NVN_INVALID_OBJECT");
+    // ZCull save storage: the host has no saveable ZCull, as the sdk reports for formats without it (sdk+0x45d0d0 -> 0).
+    assert(((size_t (*)(const void *))slot("nvnTextureBuilderGetZCullStorageSize"))(gtb) == 0);
+    EXPECT_STOP(((size_t (*)(const void *))slot("nvnTextureBuilderGetZCullStorageSize"))(device), "NVN_INVALID_OBJECT");
     size_t gsize = ((size_t (*)(const void *))slot("nvnTextureBuilderGetStorageSize"))(gtb);
     assert(gsize > 0 && gsize <= 0x10000);
     ((void (*)(void *, const void *, ptrdiff_t))slot("nvnTextureBuilderSetStorage"))(gtb, cb_pool, 0);

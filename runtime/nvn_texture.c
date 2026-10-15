@@ -107,6 +107,14 @@ size_t wonder_nvnTextureBuilderGetStorageSize(const void *builder) {
                       (unsigned)b->desc.flags, (unsigned long long)L.size, L.tileH);
     return (size_t)L.size;
 }
+// ZCull save/restore storage (sdk+0x45d0d0 computes it from TX1 ZCull hardware parameters and returns 0 for formats
+// without ZCull). The host GPU has no saveable ZCull (Metal manages its own hierarchical depth), so no storage is needed;
+// nvnCommandBufferSave/RestoreZCullData remain stops if a caller ever uses them. Round72: main+0x1e1f918 stores the
+// result in its depth-buffer object.
+size_t wonder_nvnTextureBuilderGetZCullStorageSize(const void *builder) {
+    tbuilder_of((void *)builder, "nvnTextureBuilderGetZCullStorageSize");
+    return 0;
+}
 size_t wonder_nvnTextureBuilderGetStorageAlignment(const void *builder) {
     return layout_of(&tbuilder_of((void *)builder, "nvnTextureBuilderGetStorageAlignment")->desc, "nvnTextureBuilderGetStorageAlignment").align;
 }
@@ -322,7 +330,7 @@ const struct wonder_nvn_entry wonder_nvn_texture_entries[] = {
     E(nvnTextureBuilderSetHeight), E(nvnTextureBuilderSetDepth), E(nvnTextureBuilderSetLevels), E(nvnTextureBuilderSetTarget),
     E(nvnTextureBuilderSetFormat), E(nvnTextureBuilderSetFlags), E(nvnTextureBuilderGetFlags), E(nvnTextureBuilderSetSamples),
     E(nvnTextureBuilderSetSwizzle), E(nvnTextureBuilderSetPackagedTextureLayout), E(nvnTextureBuilderSetDepthStencilMode), E(nvnTextureBuilderSetStride),
-    E(nvnTextureBuilderGetStorageSize), E(nvnTextureBuilderGetStorageAlignment), E(nvnTextureBuilderSetStorage),
+    E(nvnTextureBuilderGetStorageSize), E(nvnTextureBuilderGetZCullStorageSize), E(nvnTextureBuilderGetStorageAlignment), E(nvnTextureBuilderSetStorage),
     E(nvnTextureInitialize), E(nvnTextureFinalize), E(nvnTextureSetDebugLabel), E(nvnTextureGetFlags), E(nvnTextureGetFormat),
     E(nvnTextureGetWidth), E(nvnTextureGetHeight), E(nvnTextureGetDepth), E(nvnTextureGetLevels), E(nvnTextureGetTarget),
     E(nvnTextureViewSetDefaults), E(nvnTextureViewSetLevels), E(nvnTextureViewSetLayers), E(nvnTextureViewSetFormat),
