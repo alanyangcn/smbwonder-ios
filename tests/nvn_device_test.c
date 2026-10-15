@@ -29,11 +29,28 @@ uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBuffer
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
 void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
-#define EXPECTED_IMPLEMENTED 256
+#define EXPECTED_IMPLEMENTED 265
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders) { (void)program; (void)shaders; captured_programs++; }
+// Fake replay backend: records operations; CPU callbacks run when pending work is "committed".
+static unsigned host_clears, host_depth_clears, host_fills, host_writes, host_presents, host_targets;
+static float host_last_clear[4]; static void *pending_fn[64]; static void *pending_arg[64]; static unsigned pending_count;
+void *wonder_host_render_target(const struct wonder_nvn_texture *texture, uint32_t format) {
+    (void)format; host_targets++; return texture->host ? texture->host : (void *)(uintptr_t)(0xd000 + texture->serial);
+}
+int wonder_host_clear_color(void *texture, int level, int slice, const float rgba[4]) { (void)texture; (void)level; (void)slice; memcpy(host_last_clear, rgba, 16); host_clears++; return 0; }
+int wonder_host_clear_depth_stencil(void *texture, int level, int slice, int cd, float depth, int cs, uint32_t stencil) {
+    (void)texture; (void)level; (void)slice; (void)cd; (void)depth; (void)cs; (void)stencil; host_depth_clears++; return 0;
+}
+int wonder_host_fill_buffer(void *buffer, size_t offset, size_t size, uint8_t value) { (void)buffer; (void)offset; (void)size; (void)value; host_fills++; return 0; }
+int wonder_host_write_buffer(void *buffer, size_t offset, const void *data, size_t size) { (void)buffer; (void)offset; (void)data; (void)size; host_writes++; return 0; }
+void wonder_host_after_gpu(void (*fn)(void *), void *arg) { assert(pending_count < 64); pending_fn[pending_count] = (void *)fn; pending_arg[pending_count++] = arg; }
+void wonder_host_flush(void) { for (unsigned i = 0; i < pending_count; i++) ((void (*)(void *))pending_fn[i])(pending_arg[i]); pending_count = 0; }
+void wonder_host_finish(void) { wonder_host_flush(); }
+void wonder_host_fence(void (*fn)(void *), void *arg) { wonder_host_after_gpu(fn, arg); wonder_host_flush(); }
+int wonder_host_present(void *texture, const int crop[4], int interval) { (void)texture; (void)crop; (void)interval; host_presents++; return 0; }
 void *wonder_nvn_unimplemented_thunk(unsigned index) { assert(index < WONDER_NVN_NAME_COUNT); return (void *)(0x100000 + 8 * (uintptr_t)index); }
 #define EXPECT_STOP(expr, text) do { last_stop[0] = 0; expecting_stop = 1; if (!setjmp(stopped)) { expr; assert(!"expected stop: " text); } expecting_stop = 0; assert(strstr(last_stop, text)); } while (0)
 static unsigned char device[WONDER_NVN_DEVICE_SIZE], builder[WONDER_NVN_DEVICE_BUILDER_SIZE];
@@ -265,7 +282,7 @@ int main(void) {
     int (*acquire)(void *, void *, int *) = slot("nvnWindowAcquireTexture");
     int index = -1;
     for (int i = 0; i < N; i++) { assert(acquire(window, sync, &index) == 0 && index == i); }
-    EXPECT_STOP(wonder_nvnWindowAcquireTexture(window, sync, &index), "NVN_UNSUPPORTED");   // all held; present not implemented
+    EXPECT_STOP(wonder_nvnWindowAcquireTexture(window, sync, &index), "NVN_INVALID_STATE");   // all held until presented
     // main+0x5bbcf4..0x5bbffc: command buffer object, CPU_UNCACHED|GPU_UNCACHED pool, 32-byte mapped buffer, sync.
     static _Alignas(16) unsigned char cmdbuf_storage[0xb0];
     unsigned char *cmdbuf = cmdbuf_storage;
@@ -604,6 +621,73 @@ int main(void) {
         EXPECT_STOP(for (int i = 0; i < 4096; i++) ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3), "NVN_COMMAND_MEMORY_EXHAUSTED");
         rcb[0x11] = 0;
         ((void (*)(void *))slot("nvnCommandBufferFinalize"))(rcb);
+    }
+    // ---- Queue replay: clears, uniform updates, reports, fences, present; unsupported work stops by name ----
+    {
+        static _Alignas(16) unsigned char qcb[0xa0]; static _Alignas(8) unsigned char qctl[512];
+        assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(qcb, device) == 1);
+        ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(qcb, qctl, sizeof qctl);
+        ((void (*)(void *, const void *, ptrdiff_t, size_t))slot("nvnCommandBufferAddCommandMemory"))(qcb, cb_pool, 0xd000, 0x1000);
+        void (*begin)(void *) = slot("nvnCommandBufferBeginRecording"); uint64_t (*end)(void *) = slot("nvnCommandBufferEndRecording");
+        void (*submit)(void *, int, const uint64_t *) = slot("nvnQueueSubmitCommands");
+        void (*set_targets)(void *, int, const void *const *, const void *const *, const void *, const void *) = slot("nvnCommandBufferSetRenderTargets");
+        void (*scissor)(void *, int, int, int, int) = slot("nvnCommandBufferSetScissor");
+        void (*clear)(void *, int, const float *, int) = slot("nvnCommandBufferClearColor");
+        const void *target[1] = {textures[0]};    // display texture: owns its host render target
+        float blue[4] = {0, 0, 1, 1};
+        uint32_t *report = (uint32_t *)(cb_memory + 0x8010); uint64_t *stamp = (uint64_t *)(cb_memory + 0x8020);
+        report[0] = 0; stamp[0] = stamp[1] = 7;
+        begin(qcb);
+        set_targets(qcb, 1, target, NULL, NULL, NULL);
+        scissor(qcb, 0, 0, 1920, 1080);
+        clear(qcb, 0, blue, 0xf);
+        uint32_t ubo[2] = {11, 22};
+        ((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(qcb, (uintptr_t)(cb_memory + 0x8000), 0x10, 0, 8, ubo);
+        ((void (*)(void *, uint32_t, uint64_t))slot("nvnCommandBufferReportValue"))(qcb, 0xabcd, (uintptr_t)report);
+        ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0, (uintptr_t)stamp);
+        ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x10);
+        ((void (*)(void *, int))slot("nvnCommandBufferSetTiledCacheAction"))(qcb, 1);
+        uint64_t frame = end(qcb);
+        submit(queue, 1, &frame);
+        assert(host_clears == 1 && host_last_clear[2] == 1.0f && host_writes == 1 && report[0] == 0);   // reports wait for the GPU
+        int (*sync_wait)(const void *, uint64_t) = slot("nvnSyncWait");
+        static _Alignas(16) unsigned char fence_sync[0x40];
+        assert(((uint32_t (*)(void *, const void *))slot("nvnSyncInitialize"))(fence_sync, device) == 1);
+        EXPECT_STOP(sync_wait(fence_sync, 0), "never fenced");
+        ((void (*)(void *, void *, int, int))slot("nvnQueueFenceSync"))(queue, fence_sync, 0, 0);
+        assert(sync_wait(fence_sync, UINT64_MAX) == 0 && report[0] == 0xabcd && stamp[0] == 0 && stamp[1] != 7);
+        ((void (*)(void *))slot("nvnQueueFlush"))(queue); ((void (*)(void *))slot("nvnQueueFinish"))(queue);
+        // Present returns the texture to the window; the next acquire can reuse it.
+        void (*present)(void *, void *, int) = slot("nvnQueuePresentTexture");
+        ((void (*)(void *, int, int, int, int))slot("nvnWindowSetCrop"))(window, 0, 0, 1280, 720);
+        present(queue, window, 0);
+        assert(host_presents == 1);
+        EXPECT_STOP(present(queue, window, 0), "not acquired");
+        assert(acquire(window, sync, &index) == 0 && index == 0);
+        ((void (*)(void *, int))slot("nvnWindowSetPresentInterval"))(window, 2);
+        ((void (*)(void *, int))slot("nvnWindowSetNumActiveTextures"))(window, N);
+        EXPECT_STOP(((void (*)(void *, int))slot("nvnWindowSetNumActiveTextures"))(window, N + 1), "NVN_INVALID_ARGUMENT");
+        // Work the host cannot execute yet stops by name instead of being skipped.
+        begin(qcb); set_targets(qcb, 1, target, NULL, NULL, NULL);
+        ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(qcb, 4, 0, 3);
+        uint64_t draw = end(qcb);
+        EXPECT_STOP(submit(queue, 1, &draw), "NVN_REPLAY_PENDING DrawArrays");
+        begin(qcb); set_targets(qcb, 1, target, NULL, NULL, NULL); scissor(qcb, 0, 0, 64, 64); clear(qcb, 0, blue, 0xf);
+        uint64_t partial = end(qcb);
+        EXPECT_STOP(submit(queue, 1, &partial), "scissored clear");
+        begin(qcb); scissor(qcb, 0, 0, 4096, 4096); clear(qcb, 0, blue, 0x7);
+        uint64_t masked = end(qcb);
+        EXPECT_STOP(submit(queue, 1, &masked), "partial channel-mask");
+        begin(qcb); ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetRenderEnable"))(qcb, 0);
+        ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(qcb, 4, 0, 3);   // disabled rendering: no-op
+        ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetRenderEnable"))(qcb, 1);
+        ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 1, (uintptr_t)stamp);
+        uint64_t samples = end(qcb);
+        EXPECT_STOP(submit(queue, 1, &samples), "only NVN_COUNTER_TYPE_TIMESTAMP");
+        uint64_t bogus = 0x999; EXPECT_STOP(submit(queue, 1, &bogus), "NVN_INVALID_HANDLE");
+        submit(queue, 1, &frame);                                                                        // replay state survives stops
+        assert(host_clears == 2);
+        wonder_host_flush();
     }
     // ---- Object lifetime / getters / programs (SDK sdk+0x44dd00.. semantics) ----
     {

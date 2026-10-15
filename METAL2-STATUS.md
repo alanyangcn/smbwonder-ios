@@ -13,6 +13,16 @@
 - 字体路径使用 CoreText 系统字体替代，重建真实 SFNT 并验证校验和与可解析性；六个本机字体及稳定地址测试通过。Nintendo 扩展符号的覆盖并不等价。round33 被未被游戏引用的强制 RequestSharedFontLoad hook 拦住，已移除。round34 run `2F7358F0-4F70-4EF0-9125-AA653D31EC3E`（debugger=1）通过系统字体替代（含 type=5 AppleSymbols），停在 `nvnTextureBuilderSetPackagedTextureLayout`（main+0x5293c）。
 - 补了合法 NULL 命令内存回调与 EndRecording 授予范围校验；ProgramSetShaders 严格停点前会捕获控制数据/代码前缀。缺失绘制语义仍明确停止。完整宿主测试目前50项。
 - round35（待真机）：`nvnTextureBuilderSetPackagedTextureLayout` 按 nn::gfx TextureInfo+0x24 的 8 字节布局实现。全 RomFS 3063 个 BRTI 统计：u32 块高 log2（0..4）+ u32 0x00010007；第 0 字节决定第 0 级 GOB 块高（与自动算法可不同），其他值严格停止。`nvnDeviceGetTextureHandle` 按 TX1 句柄 texture | sampler<<20 实现（main+0x5de9c 直接传给 BindTexture）。167 入口。
+- round35 run `2CF81B76-04DB-4B54-9CDB-2CABD4B42564`（debugger=1）：packaged 贴图布局通过，停在 `nvnProgramSetShadersExt`（main+0x10857a0）。
+- 引用扫描修正：原 nvn_inventory 只统计 `adrp+ldr` 直接取槽，漏掉 `adrp+add` 与尾调用（br）。完整扫描（排除 0x1080ff0..0x1084a70 的加载器）得出游戏实际引用 241 个 NVN 名字，其中当时缺 100 个。
+- SDK 真值：sdk 模块自带 NVN 名表（名字串 sdk+0xb3de9f，偏移表 +0xb41808，入口 +0xd19a08 → 派发槽 → 实现表 +0xd36fd8），可逐函数核对语义。
+- round36（待真机）一次补齐 99 个：
+  - 对象类：ProgramSetShaders/Ext（控制段魔数 0x98761234、阶段字段 +0x714，来自 16600 份 RomFS 控制段统计）、各 Finalize、Sampler/TextureView 取值、Buffer 刷新、Device 调试回调（release 驱动为空操作）、ImageHandle、时间戳；GetTextureHandle 按 sdk+0x44e150 修正为符号扩展且置 bit 32。
+  - 录制类：67 个 CommandBuffer 调用录为带类型、参数快照的命令；按 sdk+0x443584 实现命令内存回调与分段（兼容游戏内联的 BeginRecording），EndRecording 按段写 SDK55 控制组。
+  - 提交类：QueueSubmitCommands 回放到 Metal（清屏、缓冲填充、uniform 更新、时间戳/数值报告、状态跟踪），FenceSync/SyncWait/Flush/Finish，PresentTexture 按宽高比把显示贴图画到 CAMetalLayer（sRGB 经 UNORM 视图原样输出），Window 裁剪/间隔/活动数。
+  - 回放遇到 draw、dispatch、贴图复制/降采样/清除、非时间戳计数器、条件渲染、部分掩码或带裁剪的清屏时按名停止，不跳过、不伪造。
+  - 唯一保留的停止跳板是 `nvnTextureBuilderGetZCullStorageSize`：它依赖 TX1 硬件 ZCull 参数，唯一调用点在 main+0x1e1f918 的调试工具路径，游戏不使用 ZCull 保存/恢复。
+  - 265 个入口；NVN 宿主测试（Linux gcc -Werror）通过，新增录制、分段、回放、栅栏、显示测试。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。

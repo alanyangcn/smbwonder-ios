@@ -101,3 +101,17 @@ int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_s
 // Shader evidence for the offline translator (nvn_bootstrap.c on device).
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders);
 int wonder_nvn_descriptor_pool_check(const void *pool, int sampler, const char *who);
+// Host GPU replay backend (host_graphics.m on device, the test harness on the host). Integer results: 0 = ok.
+struct wonder_nvn_texture;
+void *wonder_host_render_target(const struct wonder_nvn_texture *texture, uint32_t mtl_pixel_format);
+int wonder_host_clear_color(void *texture, int level, int slice, const float rgba[4]);
+int wonder_host_clear_depth_stencil(void *texture, int level, int slice, int clear_depth, float depth, int clear_stencil, uint32_t stencil);
+int wonder_host_fill_buffer(void *buffer, size_t offset, size_t size, uint8_t value);
+int wonder_host_write_buffer(void *buffer, size_t offset, const void *data, size_t size);
+void wonder_host_after_gpu(void (*fn)(void *), void *arg);     // run on the CPU after work encoded so far completes
+void wonder_host_fence(void (*fn)(void *), void *arg);         // same, and commit now
+void wonder_host_flush(void);
+void wonder_host_finish(void);
+int wonder_host_present(void *texture, const int crop[4], int interval);
+extern const struct wonder_nvn_entry wonder_nvn_queue_entries[];
+extern const unsigned wonder_nvn_queue_count;

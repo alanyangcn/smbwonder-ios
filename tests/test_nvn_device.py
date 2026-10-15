@@ -6,13 +6,13 @@ class NvnDeviceTests(unittest.TestCase):
     def test_strict_bootstrap_follows_wonder_call_order(self):
         with tempfile.TemporaryDirectory() as d:
             exe=Path(d)/'nvn'
-            subprocess.run(['clang','-std=c11','-pthread','-Wall','-Wextra','-Werror','-I'+str(RUNTIME),str(ROOT/'tests/nvn_device_test.c'),str(RUNTIME/'nvn_device.c'),str(RUNTIME/'nvn_swapchain.c'),str(RUNTIME/'nvn_buffer.c'),str(RUNTIME/'nvn_commands.c'),str(RUNTIME/'nvn_texture.c'),str(RUNTIME/'nvn_state.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-o',str(exe)],check=True)
+            subprocess.run(['clang','-std=c11','-pthread','-Wall','-Wextra','-Werror','-I'+str(RUNTIME),str(ROOT/'tests/nvn_device_test.c'),str(RUNTIME/'nvn_device.c'),str(RUNTIME/'nvn_swapchain.c'),str(RUNTIME/'nvn_buffer.c'),str(RUNTIME/'nvn_commands.c'),str(RUNTIME/'nvn_queue.c'),str(RUNTIME/'nvn_texture.c'),str(RUNTIME/'nvn_state.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-o',str(exe)],check=True)
             result=subprocess.run([str(exe)],capture_output=True,text=True,timeout=30)
             self.assertEqual(result.returncode,0,result.stderr + result.stdout[-1500:])
             out=result.stdout
             self.assertIn('NVN_STRICT_BOOTSTRAP_OK',out)
-            self.assertRegex(out,r'NVN_PROC_TABLE pass=1 device=\S+ implemented=256 stop_thunks=278')
-            self.assertRegex(out,r'NVN_PROC_TABLE pass=2 device=0x[0-9a-f]+ implemented=256 stop_thunks=278')
+            self.assertRegex(out,r'NVN_PROC_TABLE pass=1 device=\S+ implemented=265 stop_thunks=269')
+            self.assertRegex(out,r'NVN_PROC_TABLE pass=2 device=0x[0-9a-f]+ implemented=265 stop_thunks=269')
     def test_build_script_and_xcode_project_compile_same_runtime(self):
         import importlib.util,re
         spec=importlib.util.spec_from_file_location('b',ROOT/'tools/build_loader_probe.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

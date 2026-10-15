@@ -756,7 +756,7 @@ static const struct implemented implemented[] = {
     {"nvnSamplerPoolRegisterSampler", (void *)wonder_nvnSamplerPoolRegisterSampler},
 };
 int wonder_nvn_implemented_count(void) {
-    return (int)(sizeof implemented / sizeof *implemented + wonder_nvn_swapchain_count + wonder_nvn_buffer_count + wonder_nvn_command_count + wonder_nvn_texture_count + wonder_nvn_state_count);
+    return (int)(sizeof implemented / sizeof *implemented + wonder_nvn_swapchain_count + wonder_nvn_buffer_count + wonder_nvn_command_count + wonder_nvn_texture_count + wonder_nvn_state_count + wonder_nvn_queue_count);
 }
 int wonder_nvn_name_index(const char *name) {
     if (!name) return -1;
@@ -772,7 +772,8 @@ void *wonder_nvn_resolve(const char *name, const char *via) {
         }
     const struct { const struct wonder_nvn_entry *entries; unsigned count; } units[] = {
         {wonder_nvn_swapchain_entries, wonder_nvn_swapchain_count}, {wonder_nvn_buffer_entries, wonder_nvn_buffer_count},
-        {wonder_nvn_command_entries, wonder_nvn_command_count}, {wonder_nvn_texture_entries, wonder_nvn_texture_count}, {wonder_nvn_state_entries, wonder_nvn_state_count}};
+        {wonder_nvn_command_entries, wonder_nvn_command_count}, {wonder_nvn_texture_entries, wonder_nvn_texture_count}, {wonder_nvn_state_entries, wonder_nvn_state_count},
+        {wonder_nvn_queue_entries, wonder_nvn_queue_count}};
     for (unsigned u = 0; u < sizeof units / sizeof *units; u++)
         for (unsigned i = 0; i < units[u].count; i++)
             if (name && !strcmp(units[u].entries[i].name, name)) {
