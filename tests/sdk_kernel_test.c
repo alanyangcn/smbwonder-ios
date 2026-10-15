@@ -4,6 +4,11 @@
 extern int wonder_kernel_call(int number, uint64_t *regs);
 extern void wonder_kernel_init(uint64_t image_bytes);
 struct dm_flags g_flag;
+// Handle table stand-in (kernel_threads.c on device): one transfer-memory object at a time is enough here.
+static void *test_object; static uint32_t test_kind; static void (*test_close)(void *);
+uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *)) { test_object = obj; test_kind = kind; test_close = close; return 0x1234; }
+void *wonder_handle_object(uint32_t h, uint32_t kind) { return h == 0x1234 && kind == test_kind ? test_object : NULL; }
+
 int main(void) {
     uint64_t r[31] = {0};
     wonder_kernel_init(0x5000000);
@@ -63,6 +68,26 @@ int main(void) {
     assert(((volatile uint64_t *)heap)[7]==0x77);                                                          // moved back
     r[0]=(uint64_t)info;r[2]=dst;assert(wonder_kernel_call(6,r));assert(((uint32_t *)info)[4]==0);
     r[0]=dst;r[1]=heap;r[2]=0x10000;assert(wonder_kernel_call(5,r));assert(r[0]==0xd401);                 // not mapped
+    // Transfer memory (audio renderer work buffer): owner None, mapped by move, unmapped back.
+    ((volatile uint64_t *)heap)[3]=0x7e57;
+    r[1]=heap;r[2]=0x8000;r[3]=1;
+    r[1]=heap+0x800;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x15,r));assert(r[0]==0xca01);              // unaligned
+    r[1]=heap;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x15,r));assert(!r[0]&&r[1]==0x1234);
+    uint64_t sbase;{uint64_t q[31]={0};q[1]=14;assert(wonder_kernel_call(0x29,q));sbase=q[1];}
+    uint64_t tdst=sbase+0x4000000;
+    r[0]=0x1234;r[1]=heap+0x100000;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);  // inside heap
+    r[0]=0x1234;r[1]=alias;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);         // alias region
+    r[0]=0x1234;r[1]=tdst;r[2]=0x4000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xca01);          // wrong size
+    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(!r[0]);
+    assert(((volatile uint64_t *)tdst)[3]==0x7e57);
+    r[0]=(uint64_t)info;r[2]=tdst+8;assert(wonder_kernel_call(6,r));assert(info[0]==tdst&&((uint32_t *)info)[4]==0xe);
+    r[0]=0x1234;r[1]=tdst+0x10000;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401); // already mapped
+    ((volatile uint64_t *)tdst)[4]=0x5eed;
+    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;assert(wonder_kernel_call(0x52,r));assert(!r[0]);
+    assert(((volatile uint64_t *)heap)[4]==0x5eed);                                                          // moved back
+    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;assert(wonder_kernel_call(0x52,r));assert(r[0]==0xd401);
+    r[0]=0x9999;r[1]=tdst;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xe401);          // bad handle
+    test_close(test_object);
     assert(!wonder_kernel_call(0x7f,r));
     puts("SDK_KERNEL_TEST_OK");
 }

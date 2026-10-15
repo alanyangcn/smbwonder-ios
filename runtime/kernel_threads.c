@@ -37,7 +37,9 @@
 #define MAX_H 1024
 #define PROCESS_CORE_MASK 7u          // application cores 0-2 (GetInfo id 0)
 
-enum { O_FREE, O_THREAD, O_EVENT_R, O_EVENT_W };
+enum { O_FREE, O_THREAD, O_EVENT_R, O_EVENT_W, O_HOST };
+// Host-defined kernel objects (transfer memory, sdk_kernel.c): kind tag + close callback.
+struct host_object { uint32_t kind; void *obj; void (*close)(void *); };
 enum { W_NONE, W_LOCK, W_CONDVAR, W_ADDRESS, W_SYNC };
 struct event { int signaled, refs; };
 struct thr {
@@ -76,6 +78,18 @@ static void *h_peek(uint32_t h, int type) {
 }
 static int owned(uint32_t h) { unsigned i = h - 0x1000u; return h == H_CUR_THREAD || (i > 0 && i < MAX_H && handles[i].type); }
 
+uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *)) {
+    struct host_object *o = malloc(sizeof *o);
+    if (!o) return 0;
+    *o = (struct host_object){kind, obj, close};
+    pthread_mutex_lock(&G); uint32_t h = h_new(O_HOST, o); pthread_mutex_unlock(&G);
+    if (!h) free(o);
+    return h;
+}
+void *wonder_handle_object(uint32_t h, uint32_t kind) {
+    pthread_mutex_lock(&G); struct host_object *o = h_peek(h, O_HOST); void *obj = o && o->kind == kind ? o->obj : NULL; pthread_mutex_unlock(&G);
+    return obj;
+}
 // ---------- waits (hold G) ----------
 static void unlink_wait(struct thr *t) {
     for (struct thr **p = &waiting; *p; p = &(*p)->next) if (*p == t) { *p = t->next; break; }
@@ -417,6 +431,9 @@ int wonder_event_call(int number, uint64_t *r) {
         else if (handles[i].type == O_EVENT_R || handles[i].type == O_EVENT_W) {
             struct event *e = handles[i].obj; if (--e->refs == 0) free(e);
             handles[i].type = O_FREE; handles[i].obj = NULL;
+        } else if (handles[i].type == O_HOST) {
+            struct host_object *o = handles[i].obj; handles[i].type = O_FREE; handles[i].obj = NULL;
+            pthread_mutex_unlock(&G); if (o->close) o->close(o->obj); free(o); pthread_mutex_lock(&G);
         } else if (handles[i].type == O_THREAD) {
             struct thr *t = handles[i].obj; handles[i].type = O_FREE; handles[i].obj = NULL;
             t->closed = 1; if (t->exited) free_thread(t); else if (!t->started) pthread_cond_signal(&t->cv);

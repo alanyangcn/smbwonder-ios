@@ -1,6 +1,7 @@
 // Target startup kernel. Unsupported services are errors, never successful placeholders.
 // ABI: switchbrew/libnx nx/include/switch/kernel/svc.h; register wrappers verified in target sdk.
 #include "dm.h"
+#include "kernel_events.h"
 #include <sys/mman.h>
 #include <unistd.h>
 #include <errno.h>
@@ -71,6 +72,9 @@ void wonder_kernel_init(uint64_t bytes) {
     LOG("SDK_KERNEL AS=%p+%#llx pool=%llu MiB heap_region=%llu MiB alias=%llu MiB (lazy commit)",space,(unsigned long long)AS_SIZE,
         (unsigned long long)(POOL_SIZE>>20),(unsigned long long)(heap_capacity>>20),(unsigned long long)(ALIAS_SIZE>>20));
 }
+#define TRANSFER_MEMORY_KIND 0x544d454du   /* "TMEM" */
+struct transfer_memory { uint64_t src, size, mapped; };
+static void free_transfer_memory(void *p) { free(p); }   // a live mapping stays until UnmapTransferMemory, as in Horizon
 static int kernel_call_locked(int number, uint64_t *r) {
     if (!space) die("kernel used before initialization");
     switch (number) {
@@ -79,6 +83,7 @@ static int kernel_call_locked(int number, uint64_t *r) {
         if (size & 0x1fffff) {r[0]=0xca01;return 1;}
         if (size > AS_SIZE-HEAP_OFFSET || size > POOL_SIZE || image_size > POOL_SIZE-size) {r[0]=0x10801;return 1;}
         uint8_t *heap=space+HEAP_OFFSET;
+        for (unsigned i=0;i<nregion;i++) if (size>heap_size && regions[i].state==0xe && regions[i].base<(uint64_t)heap+size && regions[i].base+regions[i].size>(uint64_t)heap+heap_size) {r[0]=0xd401;return 1;}
         if (size > heap_size && mprotect(heap+heap_size,size-heap_size,PROT_READ|PROT_WRITE)) {r[0]=0xce01;return 1;}
         if (size < heap_size) {
             // MADV_DONTNEED does not guarantee zero-fill on Darwin; replace the released mapping.
@@ -172,6 +177,60 @@ static int kernel_call_locked(int number, uint64_t *r) {
         uint32_t *info=(void *)r[0];memset(info,0,0x28);
         ((uint64_t *)info)[0]=base;((uint64_t *)info)[1]=size;info[4]=state;info[6]=perm;
         r[0]=0;r[1]=0;return 1;
+    }
+    // Transfer memory (nn::os::CreateTransferMemory / MapTransferMemory; the in-process audio server maps the
+    // renderer work buffer this way, sdk+0x136130). Horizon aliases the owner's pages at a new address while the
+    // owner keeps the permission it chose; only MemoryPermission_None is supported, so the owner cannot observe
+    // the pages and the host moves the contents (as MapMemory does, 16 KiB host pages). The SDK picks random
+    // ASLR addresses and retries on 0xd401; Horizon forbids the heap and alias regions. On this host the heap
+    // region is most of the address space, so its unused tail is also accepted (SetHeapSize then refuses to grow
+    // over a transfer mapping).
+    case 0x15: {
+        uint64_t src=r[1],size=r[2],heap=(uint64_t)space+HEAP_OFFSET; uint32_t perm=(uint32_t)r[3];
+        if(!size||(src|size)&0xfff){r[0]=0xca01;return 1;}
+        if(src<heap||src-heap>heap_size||size>heap_size-(src-heap)){r[0]=0xd401;return 1;}
+        if(perm!=0) die("SVC CreateTransferMemory owner permission %u unsupported (only None: host moves the pages)",perm);
+        struct transfer_memory *t=calloc(1,sizeof *t);
+        if(!t){r[0]=0xd201;return 1;}
+        *t=(struct transfer_memory){src,size,0};
+        uint32_t h=wonder_handle_new_object(TRANSFER_MEMORY_KIND,t,free_transfer_memory);
+        if(!h){free(t);r[0]=0xd201;return 1;}
+        LOG("HOST_TRANSFER_MEMORY create handle=%#x src=%#llx size=%#llx perm=%u",h,(unsigned long long)src,(unsigned long long)size,perm);
+        r[0]=0;r[1]=h;return 1;
+    }
+    case 0x51: case 0x52: {
+        uint32_t h=(uint32_t)r[0]; uint64_t dst=r[1],size=r[2];
+        struct transfer_memory *t=wonder_handle_object(h,TRANSFER_MEMORY_KIND);
+        if(!t){r[0]=0xe401;return 1;}
+        if(size!=t->size||dst&0xfff){r[0]=0xca01;return 1;}
+        uint64_t lo=(uint64_t)space,hi=lo+AS_SIZE,abase=lo+ALIAS_OFFSET,aend=abase+ALIAS_SIZE,heap=lo+HEAP_OFFSET;
+        if(number==0x51){
+            uint32_t perm=(uint32_t)r[3];
+            if(perm!=1&&perm!=3){r[0]=0xd801;return 1;}
+            if(t->mapped){r[0]=0xd401;return 1;}
+            int bad=dst<lo||dst>=hi||size>hi-dst||(dst<aend&&dst+size>abase)||(dst<heap+heap_size&&dst+size>heap);
+            for(unsigned i=0;!bad&&i<nregion;i++) if(dst<regions[i].base+regions[i].size&&regions[i].base<dst+size) bad=1;
+            if(bad||nregion==256){r[0]=0xd401;return 1;}
+            uint64_t plo=dst&~0x3fffull,phi=(dst+size+0x3fff)&~0x3fffull;
+            if(mprotect((void *)plo,phi-plo,PROT_READ|PROT_WRITE)){r[0]=0xce01;return 1;}
+            memcpy((void *)dst,(void *)t->src,size);
+            regions[nregion++]=(typeof(regions[0])){dst,size,t->src,0xe,perm};   // MemoryState TransferMem
+            t->mapped=dst;
+            LOG("HOST_TRANSFER_MEMORY map handle=%#x dst=%#llx src=%#llx size=%#llx (move semantics)",h,(unsigned long long)dst,(unsigned long long)t->src,(unsigned long long)size);
+        } else {
+            int found=-1;
+            for(unsigned i=0;i<nregion;i++) if(regions[i].base==dst&&regions[i].size==size&&regions[i].state==0xe&&regions[i].src==t->src){found=(int)i;break;}
+            if(found<0||t->mapped!=dst){r[0]=0xd401;return 1;}
+            memcpy((void *)t->src,(void *)dst,size);
+            regions[found]=regions[--nregion]; t->mapped=0;
+            // Release whole host pages no other region touches (fresh zero pages next time).
+            for(uint64_t p=(dst+0x3fff)&~0x3fffull;p+0x4000<=dst+size;p+=0x4000){
+                int shared=0; for(unsigned i=0;i<nregion;i++) if(p<regions[i].base+regions[i].size&&regions[i].base<p+0x4000) shared=1;
+                if(!shared&&mmap((void *)p,0x4000,PROT_NONE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0)==MAP_FAILED){r[0]=0xce01;return 1;}
+            }
+            LOG("HOST_TRANSFER_MEMORY unmap handle=%#x dst=%#llx",h,(unsigned long long)dst);
+        }
+        r[0]=0;return 1;
     }
     // Thread SVCs (0x08-0x10, 0x25, synchronization) live in kernel_threads.c.
     case 0x29: {

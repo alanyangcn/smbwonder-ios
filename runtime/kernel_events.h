@@ -9,3 +9,6 @@ uint32_t wonder_event_signal(uint32_t handle);
 uint32_t wonder_threads_register_current(int prio, int core, void (*prepare)(void),
                                          void (*enter)(uint64_t entry, uint64_t arg, uint64_t sp),
                                          void (*reporter)(const char *line));
+// Host kernel objects behind ordinary handles (CloseHandle invokes close(obj)).
+uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *));
+void *wonder_handle_object(uint32_t handle, uint32_t kind);

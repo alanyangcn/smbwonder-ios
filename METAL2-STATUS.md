@@ -26,6 +26,8 @@
 - round36 run `059CAB3C-DBDF-4D16-9DEB-841822C8B6FA`（debugger=1，51 项测试、xcodebuild、签名、安装通过）：265 个 NVN 入口全部生效，Metal 回放代码在设备上编译运行；游戏完成图形初始化，3570 次 ProgramSetShadersExt（首个程序 2 阶段已完整捕获到 Documents/ShaderCapture），VFX 内存池、两个工作线程、声音配置读取均通过。尚未发生 QueueSubmit/Present。
 - 新停点不在 NVN：`nn::audio::GetAudioRendererWorkBufferSize`（sdk+0x1e0a54）经 `CreateAudioRendererManagerByHipc` 走真实 `sm:` 端口（SVC 0x1F ConnectToNamedPort）。Wonder 导入 197 个 nn::audio 函数，使用完整 AudioRenderer（不是 D2R 的 AudioOut），需要新的音频子系统。
 - 音频方案（用户选择：先静音实时消耗）：sdk 静态链接了完整 AudioRenderer 栈：客户端、进程内服务端（AudioRendererManagerImpl/AudioRenderSystem/InfoUpdater/CommandGenerator）、DSP 命令处理器（CommandListProcessor）。本构建只有平台层是空实现。round37（待真机）：`CreateAudioRendererManagerByHipc` 转到 sdk 自己的 `ByDfc`（sdk+0x1e0a38 在 executionMode==1 时本就走它）；宿主 DSP：`dsp::SendCommandBuffer` 按 sdk+0x20ccd4 的方式运行原生 CommandListProcessor，`dsp::Wait` 按 5 ms DSP 帧绝对时间节拍；音频设备按 iPhone 扬声器（内置扬声器、立体声、主音量 1.0）作答，设备事件为真实内核事件。最终混音暂留内存，下一步接 iOS 出声。
+- round37 加载器拒绝未被引用的强制接管（GetAudioSystemMasterVolumeSetting 为 sdk 内部直接调用，已移除）。round37b run `E380293E-AE28-4558-B272-396870E242A4`：进程内音频服务端生效（GetAudioRendererWorkBufferSize 通过），OpenAudioRenderer 停在 SVC 0x15 CreateTransferMemory。
+- round38（待真机）：内核实现传输内存 0x15/0x51/0x52：仅支持所有者权限 None，映射时按 16 KiB 宿主页搬移内容，解除时搬回；按 Horizon 规则拒绝堆已用部分和 alias 区（返回 0xd401 让 SDK 换随机地址），另外接受堆区未用尾部，SetHeapSize 不允许扩到传输映射上。句柄表新增通用宿主对象类型。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
