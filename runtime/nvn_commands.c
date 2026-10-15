@@ -92,7 +92,9 @@ void wonder_nvnCommandBufferSetCommandMemoryCallbackEnabled(void *cmdbuf, uint32
 }
 void wonder_nvnCommandBufferAddControlMemory(void *cmdbuf, void *memory, size_t size) {
     uint8_t *c = cmdbuf_of(cmdbuf, "nvnCommandBufferAddControlMemory");
-    if (!memory || ((uintptr_t)memory & 7) || size < 256 || size > UINTPTR_MAX - (uintptr_t)memory)
+    // The advertised minimum (COMMAND_BUFFER_MIN_CONTROL_SIZE 256) is not enforced by the release driver (sdk+0x443150);
+    // the host needs the 16-byte Begin control header and the 16-byte link tail. Running out later stops by name.
+    if (!memory || ((uintptr_t)memory & 7) || size < 32 || size > UINTPTR_MAX - (uintptr_t)memory)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferAddControlMemory memory=%p size=%#zx", memory, size);
     if (c[0x11]) wonder_nvn_stop("NVN_UNSUPPORTED nvnCommandBufferAddControlMemory during recording (control-segment link pending)");
     // SDK+0x4431e8..0x443204: preserve a 16-byte tail for control-segment links.

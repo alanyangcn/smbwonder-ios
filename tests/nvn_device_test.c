@@ -752,6 +752,13 @@ int main(void) {
             for (unsigned i = 0; i < 0x200; i++) cb_memory[0x100 + i] = (unsigned char)(i * 7 + 1);
             stages[0].code = code; stages[0].control = vs_control; stages[1].code = code + 0x100; stages[1].control = fs_control;
             assert(set_shaders(program_memory, 2, stages) == 1);
+            // Control memory below the advertised minimum (256, sdk+0x441460) is legal on the release driver: round71 passes 0x80.
+            {
+                static _Alignas(16) unsigned char scb[0xa0]; static _Alignas(8) unsigned char sctl[0x80];
+                assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(scb, device) == 1);
+                ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(scb, sctl, 0x80);
+                EXPECT_STOP(((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(scb, sctl, 0x18), "NVN_INVALID_ARGUMENT");   // header + link tail need 32
+            }
             static _Alignas(16) unsigned char dcb[0xa0]; static _Alignas(8) unsigned char dctl[0x4000];
             assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(dcb, device) == 1);
             ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(dcb, dctl, sizeof dctl);
