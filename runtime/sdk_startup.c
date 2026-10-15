@@ -1,3 +1,4 @@
+#include <stdatomic.h>
 #include "guest_tls.h"
 #include "dm.h"
 #include "sdk_services.h"
@@ -22,7 +23,11 @@ uint64_t svc_dispatch(int number,uint64_t *regs,uint64_t original) {
     if(wonder_game_stopped()){LOG("GUEST_PARKED svc=%#x pc=%#llx (guest already stopped)",number,original);wonder_game_thread_park();}
     unsigned seen=svc_seen[number&0xff]++;
     if(seen<16)LOG("SDK_SVC phase=%s nr=%#x pc=%#llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx%s",phase,number,original,regs[0],regs[1],regs[2],regs[3],seen==15?" (further calls not logged)":"");
-    if(wonder_kernel_call(number,regs))return regs[0];
+    if(wonder_kernel_call(number,regs)){
+        static _Atomic unsigned failures;
+        if(regs[0]&&atomic_fetch_add(&failures,1)<64)LOG("SDK_SVC_ERROR nr=%#x result=%#llx",number,(unsigned long long)regs[0]);
+        return regs[0];
+    }
     if(wonder_event_call(number,regs)){if(seen<16)LOG("SDK_SVC_RESULT nr=%#x result=%#llx x1=%#llx x2=%#llx",number,regs[0],regs[1],regs[2]);return regs[0];}
     if(number==0x27){fwrite((const void *)regs[0],1,(size_t)regs[1],stderr);fputc('\n',stderr);regs[0]=0;return 0;}
     if(number==0x26 && (regs[0]&0x80000000u))return regs[0];

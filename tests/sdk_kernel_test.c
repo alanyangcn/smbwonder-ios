@@ -75,13 +75,14 @@ int main(void) {
     r[1]=heap;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x15,r));assert(!r[0]&&r[1]==0x1234);
     uint64_t sbase;{uint64_t q[31]={0};q[1]=14;assert(wonder_kernel_call(0x29,q));sbase=q[1];}
     uint64_t tdst=sbase+0x4000000;
-    r[0]=0x1234;r[1]=heap+0x100000;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);  // inside heap
-    r[0]=0x1234;r[1]=alias;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);         // alias region
-    r[0]=0x1234;r[1]=tdst;r[2]=0x4000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xca01);          // wrong size
-    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(!r[0]);
+    r[0]=0x1234;r[1]=heap+0x100000;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);  // inside heap
+    r[0]=0x1234;r[1]=alias;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401);         // alias region
+    r[0]=0x1234;r[1]=tdst;r[2]=0x4000;r[3]=0;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xca01);          // wrong size
+    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xfa01);          // perm != owner perm
+    r[0]=0x1234;r[1]=tdst;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x51,r));assert(!r[0]);
     assert(((volatile uint64_t *)tdst)[3]==0x7e57);
     r[0]=(uint64_t)info;r[2]=tdst+8;assert(wonder_kernel_call(6,r));assert(info[0]==tdst&&((uint32_t *)info)[4]==0xe);
-    r[0]=0x1234;r[1]=tdst+0x10000;r[2]=0x8000;r[3]=3;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401); // already mapped
+    r[0]=0x1234;r[1]=tdst+0x10000;r[2]=0x8000;r[3]=0;assert(wonder_kernel_call(0x51,r));assert(r[0]==0xd401); // already mapped
     ((volatile uint64_t *)tdst)[4]=0x5eed;
     r[0]=0x1234;r[1]=tdst;r[2]=0x8000;assert(wonder_kernel_call(0x52,r));assert(!r[0]);
     assert(((volatile uint64_t *)heap)[4]==0x5eed);                                                          // moved back

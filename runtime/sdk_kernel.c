@@ -73,7 +73,7 @@ void wonder_kernel_init(uint64_t bytes) {
         (unsigned long long)(POOL_SIZE>>20),(unsigned long long)(heap_capacity>>20),(unsigned long long)(ALIAS_SIZE>>20));
 }
 #define TRANSFER_MEMORY_KIND 0x544d454du   /* "TMEM" */
-struct transfer_memory { uint64_t src, size, mapped; };
+struct transfer_memory { uint64_t src, size, mapped; uint32_t perm; };
 static void free_transfer_memory(void *p) { free(p); }   // a live mapping stays until UnmapTransferMemory, as in Horizon
 static int kernel_call_locked(int number, uint64_t *r) {
     if (!space) die("kernel used before initialization");
@@ -192,7 +192,7 @@ static int kernel_call_locked(int number, uint64_t *r) {
         if(perm!=0) die("SVC CreateTransferMemory owner permission %u unsupported (only None: host moves the pages)",perm);
         struct transfer_memory *t=calloc(1,sizeof *t);
         if(!t){r[0]=0xd201;return 1;}
-        *t=(struct transfer_memory){src,size,0};
+        *t=(struct transfer_memory){src,size,0,perm};
         uint32_t h=wonder_handle_new_object(TRANSFER_MEMORY_KIND,t,free_transfer_memory);
         if(!h){free(t);r[0]=0xd201;return 1;}
         LOG("HOST_TRANSFER_MEMORY create handle=%#x src=%#llx size=%#llx perm=%u",h,(unsigned long long)src,(unsigned long long)size,perm);
@@ -206,7 +206,9 @@ static int kernel_call_locked(int number, uint64_t *r) {
         uint64_t lo=(uint64_t)space,hi=lo+AS_SIZE,abase=lo+ALIAS_OFFSET,aend=abase+ALIAS_SIZE,heap=lo+HEAP_OFFSET;
         if(number==0x51){
             uint32_t perm=(uint32_t)r[3];
-            if(perm!=1&&perm!=3){r[0]=0xd801;return 1;}
+            // Horizon: the map permission must equal the owner permission given at creation (None here); the
+            // mapping itself is read/write for the mapper. sdk+0x136278 aborts on results other than ca01/d401/e401/fa01.
+            if(perm!=t->perm){r[0]=0xfa01;return 1;}
             if(t->mapped){r[0]=0xd401;return 1;}
             int bad=dst<lo||dst>=hi||size>hi-dst||(dst<aend&&dst+size>abase)||(dst<heap+heap_size&&dst+size>heap);
             for(unsigned i=0;!bad&&i<nregion;i++) if(dst<regions[i].base+regions[i].size&&regions[i].base<dst+size) bad=1;
@@ -214,7 +216,7 @@ static int kernel_call_locked(int number, uint64_t *r) {
             uint64_t plo=dst&~0x3fffull,phi=(dst+size+0x3fff)&~0x3fffull;
             if(mprotect((void *)plo,phi-plo,PROT_READ|PROT_WRITE)){r[0]=0xce01;return 1;}
             memcpy((void *)dst,(void *)t->src,size);
-            regions[nregion++]=(typeof(regions[0])){dst,size,t->src,0xe,perm};   // MemoryState TransferMem
+            regions[nregion++]=(typeof(regions[0])){dst,size,t->src,0xe,3};   // MemoryState TransferMem, read/write
             t->mapped=dst;
             LOG("HOST_TRANSFER_MEMORY map handle=%#x dst=%#llx src=%#llx size=%#llx (move semantics)",h,(unsigned long long)dst,(unsigned long long)t->src,(unsigned long long)size);
         } else {
