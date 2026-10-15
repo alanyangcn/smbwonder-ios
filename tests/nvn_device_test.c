@@ -41,7 +41,14 @@ void wonder_nvnWindowBuilderSetNativeWindow(void *, const void *); void *wonder_
 uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBufferBuilderSetStorage(void *, const void *, ptrdiff_t, size_t);
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
-void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
+// Fake pool buffers remember their memory so GPU-ordered writes can land there when "executed" (flush / finish).
+static void *buffer_memory[64]; static struct { unsigned id; size_t offset, size; unsigned char data[64]; } pending_writes[64]; static unsigned pending_write_count;
+void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; if (buffers < 64) buffer_memory[buffers] = memory; return (void *)(uintptr_t)(0xb0000 + buffers); }
+static void apply_pending_writes(void) {
+    for (unsigned i = 0; i < pending_write_count; i++)
+        if (pending_writes[i].id < 64 && buffer_memory[pending_writes[i].id]) memcpy((unsigned char *)buffer_memory[pending_writes[i].id] + pending_writes[i].offset, pending_writes[i].data, pending_writes[i].size);
+    pending_write_count = 0;
+}
 #define EXPECTED_IMPLEMENTED 267
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
@@ -76,9 +83,14 @@ int wonder_host_clear_depth_stencil(void *texture, int level, int slice, int cd,
     (void)texture; (void)level; (void)slice; (void)cd; (void)depth; (void)cs; (void)stencil; host_depth_clears++; return 0;
 }
 int wonder_host_fill_buffer(void *buffer, size_t offset, size_t size, uint8_t value) { (void)buffer; (void)offset; (void)size; (void)value; host_fills++; return 0; }
-int wonder_host_write_buffer(void *buffer, size_t offset, const void *data, size_t size) { (void)buffer; (void)offset; (void)data; (void)size; host_writes++; return 0; }
+int wonder_host_write_buffer(void *buffer, size_t offset, const void *data, size_t size) {
+    host_writes++;
+    if (size <= 64 && pending_write_count < 64) { pending_writes[pending_write_count].id = (unsigned)((uintptr_t)buffer - 0xb0000); pending_writes[pending_write_count].offset = offset;
+                                                  pending_writes[pending_write_count].size = size; memcpy(pending_writes[pending_write_count++].data, data, size); }
+    return 0;
+}
 void wonder_host_after_gpu(void (*fn)(void *), void *arg) { assert(pending_count < 64); pending_fn[pending_count] = (void *)fn; pending_arg[pending_count++] = arg; }
-void wonder_host_flush(void) { for (unsigned i = 0; i < pending_count; i++) ((void (*)(void *))pending_fn[i])(pending_arg[i]); pending_count = 0; }
+void wonder_host_flush(void) { apply_pending_writes(); for (unsigned i = 0; i < pending_count; i++) ((void (*)(void *))pending_fn[i])(pending_arg[i]); pending_count = 0; }
 void wonder_host_finish(void) { wonder_host_flush(); }
 void wonder_host_fence(void (*fn)(void *), void *arg) { wonder_host_after_gpu(fn, arg); wonder_host_flush(); }
 int wonder_host_present(void *texture, const int crop[4], int interval) { (void)texture; (void)crop; (void)interval; host_presents++; return 0; }
@@ -979,6 +991,12 @@ int main(void) {
               const char *fs_bl2 = "stage ps\nbtex 5 16 2 2 2d\nfout 0 float\n";   // uniform slot 5 is not bound
               assert(!wonder_shader_refl_parse(fs_bl2, strlen(fs_bl2), &fake_refl[1], err, sizeof err));
               REVIEW_STOP((void)0, "bindless texture");
+              // Handle written by UpdateUniformBuffer earlier in the same submit: the replay finishes the GPU work recorded so
+              // far (the fake host applies pending writes on flush) and then reads it (round87).
+              assert(!wonder_shader_refl_parse(fs_bl, strlen(fs_bl), &fake_refl[1], err, sizeof err));
+              ubo[4] = 0xdead; uint32_t handle_now = 300u | 1u << 20;
+              REVIEW_OK(((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(dcb, (uintptr_t)(cb_memory + 0x9100), 0x100, 16, 4, &handle_now));
+              assert(last_draw.tex[1][32].texture.texture.desc.width == 128);
               ubo[4] = keep; fake_refl[1] = fs_parsed; }
             // Shader texture type must match the bound texture's target (texture 300 is 2D).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
