@@ -47,5 +47,8 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('view'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('texture view OK',p.stdout)
     def test_texture_view_reinterpreting_the_format_stops(self):
         p=self.run_case('bad_view'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('texture view format',p.stderr)
+    def test_bc_texture_decoded_when_the_gpu_lacks_bc(self):
+        p=self.run_case('bc'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('BC decode OK',p.stdout)
+        self.assertIn('HOST_TEXTURE_BC_DECODE serial=79',p.stderr)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

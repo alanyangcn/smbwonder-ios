@@ -84,6 +84,14 @@ int main(int argc, char **argv) {
         d.tex[1][0].texture.texture.swizzle[0] = 2; d.tex[1][0].texture.texture.swizzle[1] = 3; d.tex[1][0].texture.texture.swizzle[2] = 4; d.tex[1][0].texture.texture.swizzle[3] = 5;
         d.tex[1][0].storage = storage; d.tex[1][0].storage_size = lay.size;
         int swizzle_views = [device supportsFamily:MTLGPUFamilyApple1] || [device supportsFamily:MTLGPUFamilyMac2];   // A11 yes; old Intel Macs no
+        if (!strcmp(mode, "bc")) {
+            // 4x4 BC1 texture, one solid green block (565 0x07e0), decoded on the CPU as on the A11 (no BC sampling there).
+            setenv("WONDER_TEST_NO_BC", "1", 1);
+            nvn_texdesc bd = {.target = 1, .format = 0x42, .samples = 0, .width = 4, .height = 4, .depth = 1, .levels = 1};
+            nvn_texlayout bl; nvn_tex_layout(&bd, &bl);
+            uint8_t block[8] = {0xe0, 0x07, 0xe0, 0x07, 0, 0, 0, 0}; uint8_t *bs = calloc(1, bl.size); assert(!nvn_swizzle(&bd, 0, 0, block, 8, bs));
+            d.tex[1][0].texture.texture.desc = bd; d.tex[1][0].storage = bs; d.tex[1][0].storage_size = bl.size; d.tex[1][0].texture.texture.serial = 79;
+        }
         if (!strcmp(mode, "view") || !strcmp(mode, "bad_view")) {
             // Every view field set, as round56's second draw registers it. Level 1 (1x1 red) is selected; where the GPU has
             // texture swizzle, blue is taken from red, so the red texel samples magenta.
@@ -118,7 +126,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -132,6 +140,7 @@ int main(int argc, char **argv) {
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode BC decode OK"); return 0; }
         if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == (swizzle_views ? 255 : 0)); printf("swizzle views %d\n", swizzle_views); puts("metal2 encode texture view OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);

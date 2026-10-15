@@ -1,6 +1,8 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #include <stdio.h>
+#include <stdatomic.h>
+#include <TargetConditionals.h>
 #include "metal2_draw.h"
 #include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
@@ -147,6 +149,15 @@ static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct 
     if (!t) unsupported(d, "render target creation failed for serial", (long)s->texture.serial);
     return t;
 }
+static int device_samples_bc(void) {
+    const char *force = getenv("WONDER_TEST_NO_BC"); if (force && *force && strcmp(force, "0")) return 0;
+#if TARGET_OS_OSX
+    return 1;   // every Mac GPU samples BC
+#else
+    if (@available(iOS 16.4, *)) return device.supportsBCTextureCompression;
+    return 0;
+#endif
+}
 static uint64_t fnv64(const uint8_t *p, uint64_t n) { uint64_t h = 1469598103934665603ull; for (uint64_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull; return h; }
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutableDictionary<NSNumber *, NSNumber *> *sampled_hash;
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
@@ -164,9 +175,11 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         if (t->desc.target != 1) unsupported(d, "sampled texture target (2D only so far)", t->desc.target);
         if (!d->tex[stage][slot].storage) unsupported(d, "sampled texture without CPU storage, serial", (long)t->serial);
         uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL), bc_bpp = 0; uint32_t bc_pf = 0;
-        int bc = fit != 1 && nvn_bc_unpacked((uint32_t)t->desc.format, &bc_pf, &bc_bpp);
+        // BC formats map "exactly" in the table, but the A11 cannot sample them: decode on the CPU unless the GPU has BC
+        // (WONDER_TEST_NO_BC forces the decode on hosts that do, like D2R's DM_TEST_NO_BC).
+        int bc = nvn_bc_unpacked((uint32_t)t->desc.format, &bc_pf, &bc_bpp) && !device_samples_bc();
         if (fit != 1 && !bc) unsupported(d, "sampled texture format", t->desc.format);
-        if (bc && ![device supportsFamily:MTLGPUFamilyApple1]) unsupported(d, "BC decode device", 0);
+        if (bc) { static _Atomic int logged; if (atomic_fetch_add(&logged, 1) < 8) fprintf(stderr, "HOST_TEXTURE_BC_DECODE serial=%llu format=%#x %ux%u\n", (unsigned long long)t->serial, t->desc.format, t->desc.width, t->desc.height); }
         uint64_t hash = fnv64(d->tex[stage][slot].storage, d->tex[stage][slot].storage_size);
         NSNumber *key = @(t->serial);
         if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; }
