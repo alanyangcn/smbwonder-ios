@@ -69,6 +69,13 @@ def guard_cbuf_indices(msl):
     anchor = 'using namespace metal;\n'
     return text.replace(anchor, anchor + CB_GUARD, 1) if anchor in text else text
 
+def support_bindings(msl):
+    """[[buffer(n)]] entry parameters whose type is Ryujinx's support buffer (the struct holding render_scale float[73])."""
+    structs = {m.group(1) for m in re.finditer(r'struct (\w+)\n\{[^}]*\bfloat4? _m\d+\[73\];[^}]*\}', msl)}   # float[73], or float4[73] when read
+    m = re.search(r'^(?:vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
+    if not m or not structs: return set()
+    return {int(b) for t, b in re.findall(r'constant (\w+)& \w+ \[\[buffer\((\d+)\)\]\]', m.group(1)) if t in structs}
+
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
     m = re.search(r'^(vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
@@ -110,16 +117,18 @@ def reflect(census, stage_entry, job, res, msl, c1):
         if r not in bound: raise ValueError(f"texture slot {r} is read but not bound to a registered texture in the census")
         if t['binding'] not in textures or t['binding'] not in samplers: raise ValueError(f"texture binding {t['binding']} missing from the MSL entry")
         lines.append(f"tex {r} {t['binding']} {t['binding']} {job['tex'][str(r)]}")
+    for b in sorted(support_bindings(msl) - used):
+        lines.append(f'support {b}'); used.add(b)   # host fills it per D2R nvn_mtl.m (render_scale 1.0, BGRA flags 0)
     for b in sorted(buffers - used):
-        raise ValueError(f'buffer({b}) in the MSL entry has no reflection (support buffer or unknown binding)')
+        raise ValueError(f'buffer({b}) in the MSL entry has no reflection (unknown binding)')
     if any(b >= 16 for b in buffers): raise ValueError('buffer index >= 16 collides with vertex streams 16..30')
     for a in attributes:
         if str(a) not in job['attr']: raise ValueError(f'attribute {a} is read but has no format in the census')
         lines.append(f"attr {a} {a} {job['attr'][str(a)]}")
     for color in range(8):
         if res['frag_out_map'] >> (4 * color) & 15:
-            if str(color) not in job['fout']: raise ValueError(f'fragment output {color} has no bound color target')
-            lines.append(f"fout {color} {job['fout'][str(color)]}")
+            # An output without a bound target is discarded by NVN; it still needs a declared type (float when unbound).
+            lines.append(f"fout {color} {job['fout'].get(str(color), 'float')}")
     return '\n'.join(lines) + '\n'
 
 def build(census_dirs, out):
@@ -141,16 +150,30 @@ def build(census_dirs, out):
                 job = job_for(census, entry, sph); job['c1'] = code[entry['c1_offset']:entry['code_size']].hex()
                 jobs.append(job); sources[key] = (census, entry, sha(raw))
         (tmp / 'jobs.json').write_text(json.dumps(jobs))
-        subprocess.run([str(XLATE), str(tmp / 'jobs.json'), str(tmp)], check=True, env=env)
+        subprocess.run([str(XLATE), str(tmp / 'jobs.json'), str(tmp)], env=env)   # failures are retried / reported per key
+        retry = [dict(j, debug=True) for j in jobs if not (tmp / f"{j['key']}.spv").exists()]
+        if retry:   # DebugMode skips Ryujinx's AST optimizer (round77: d51f7f835e14a83b InvalidCastException in StructuredIr)
+            (tmp / 'retry.json').write_text(json.dumps(retry))
+            subprocess.run([str(XLATE), str(tmp / 'retry.json'), str(tmp)], env=env)
+            for r in retry:
+                for j in jobs:
+                    if j['key'] == r['key']: j['debug'] = True
         manifest = {'scope': 'Wonder draw-census shader build (MSL 2.1, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
                     'translator_source_sha': subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip(),
                     'keys': {}}
+        manifest['failed'] = {}
         for job in jobs:
             key = job['key']; census, entry, census_sha = sources[key]
-            res = json.loads((tmp / f'{key}.res.json').read_text())
-            if res['notes']: raise ValueError(f'{key}: translator notes {res["notes"]}')
-            msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
-            refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
+            # A stage that cannot be built faithfully is left out (with its reason): its program then stops by name on device.
+            try:
+                if not (tmp / f'{key}.spv').exists(): raise ValueError('translator failed (also in DebugMode)')
+                res = json.loads((tmp / f'{key}.res.json').read_text())
+                if res['notes']: raise ValueError(f'translator notes {res["notes"]}')
+                msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
+                refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
+            except (ValueError, subprocess.CalledProcessError) as error:
+                manifest['failed'][key] = {'stage': job['stage'], 'reason': str(error)[:300], 'census_sha256': census_sha}
+                continue
             (out / f'{key}.metal').write_text(msl); (out / f'{key}.refl').write_text(refl)
             manifest['keys'][key] = {'stage': job['stage'], 'msl_sha256': sha(msl.encode()), 'refl_sha256': sha(refl.encode()), 'census_sha256': census_sha}
     (out / 'jobs.json').write_text(json.dumps([{k: v for k, v in j.items() if k != 'code'} for j in jobs], indent=1) + '\n')
@@ -160,4 +183,5 @@ def build(census_dirs, out):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('census', nargs='+', type=Path); p.add_argument('--out', type=Path, required=True)
-    a = p.parse_args(); m = build(a.census, a.out); print(f"built {len(m['keys'])} stages into {a.out}")
+    a = p.parse_args(); m = build(a.census, a.out); print(f"built {len(m['keys'])} stages into {a.out}; left out {len(m['failed'])}")
+    for key, f in m['failed'].items(): print(f"  left out {key} ({f['stage']}): {f['reason']}")

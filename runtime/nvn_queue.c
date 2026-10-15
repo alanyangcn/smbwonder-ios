@@ -31,6 +31,7 @@ static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uin
 // writes a census for every further missing program; no GPU work of this submit runs after that point, and the submit
 // stops by name at its end (nothing is presented from a partly executed frame).
 static int census_only; static unsigned missing_programs; static char missing_list[512];
+static char missing_pairs[256][34];   // dedup independent of the (truncated) message list
 // Per-submit draw summary for the log (which programs a failing command buffer contained).
 static unsigned submit_draws; static char submit_programs[256];
 // The first executed draw's colour target is read back (evidence) after the submit that holds it.
@@ -123,7 +124,10 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     if (!wonder_host_shader_available(d.vs_key) || !wonder_host_shader_available(d.fs_key)) {
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
         char pair[40]; snprintf(pair, sizeof pair, "%s-%s", d.vs_key, d.fs_key);
-        if (!strstr(missing_list, pair)) {
+        int seen = 0;
+        for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) { seen = 1; break; }
+        if (!seen) {
+            if (missing_programs < 256) snprintf(missing_pairs[missing_programs], sizeof missing_pairs[0], "%s", pair);
             size_t used = strlen(missing_list);
             if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
             missing_programs++;

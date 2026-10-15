@@ -41,6 +41,15 @@ class PureHelpers(unittest.TestCase):
         # The load itself is clamped into range (the compiler may turn the ternary into load + select), then zeroed.
         self.assertIn('static inline float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }', out)
         self.assertEqual(out.index('static inline float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))
+    def test_support_buffer_parameters(self):
+        # Ryujinx's support buffer is the struct carrying render_scale (float[73]); its entry parameter needs no reflection.
+        msl = ("struct _10\n{\n    uint _m0;\n    uint _m1[8];\n    float4 _m2;\n    float4 _m3;\n    int _m4;\n    float _m5[73];\n    int4 _m6;\n    int _m7;\n};\n"
+               "struct _16\n{\n    float4 _m0[4096];\n};\n"
+               "fragment main0_out main0(constant _10& support_buffer [[buffer(0)]], constant _16& fp_c3 [[buffer(1)]])\n")
+        self.assertEqual(build.support_bindings(msl), {0})
+        self.assertEqual(build.support_bindings(msl.replace('constant _10& support_buffer [[buffer(0)]], ', '')), set())
+        used = msl.replace('    float _m5[73];', '    float4 _m5[73];').replace('    uint _m1[8];', '    uint4 _m1[8];')   # as emitted when read (round77)
+        self.assertEqual(build.support_bindings(used), {0})
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 
