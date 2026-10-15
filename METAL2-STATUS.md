@@ -30,6 +30,8 @@
 - round38（待真机）：内核实现传输内存 0x15/0x51/0x52：仅支持所有者权限 None，映射时按 16 KiB 宿主页搬移内容，解除时搬回；按 Horizon 规则拒绝堆已用部分和 alias 区（返回 0xd401 让 SDK 换随机地址），另外接受堆区未用尾部，SetHeapSize 不允许扩到传输映射上。句柄表新增通用宿主对象类型。
 - round38 run `E77572E4-3904-4DEC-BE04-1B7C275BAA93`：MapTransferMemory 权限须等于所有者权限（None），已修正。round39 run `4E225EA1-E27A-44DD-B7A4-B3434AE625BF`：音频渲染器打开，4.3 MB 工作内存映射成功；游戏设置设备音量（扬声器 2.0，服务端本就钳到 [0,128]，校验已改）；另一线程的 `fs::SetPriorityOnCurrentThread` 经 `IsEnabledAccessLog` 查询 fsp-srv 全局访问日志模式，按零售默认 0 接管。
 - round40–42：USB 输出设备音量接受；渲染器事件改为宿主内核事件（进程内服务端的事件不跨进程，句柄为 0）。round42 run `87B525B1-74AB-4454-A283-DF895100094F`：渲染器打开并启动，但没有 DSP 帧：本构建里没人创建 AudioRenderSystemManager 或调用 Add（那是音频系统模块的职责）。round43（待真机）：宿主创建管理器实例，渲染器首次启动时调用原生 Add（接口对象 +0x70 为 AudioRenderSystem，核对 Start 分发桩 sdk+0x20d6c0）；`nn::time` 14 个接口按 iOS 系统时钟与时区实现（用户/网络时钟、历法转换、设备时区名、网络时钟可用性任务立即成功）。
+- round43–44：MapMemory 接受模块数据段（音频管理线程栈在 sdk 静态区）。round44 run `21076A91-AC75-467B-8437-E3BA11BDCA15`：宿主 DSP 启动，原生 CommandListProcessor 处理命令列表；nn::time 就绪；主线程停在 `oe::EnterExitRequestHandlingSection`（无 AM 代理对象，空指针）。round45（待真机）：补齐游戏导入的全部 20 个 nn::oe（显示版本取自 control.nacp 的 1.2.0、伪设备 ID 持久化、焦点模式、音量平衡、活动时间、性能配置、退出请求区段计数、闲置检测）。
+- 导入服务统计（main 导入，已接管/总数）：audio 4/197（其余为原生客户端库）、hid 19/53、fs 10/29、account 11/25、nfp 3/20、time 14/14、oe 20/20、vi 5/5；尚未涉及：socket 30、prepo 27、ldn 25、friends 11、swkbd 12、err 9、ssl 8、nifm 8、ngc 5、ec 2、nsd 2、settings 1（os/util/image/fontll/mem/crypto 等为纯客户端库）。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
