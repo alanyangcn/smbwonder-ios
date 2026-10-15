@@ -42,7 +42,7 @@
   - 设备端：回放把 draw 解析成宿主描述（`runtime/host_draw.h`）：着色器、UBO/c1/support、贴图（块线性解排布、BC 解码、内容变化重传）、采样器、顶点流（buffer 16+）、索引（u8 扩成 u16）、混合/写掩码/深度/剔除/视口/裁剪；`runtime/metal2_draw.m` 建 PSO 并编码。缺着色器时先写普查再按键停止（NVN_SHADER_MISSING）；不支持的状态按名停止（NVN_DRAW_UNSUPPORTED）。
   - round54/55：补 `nvnSamplerGetMinMagFilter`（266 个入口）；round55 第一个 draw 处死锁（编码时持有回放锁又去取渲染目标），已修正。
   - round56 run `84249253-BC93-403B-8AB0-B703884ECB37`：**首个 draw 在 FlyMe 真机执行**，此后每次提交都执行（提交 2–14），渲染目标读回 `Documents/FirstDraw/target-0.png`（1920×1080，sha256 8a5dae00…）：视口 1280×720 区域为不透明黑（0,0,0,255），区域外未写入。这是游戏采样 4×4 缺省贴图 258 的整屏四边形，**还不是可辨认的游戏画面**。
-  - round57 run（4 个阶段已打包）：第二个程序 vs `0aeff6b7b3b657fd`（含 c1 跳转表）/ fs `ed9066c9e3f5cb63` 在设备编译通过；停在 `NVN_DRAW_UNSUPPORTED texture view on sampled texture serial 688`。下一步：采样贴图视图；之后每个新程序按“普查 → 离线构建 → 真机”循环，程序多时把普查扩成一次运行记录多条 draw（另写计划）。
+  - round57 run（4 个阶段已打包）：第二个程序 vs `0aeff6b7b3b657fd`（含 c1 跳转表）/ fs `ed9066c9e3f5cb63` 在设备编译通过；停在 `NVN_DRAW_UNSUPPORTED texture view on sampled texture serial 688`。整体审查后修正 8 项（流水线缓存键、UBO 越界读取改为 GPU 拷贝到补零的 64 KiB、GPU 错误按名停止、流 15、原点/深度模式校验、光栅状态与贴图类型校验等）；round58 复验：首个 draw 执行 12 次，读回图与 round56 逐字节相同（sha256 8a5dae00…），停点不变。下一步：采样贴图视图；之后每个新程序按“普查 → 离线构建 → 真机”循环，程序多时把普查扩成一次运行记录多条 draw（另写计划）。
 - 导入服务统计（main 导入，已接管/总数）：audio 4/197（其余为原生客户端库）、hid 19/53、fs 26/29（余下 3 个是线程 fs 上下文/优先级的纯客户端函数）、account 11/25、nfp 3/20、time 14/14、oe 20/20、vi 5/5、friends 11/11、nifm 8/8、aoc 1/1、nsd 1/2、prepo 3/27（其余为本地报告缓冲区拼装）、err 3/9（其余为结果值类型）、ngc 5/5（客户端原生，服务对象由宿主提供）、settings 1/1（operator==(Language, LanguageCode) 经 MakeLanguageCode 连 set:，服务对象由宿主提供）；尚未涉及：socket 30、ldn 25、swkbd 12、ssl 8、ec 2——这些若被调用，SDK 原生客户端会连 sm: 并按名停止。
 - 仍需：更多程序的普查与离线翻译、贴图视图/模板/逻辑运算等尚未映射的状态、展示路径上的真实游戏画面。六份旧样本仍不具备运行资格。
 
