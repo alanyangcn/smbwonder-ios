@@ -47,6 +47,7 @@ __attribute__((used, section("__DATA,swforce"))) static const hle_force_ent hle_
     "_ZN2nn5audio32CreateAudioRendererManagerByHipcEv", (void *)dfc_trampoline,
     "Use the sdk's in-process AudioRenderer server (DFC) instead of the audren:u service"};
 
+static void signal_active_renderers(void);
 // ---------- DSP ----------
 typedef void (*clp_set_time)(void *, unsigned);
 typedef void (*clp_setup)(void *, const void *, unsigned long);
@@ -89,6 +90,7 @@ HLE_FORCE("_ZN2nn5audio3dsp17SendCommandBufferEimmibm", "Host DSP: run the sdk's
     clp_set_time_max(processor, 0xffffffffu);
     clp_setup_fn(processor, (const void *)address, (unsigned long)size);
     clp_process_fn(processor);
+    signal_active_renderers();   // the server signals its renderer event right after sending (sdk+0x20c908)
     uint64_t lists = atomic_fetch_add(&dsp_lists, 1) + 1;
     if (lists <= 4) LOG("HOST_AUDIO_DSP_LIST session=%d address=%#llx size=%#llx time_limit=%d reset=%u tick=%llu",
                         session, (unsigned long long)address, (unsigned long long)size, time_limit, reset & 0xff, (unsigned long long)tick);
@@ -159,3 +161,71 @@ HLE_FORCE("_ZN2nn5audio6server6detail38QueryAudioDeviceInputNotificationEventEPj
           Result, h_device_input_event, unsigned *handle, const void *aruid) { (void)aruid; return device_event(handle, "QueryAudioDeviceInputNotificationEvent"); }
 HLE_FORCE("_ZN2nn5audio6server6detail39QueryAudioDeviceOutputNotificationEventEPjRKNS_6applet20AppletResourceUserIdE", "Kernel event; fixed output device never changes",
           Result, h_device_output_event, unsigned *handle, const void *aruid) { (void)aruid; return device_event(handle, "QueryAudioDeviceOutputNotificationEvent"); }
+
+// ---------- Renderer system event (auto execution through the in-process server) ----------
+// The in-process server creates its renderer SystemEvent process-locally (sdk+0x20da24/0x20da48 pass
+// interProcess=false), so AudioRenderSystem::QuerySystemEvent (sdk+0x20c978) yields no handle and the client
+// (sdk+0x1e0f50..0x1e0fbc) would attach handle 0 to the game's event (round41: the game's audio thread spun on
+// WaitSynchronization(0)). That path only exists for manual execution, where the client creates its own event.
+// For auto execution the host makes the game's event a kernel event and signals it each DSP frame in which the
+// renderer is running, as AudioRenderSystem::SendCommandToDsp does with its own event (sdk+0x20c908).
+#define MAX_RENDERERS 8
+static struct { uint64_t handle; uint32_t writable; int active; } renderers[MAX_RENDERERS];
+static pthread_mutex_t renderers_lock = PTHREAD_MUTEX_INITIALIZER;
+static void signal_active_renderers(void) {
+    uint32_t pending[MAX_RENDERERS]; unsigned n = 0;
+    pthread_mutex_lock(&renderers_lock);
+    for (unsigned i = 0; i < MAX_RENDERERS; i++) if (renderers[i].writable && renderers[i].active) pending[n++] = renderers[i].writable;
+    pthread_mutex_unlock(&renderers_lock);
+    for (unsigned i = 0; i < n; i++) wonder_event_signal(pending[i]);
+}
+HLE_FORCE("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm",
+          "Auto-execution renderer through the in-process server: the game's SystemEvent becomes a kernel event signaled per DSP frame",
+          Result, h_open_renderer, uint64_t *handle, void *event, const uint8_t *param, void *buffer, size_t size) {
+    uint32_t mode, manual_event; memcpy(&mode, param + 0x2c, 4); memcpy(&manual_event, param + 0x30, 4);
+    if (mode == 1 && manual_event == 1) {   // manual execution: the SDK client creates the event itself
+        Result (*native)(uint64_t *, void *, const uint8_t *, void *, size_t) =
+            required("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm");
+        return native(handle, event, param, buffer, size);
+    }
+    Result (*open4)(uint64_t *, const uint8_t *, void *, size_t) =
+        required("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleERKNS0_22AudioRendererParameterEPvm");
+    Result r = open4(handle, param, buffer, size);
+    if (r) { LOG("HOST_AUDIO_RENDERER_OPEN result=%#x", r); return r; }
+    Result (*create)(void *, int, unsigned) = required("_ZN2nn2os17CreateSystemEventEPNS0_15SystemEventTypeENS0_14EventClearModeEb");
+    uint32_t (*getw)(const void *) = required("_ZN2nn2os30GetWritableHandleOfSystemEventEPKNS0_15SystemEventTypeE");
+    r = create(event, 1 /* auto clear, as the SDK client attaches it */, 1 /* inter-process */);
+    if (r) die("audio renderer SystemEvent creation failed result=%#x", r);
+    uint32_t writable = getw(event);
+    pthread_mutex_lock(&renderers_lock);
+    unsigned i = 0; while (i < MAX_RENDERERS && renderers[i].writable) i++;
+    if (i == MAX_RENDERERS) { pthread_mutex_unlock(&renderers_lock); die("audio: more than %d renderers", MAX_RENDERERS); }
+    renderers[i].handle = handle[0];   // renderer object word of the 16-byte handle renderers[i].writable = writable; renderers[i].active = 0;
+    pthread_mutex_unlock(&renderers_lock);
+    LOG("HOST_AUDIO_RENDERER_OPEN handle=%#llx event=%p writable=%#x mode=%u", (unsigned long long)handle[0], event, writable, mode);
+    return 0;
+}
+static void set_renderer_active(uint64_t handle, int active, int remove) {
+    pthread_mutex_lock(&renderers_lock);
+    for (unsigned i = 0; i < MAX_RENDERERS; i++) if (renderers[i].writable && renderers[i].handle == handle) {
+        renderers[i].active = active; if (remove) renderers[i].writable = 0;
+    }
+    pthread_mutex_unlock(&renderers_lock);
+}
+HLE_FORCE("_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE", "Track running renderers for per-frame event signals",
+          Result, h_start_renderer, uint64_t handle, uint64_t handle_hi) {
+    // AudioRendererHandle is 16 bytes passed by value in x0/x1 (sdk+0x1e1090 uses both); x0 is the renderer object.
+    Result (*native)(uint64_t, uint64_t) = required("_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE");
+    Result r = native(handle, handle_hi); if (!r) set_renderer_active(handle, 1, 0);
+    LOG("HOST_AUDIO_RENDERER_START handle=%#llx result=%#x", (unsigned long long)handle, r); return r;
+}
+HLE_FORCE("_ZN2nn5audio17StopAudioRendererENS0_19AudioRendererHandleE", "Track running renderers for per-frame event signals",
+          Result, h_stop_renderer, uint64_t handle, uint64_t handle_hi) {
+    Result (*native)(uint64_t, uint64_t) = required("_ZN2nn5audio17StopAudioRendererENS0_19AudioRendererHandleE");
+    set_renderer_active(handle, 0, 0); return native(handle, handle_hi);
+}
+HLE_FORCE("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE", "Forget the renderer's host event bridge",
+          void, h_close_renderer, uint64_t handle, uint64_t handle_hi) {
+    void (*native)(uint64_t, uint64_t) = required("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE");
+    set_renderer_active(handle, 0, 1); native(handle, handle_hi);
+}
