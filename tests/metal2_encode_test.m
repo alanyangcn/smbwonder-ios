@@ -60,7 +60,9 @@ int main(int argc, char **argv) {
             assert(x && x.textureType == MTLTextureTypeCubeArray && x.arrayLength == 2);
             c.target = 4; c.depth = 3; x = wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm);
             assert(x && x.textureType == MTLTextureType2DArray && x.arrayLength == 3);
-            c.target = 2; assert(!wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm));   // 3D: not a render target here
+            c.target = 2; c.depth = 16; x = wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm);   // 3D: z slices via depthPlane
+            assert(x && x.textureType == MTLTextureType3D && x.depth == 16 && x.arrayLength == 1);
+            c.target = 5; assert(!wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm));   // multisample: not yet
             c.target = 9; c.depth = 7; assert(!wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm));   // not whole cubes
             id<MTLTexture> cube = [device newTextureWithDescriptor:wonder_host_render_target_descriptor(&(nvn_texdesc){.target = 8, .format = 0x25, .width = 4, .height = 4, .depth = 6, .levels = 1}, MTLPixelFormatRGBA8Unorm)];
             assert(cube && cube.textureType == MTLTextureTypeCube);

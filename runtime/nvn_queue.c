@@ -49,8 +49,11 @@ _Noreturn static void replay_stop(unsigned opcode, const char *why) {
 // Host render target for a snapshot: display textures own theirs, other targets are created by serial.
 static void *target_texture(const struct wonder_nvn_texture_snapshot *s, unsigned opcode) {
     const struct wonder_nvn_texture *t = &s->texture;
-    if (t->desc.target != 1 && t->desc.target != 4 && t->desc.target != 7 && t->desc.target != 8 && t->desc.target != 9)   // 2D, 2D_ARRAY, RECTANGLE, CUBE, CUBE_ARRAY
-        replay_stop(opcode, "render target is not 2D/2D-array/cube");
+    if (t->desc.target != 1 && t->desc.target != 2 && t->desc.target != 4 && t->desc.target != 7 && t->desc.target != 8 && t->desc.target != 9) {   // 2D, 3D, 2D_ARRAY, RECTANGLE, CUBE, CUBE_ARRAY
+        char why[160]; snprintf(why, sizeof why, "render target target %d format %#x %ux%ux%u samples %d is not supported", t->desc.target, t->desc.format,
+                                t->desc.width, t->desc.height, t->desc.depth, t->desc.samples);
+        replay_stop(opcode, why);
+    }
     uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL);
     int depth = t->desc.format >= 0x31 && t->desc.format <= 0x36;
     if (!(fit == 1 || (fit == 2 && depth))) replay_stop(opcode, "render target format has no exact Metal render format");

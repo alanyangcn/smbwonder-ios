@@ -152,7 +152,8 @@ static int encode_pass(MTLRenderPassDescriptor *pass){
 int wonder_host_clear_color(void *texture,int level,int slice,const float rgba[4]){
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t) return EINVAL;
  MTLRenderPassDescriptor *p=[MTLRenderPassDescriptor renderPassDescriptor];
- p.colorAttachments[0].texture=t; p.colorAttachments[0].level=level; p.colorAttachments[0].slice=slice;
+ p.colorAttachments[0].texture=t; p.colorAttachments[0].level=level;
+ if(t.textureType==MTLTextureType3D) p.colorAttachments[0].depthPlane=slice; else p.colorAttachments[0].slice=slice;   // 3D: z slice
  p.colorAttachments[0].loadAction=MTLLoadActionClear; p.colorAttachments[0].storeAction=MTLStoreActionStore;
  p.colorAttachments[0].clearColor=MTLClearColorMake(rgba[0],rgba[1],rgba[2],rgba[3]);
  return encode_pass(p);

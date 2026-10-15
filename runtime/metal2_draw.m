@@ -148,7 +148,7 @@ static MTLPixelFormat attachment_format(const struct wonder_host_draw *d, const 
 }
 static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct wonder_nvn_texture_snapshot *s, int depth, int *level, int *slice) {
     int target = s->texture.desc.target;
-    if (target != 1 && target != 4 && target != 7 && target != 8 && target != 9) unsupported(d, "render target texture target", target);
+    if (target != 1 && target != 2 && target != 4 && target != 7 && target != 8 && target != 9) unsupported(d, "render target texture target", target);
     *level = s->has_view && s->view.set_levels ? s->view.base_level : 0; *slice = s->has_view && s->view.set_layers ? s->view.min_layer : 0;
     id<MTLTexture> t = (__bridge id<MTLTexture>)wonder_host_render_target(&s->texture, (uint32_t)attachment_format(d, &s->texture, depth));
     if (!t) unsupported(d, "render target creation failed for serial", (long)s->texture.serial);
@@ -344,7 +344,8 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     for (int i = 0; i < d->color_count && i < 8; i++) {
         if (!d->targets[i].valid) continue;
         int level, slice; id<MTLTexture> t = attachment(d, &d->targets[i], 0, &level, &slice);
-        pass.colorAttachments[i].texture = t; pass.colorAttachments[i].level = level; pass.colorAttachments[i].slice = slice;
+        pass.colorAttachments[i].texture = t; pass.colorAttachments[i].level = level;
+        if (t.textureType == MTLTextureType3D) pass.colorAttachments[i].depthPlane = slice; else pass.colorAttachments[i].slice = slice;
         pass.colorAttachments[i].loadAction = MTLLoadActionLoad; pass.colorAttachments[i].storeAction = MTLStoreActionStore;
         MTLRenderPipelineColorAttachmentDescriptor *c = pd.colorAttachments[i]; c.pixelFormat = t.pixelFormat;
         unsigned m = (d->states_set & 2) ? d->channel_mask.mask >> (4 * i) & 15 : 15;   // NVN R1 G2 B4 A8
@@ -506,6 +507,7 @@ MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t,
     case 4: d.textureType = MTLTextureType2DArray; d.arrayLength = depth; break;
     case 8: if (depth != 6 && depth != 1) return nil; d.textureType = MTLTextureTypeCube; break;
     case 9: if (depth % 6) return nil; d.textureType = MTLTextureTypeCubeArray; d.arrayLength = depth / 6; break;
+    case 2: d.textureType = MTLTextureType3D; d.depth = depth; break;   // rendered one z slice at a time (depthPlane)
     default: return nil;
     }
     d.pixelFormat = format; d.width = t->width; d.height = t->height; d.mipmapLevelCount = t->levels ? t->levels : 1;
