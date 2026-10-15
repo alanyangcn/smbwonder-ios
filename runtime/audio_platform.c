@@ -170,7 +170,7 @@ HLE_FORCE("_ZN2nn5audio6server6detail39QueryAudioDeviceOutputNotificationEventEP
 // For auto execution the host makes the game's event a kernel event and signals it each DSP frame in which the
 // renderer is running, as AudioRenderSystem::SendCommandToDsp does with its own event (sdk+0x20c908).
 #define MAX_RENDERERS 8
-static struct { uint64_t handle; uint32_t writable; int active; } renderers[MAX_RENDERERS];
+static struct { uint64_t handle; uint32_t writable; int active, added; } renderers[MAX_RENDERERS];
 static pthread_mutex_t renderers_lock = PTHREAD_MUTEX_INITIALIZER;
 static void signal_active_renderers(void) {
     uint32_t pending[MAX_RENDERERS]; unsigned n = 0;
@@ -213,11 +213,40 @@ static void set_renderer_active(uint64_t handle, int active, int remove) {
     }
     pthread_mutex_unlock(&renderers_lock);
 }
+// Auto execution is driven by AudioRenderSystemManager (sdk+0x20dc10: dsp::Wait -> SendCommandToDsp per system),
+// but in this in-process build nothing creates the manager or adds systems to it: that is the audio sysmodule's
+// job. The host does it the same way: create the instance once, and add the renderer's AudioRenderSystem when
+// the renderer first starts. The first Add starts the manager thread and dsp::Start (sdk+0x20dd80 -> 0x20daf0);
+// ~AudioRendererImpl removes it again (sdk+0x20d878). The system lives at interface object + 0x70: the
+// IAudioRenderer Start dispatch stub (sdk+0x20d6c0) is `add x0, x0, #0x70; b AudioRenderSystem::Start`.
+#define SYNC_START_STUB 0x20d6c0
+#define RENDER_SYSTEM_OFFSET 0x70
+static _Alignas(64) uint8_t render_manager_storage[0x1000];
+static void add_to_render_manager(uint64_t object) {
+    pthread_mutex_lock(&renderers_lock);
+    int already = 0;
+    for (unsigned i = 0; i < MAX_RENDERERS; i++) if (renderers[i].writable && renderers[i].handle == object) { already = renderers[i].added; renderers[i].added = 1; }
+    pthread_mutex_unlock(&renderers_lock);
+    if (already) return;
+    module_t *sdk = module_of(required("_ZN2nn5audio6server24AudioRenderSystemManager3AddERNS1_17AudioRenderSystemE"));
+    void *const *vtable = *(void *const *const *)object;
+    if (!sdk || vtable[0x48 / 8] != sdk->base + SYNC_START_STUB)
+        die("audio renderer object %#llx: Start dispatch %p is not the in-process stub sdk+%#x", (unsigned long long)object, vtable[0x48 / 8], SYNC_START_STUB);
+    void *(*get_instance)(void) = required("_ZN2nn5audio6server24AudioRenderSystemManager11GetInstanceEv");
+    void (*create_instance)(void *, unsigned long) = required("_ZN2nn5audio6server24AudioRenderSystemManager14CreateInstanceEPvm");
+    int (*add)(void *, void *) = required("_ZN2nn5audio6server24AudioRenderSystemManager3AddERNS1_17AudioRenderSystemE");
+    if (!get_instance()) create_instance(render_manager_storage, sizeof render_manager_storage);
+    void *manager = get_instance();
+    if (!manager) die("audio: AudioRenderSystemManager instance not created");
+    int added = add(manager, (void *)(object + RENDER_SYSTEM_OFFSET));
+    LOG("HOST_AUDIO_RENDER_MANAGER manager=%p system=%#llx added=%d", manager, (unsigned long long)(object + RENDER_SYSTEM_OFFSET), added);
+}
 HLE_FORCE("_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE", "Track running renderers for per-frame event signals",
           Result, h_start_renderer, uint64_t handle, uint64_t handle_hi) {
     // AudioRendererHandle is 16 bytes passed by value in x0/x1 (sdk+0x1e1090 uses both); x0 is the renderer object.
     Result (*native)(uint64_t, uint64_t) = required("_ZN2nn5audio18StartAudioRendererENS0_19AudioRendererHandleE");
-    Result r = native(handle, handle_hi); if (!r) set_renderer_active(handle, 1, 0);
+    Result r = native(handle, handle_hi);
+    if (!r) { add_to_render_manager(handle); set_renderer_active(handle, 1, 0); }
     LOG("HOST_AUDIO_RENDERER_START handle=%#llx result=%#x", (unsigned long long)handle, r); return r;
 }
 HLE_FORCE("_ZN2nn5audio17StopAudioRendererENS0_19AudioRendererHandleE", "Track running renderers for per-frame event signals",

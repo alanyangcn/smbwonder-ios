@@ -46,6 +46,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/account_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/nfp_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/audio_platform.c'
+      - path: '${SMBW_REFERENCE}/runtime/time_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/hid_state.c'
       - path: '${SMBW_REFERENCE}/runtime/hid_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/crash_report.c'
