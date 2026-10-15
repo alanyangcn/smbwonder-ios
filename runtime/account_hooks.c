@@ -3,6 +3,7 @@
 #include "hle.h"
 #include "account_state.h"
 #include "sdk_services.h"
+#include "profile_image.h"
 #define RESULT_INVALID_ARGUMENT 0xd401u   // kernel-style invalid-argument code for host-detected misuse
 static void require_ready(const char *who) { if (!wonder_account_ready()) die("account: %s before nn::account::Initialize", who); }
 HLE_FORCE("_ZN2nn7account10InitializeEv", "Host account store: one offline local user persisted under WonderSDK/account", void, h_account_init, void) {
@@ -51,4 +52,21 @@ HLE_FORCE("_ZN2nn7account12PopOpenUsersEPiPNS0_10UserHandleEi", "No launcher-ope
 HLE_FORCE("_ZN2nn7account32IsNetworkServiceAccountAvailableEPbRKNS0_10UserHandleE", "Offline host: the local user has no network service account", Result, h_account_nsa_available, uint8_t *available, const wonder_user_handle *handle) {
     wonder_uid u; if (!available || wonder_account_handle_uid(handle, &u)) return RESULT_INVALID_ARGUMENT;
     *available = 0; return 0;
+}
+// nn::account::LoadProfileImage(size_t *outSize, void *buffer, size_t bufferSize, const Uid &): the user icon JPEG.
+// The offline user has no Nintendo icon; the host supplies a generated placeholder (profile_image.h). Round88: the
+// sdk's own client dereferenced a null service proxy (sdk+0x199e6c), called from main+0xa80e0.
+HLE_FORCE("_ZN2nn7account16LoadProfileImageEPmPvmRKNS0_3UidE", "Offline user icon: generated 256x256 JPEG placeholder",
+          Result, h_account_profile_image, size_t *out_size, void *buffer, size_t buffer_size, const wonder_uid *uid) {
+    require_ready("LoadProfileImage");
+    if (!out_size || !uid || !wonder_account_is_user(uid)) return RESULT_INVALID_ARGUMENT;
+    size_t n; const unsigned char *jpeg = wonder_profile_image(&n);
+    if (!jpeg) die("account::LoadProfileImage: host could not generate the profile image");
+    *out_size = n;
+    if (buffer) {
+        if (buffer_size < n) die("account::LoadProfileImage buffer %#zx smaller than the image %#zx", buffer_size, n);
+        memcpy(buffer, jpeg, n);
+    }
+    static int logged; if (!logged++) LOG("HOST_ACCOUNT_PROFILE_IMAGE %zu bytes (generated placeholder; no Nintendo user icon offline)", n);
+    return 0;
 }
