@@ -95,14 +95,21 @@ static id<MTLCommandBuffer> pending_buffer(void){
   pending=[queue commandBuffer]; pending.label=@"Wonder NVN submit";
   [pending addCompletedHandler:^(id<MTLCommandBuffer> b){
    if(b.status==MTLCommandBufferStatusError&&!atomic_exchange(&gpu_failed,1)){
-    snprintf(gpu_error_text,sizeof gpu_error_text,"%s",b.error.localizedDescription.UTF8String?:"?");
+    snprintf(gpu_error_text,sizeof gpu_error_text,"%s in %s",b.error.localizedDescription.UTF8String?:"?",b.label.UTF8String?:"?");
     fprintf(stderr,"HOST_GPU_ERROR %s\n",gpu_error_text);
    }
   }];
  }
  return pending;
 }
-static void commit_locked(void){ if(pending){ [pending commit]; last_committed=pending; pending=nil; } }
+static unsigned pending_first_submit, pending_last_submit;
+static void commit_locked(void){ if(pending){ [pending commit]; last_committed=pending; pending=nil; pending_first_submit=pending_last_submit=0; } }
+void wonder_host_note_submit(unsigned submit){
+ pthread_mutex_lock(&replay_mutex);
+ id<MTLCommandBuffer> b=pending_buffer(); if(!pending_first_submit) pending_first_submit=submit; pending_last_submit=submit;
+ b.label=[NSString stringWithFormat:@"Wonder NVN submits %u-%u",pending_first_submit,pending_last_submit];
+ pthread_mutex_unlock(&replay_mutex);
+}
 void wonder_host_flush(void){ pthread_mutex_lock(&replay_mutex); commit_locked(); pthread_mutex_unlock(&replay_mutex); }
 void wonder_host_finish(void){
  pthread_mutex_lock(&replay_mutex); commit_locked(); id<MTLCommandBuffer> last=last_committed; pthread_mutex_unlock(&replay_mutex);

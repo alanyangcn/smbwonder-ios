@@ -31,6 +31,8 @@ static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uin
 // writes a census for every further missing program; no GPU work of this submit runs after that point, and the submit
 // stops by name at its end (nothing is presented from a partly executed frame).
 static int census_only; static unsigned missing_programs; static char missing_list[512];
+// Per-submit draw summary for the log (which programs a failing command buffer contained).
+static unsigned submit_draws; static char submit_programs[256];
 // The first executed draw's colour target is read back (evidence) after the submit that holds it.
 static struct wonder_nvn_texture_snapshot first_draw_target; static int first_draw_pending, first_draw_captured;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
@@ -235,6 +237,9 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     if (wonder_host_draw(&d)) replay_stop(opcode, "host draw encoding failed");
     if (!first_draw_captured && !first_draw_pending)
         for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
+    submit_draws++;
+    { char pair[24]; snprintf(pair, sizeof pair, "%.8s-%.8s", d.vs_key, d.fs_key); size_t used = strlen(submit_programs);
+      if (!strstr(submit_programs, pair) && used + strlen(pair) + 2 < sizeof submit_programs) snprintf(submit_programs + used, sizeof submit_programs - used, "%s%s", used ? "," : "", pair); }
     static _Atomic unsigned logged;
     if (atomic_fetch_add(&logged, 1) < 16)
         wonder_nvn_report("NVN_DRAW_EXECUTED %s vs=%s fs=%s count=%d instances=%d (submit %u command %u)", call.name, d.vs_key, d.fs_key, call.count, call.instances, state.submits, state.commands);
@@ -444,8 +449,11 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
-    if (submits <= 8 || submits % 600 == 0)
-        wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u", queue, submits, count, commands, clears);
+    wonder_host_note_submit(submits);
+    if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
+        wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u programs=%s", queue, submits, count, commands, clears,
+                          submit_draws, submit_programs[0] ? submit_programs : "-");
+    submit_draws = 0; submit_programs[0] = 0;
 }
 void wonder_nvnQueueFlush(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFlush"); wonder_host_flush(); }
 void wonder_nvnQueueFinish(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFinish"); wonder_host_finish(); }

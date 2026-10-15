@@ -54,6 +54,7 @@ void *wonder_host_shader_function(const char key[17], int stage) { (void)key; re
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
 static const char *fake_gpu_error;   // set to simulate a failed replay command buffer
+void wonder_host_note_submit(unsigned submit) { (void)submit; }
 int wonder_host_gpu_error(char *out, size_t size) { if (!fake_gpu_error) return 0; snprintf(out, size, "%s", fake_gpu_error); return 1; }
 static unsigned first_draw_captures; static struct wonder_nvn_texture_snapshot first_draw_target;
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target) { first_draw_target = *target; first_draw_captures++; }
