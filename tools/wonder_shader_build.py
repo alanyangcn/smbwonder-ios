@@ -48,6 +48,25 @@ def cbuf_kind(slot):
     if slot in (0, 2): return ('drv', slot)
     raise ValueError(f'constant buffer c[{slot}] is driver-internal')
 
+CB_GUARD = 'static inline float4 wonder_cb(constant float4 *a, int i) { return uint(i) < 4096u ? a[i] : float4(0.0); }\n'
+def guard_cbuf_indices(msl):
+    """Dynamic constant-buffer indices (<name>._m0[<expr>], expr not a literal) become wonder_cb(<name>._m0, <expr>):
+    out-of-range reads return 0 as on Maxwell instead of faulting the GPU (every c[n] is declared float4[4096])."""
+    out, i, pattern = [], 0, re.compile(r'\b(\w+)\._m0\[')
+    while True:
+        m = pattern.search(msl, i)
+        if not m: out.append(msl[i:]); break
+        depth, j = 1, m.end()
+        while depth:
+            depth += {'[': 1, ']': -1}.get(msl[j], 0); j += 1
+        expr = msl[m.end():j - 1]
+        out.append(msl[i:m.start()])
+        out.append(msl[m.start():j] if re.fullmatch(r'\d+u?', expr.strip()) else f'wonder_cb({m.group(1)}._m0, {expr})')
+        i = j
+    text = ''.join(out)
+    anchor = 'using namespace metal;\n'
+    return text.replace(anchor, anchor + CB_GUARD, 1) if anchor in text else text
+
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
     m = re.search(r'^(vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
@@ -128,7 +147,7 @@ def build(census_dirs, out):
             key = job['key']; census, entry, census_sha = sources[key]
             res = json.loads((tmp / f'{key}.res.json').read_text())
             if res['notes']: raise ValueError(f'{key}: translator notes {res["notes"]}')
-            msl = subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout
+            msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
             refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
             (out / f'{key}.metal').write_text(msl); (out / f'{key}.refl').write_text(refl)
             manifest['keys'][key] = {'stage': job['stage'], 'msl_sha256': sha(msl.encode()), 'refl_sha256': sha(refl.encode()), 'census_sha256': census_sha}

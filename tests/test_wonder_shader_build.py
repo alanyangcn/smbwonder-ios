@@ -28,6 +28,18 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(build.cbuf_kind(0), ('drv', 0))
         self.assertEqual(build.cbuf_kind(2), ('drv', 2))
         with self.assertRaises(ValueError): build.cbuf_kind(17)
+    def test_dynamic_constant_buffer_indices_are_guarded(self):
+        # Maxwell returns 0 for constant reads outside the buffer; Metal would fault (round62-65, vs b767ff73ce766e58).
+        src = ("using namespace metal;\n"
+               "x = vp_c3._m0[33].z + vp_c3._m0[7u].x;\n"
+               "_88 = vp_c3._m0[int(uint(int(_99)) >> uint(2))][int(_99) & 3];\n"
+               "y = fp_c1._m0[i + f(a[2])];\n")
+        out = build.guard_cbuf_indices(src)
+        self.assertIn('vp_c3._m0[33].z + vp_c3._m0[7u].x', out)                                   # literal indices untouched
+        self.assertIn('_88 = wonder_cb(vp_c3._m0, int(uint(int(_99)) >> uint(2)))[int(_99) & 3];', out)
+        self.assertIn('y = wonder_cb(fp_c1._m0, i + f(a[2]));', out)                               # nested brackets kept whole
+        self.assertIn('static inline float4 wonder_cb(constant float4 *a, int i) { return uint(i) < 4096u ? a[i] : float4(0.0); }', out)
+        self.assertEqual(out.index('static inline float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 
