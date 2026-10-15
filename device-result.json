@@ -1,0 +1,37 @@
+{
+  "device": {
+    "name": "FlyMe",
+    "model": "iPhone 8 Plus",
+    "identifier": "iPhone10,2",
+    "os": "16.7.16 (20H392)"
+  },
+  "app_bundle_id": "local.smbwonder.loaderprobe",
+  "result": "signed module mapping, relocations, and one verified SDK RET passed",
+  "log_path": "/Users/yanglipeng/funny/smbwonder-work/analysis/device-probe/Documents/loader-probe.log",
+  "log_sha256": "52f797095d540d040cb47171945019144a70409ac1475df238a214dad263e1ca",
+  "executable_sha256": "6295522ee98ee7d828095b31de766442be5943c7a09ea61566a0ddd4e6c63062",
+  "evidence_markers": [
+    "MAPPED_OK: 2 modules",
+    "GUEST_RET_OK:",
+    "PROBE_COMPLETE:"
+  ],
+  "launch_mode": "User confirmed opening from the home screen and observing PROBE_COMPLETE; no debugger session remains attached. A force-quit and fresh-process cold restart was not explicitly controlled.",
+  "not_tested": [
+    "SDK initialization",
+    "constructors",
+    "nnMain",
+    "Horizon service semantics",
+    "NVN/Metal rendering",
+    "gameplay",
+    "saves",
+    "audio",
+    "lifecycle"
+  ],
+  "manual_open_verification": {
+    "source": "direct user confirmation in this conversation",
+    "reported_last_line": "PROBE_COMPLETE: stopped before SDK initialization, constructors and nnMain",
+    "downloaded_log_path": "/Users/yanglipeng/funny/smbwonder-work/analysis/device-probe-manual/Documents/loader-probe.log",
+    "downloaded_log_sha256": "52f797095d540d040cb47171945019144a70409ac1475df238a214dad263e1ca",
+    "scope": "manual home-screen opening and successful loader probe; not SDK or game startup"
+  }
+}

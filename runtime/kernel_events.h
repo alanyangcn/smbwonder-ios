@@ -1,0 +1,11 @@
+#pragma once
+#include <stdint.h>
+// Thread / synchronization / event SVCs (kernel_threads.c). Returns 1 when handled (result in r[0]).
+int wonder_event_call(int number, uint64_t *r);
+// Host-side signal of an event write end (e.g. CADisplayLink vsync).
+uint32_t wonder_event_signal(uint32_t handle);
+// Register the calling host thread as a guest thread; the first call also installs the per-thread
+// guest preparation, the guest entry trampoline and the log sink. Returns its handle (0x1001 first).
+uint32_t wonder_threads_register_current(int prio, int core, void (*prepare)(void),
+                                         void (*enter)(uint64_t entry, uint64_t arg, uint64_t sp),
+                                         void (*reporter)(const char *line));

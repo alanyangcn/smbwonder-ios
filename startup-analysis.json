@@ -1,0 +1,55 @@
+{
+  "status": "Independent cold SDK initialization and module DT_INIT passed; nnMain actually executed and blocked at unsupported SetThreadCoreMask (SVC 0x0f)",
+  "modules": {
+    "main": {
+      "module_id": "ff773e90972d544eb79406eaa65396d53c43efb9000000000000000000000000",
+      "nso_sha256": "ff9a3728246d45a750a686d1625bdeafb0a361ea75e19964675a14f629f98c32"
+    },
+    "sdk": {
+      "module_id": "e4bd58cac28cf13a08fb417aa013cdcb3f9622af000000000000000000000000",
+      "nso_sha256": "73bec5989030d4d9f056503066180a6100bb7937370a4d818c8ba53960dfa2f3"
+    }
+  },
+  "sdk_start_symbol": "_ZN2nn4init5StartEmmPFvvES2_S2_",
+  "sdk_start_offset": "0x100670",
+  "sequence": [
+    "_init_libc0",
+    "nnosInitialize(main_thread_handle, argument_region)",
+    "rtld_callback_A",
+    "_init_libc1",
+    "nninitInitializeSdkModule",
+    "nninitStartup",
+    "_init_libc2",
+    "rtld_callback_B",
+    "nnMain",
+    "rtld_callback_C",
+    "nninitFinalizeSdkModule",
+    "nnosQuickExit"
+  ],
+  "sdk_initialization_dependencies": [
+    "nndiagStartup",
+    "nn::os::InitializeVirtualAddressMemory",
+    "nn::oe::Initialize",
+    "nn::aoc::Initialize",
+    "nn::err::InitializeContextWriterApi",
+    "nn::fs::InitializeForApplication",
+    "nn::fs::SetLocalApplicationAccessLog",
+    "nn::pctl::Initialize",
+    "nn::fs::SetResultHandledByApplication",
+    "nn::diag::InitializeApplicationAbortObserver"
+  ],
+  "main_startup_dependencies": [
+    "nn::oe::SetCpuBoostMode",
+    "nn::os::QueryMemoryInfo",
+    "nn::os::SetMemoryHeapSize",
+    "nn::os::AllocateMemoryBlock (32 MiB)",
+    "nn::os::SetMemoryAllocatorForThreadLocal"
+  ],
+  "notes": [
+    "_init_libc0 and _init_libc2 are RET; _init_libc1 is a branch and must not be skipped as an empty routine.",
+    "Callback semantics, guest thread object/TLR/TLS layout, weak symbol resolution, and kernel service coverage remain to be validated.",
+    "The inventory is not a list of implemented host services. Full strong-symbol resolution does not establish platform-service compatibility."
+  ],
+  "evidence_path": "/Users/yanglipeng/funny/smbwonder-work/analysis/update-262144/startup-callgraph.json",
+  "device_evidence": "boot-device-result.json"
+}

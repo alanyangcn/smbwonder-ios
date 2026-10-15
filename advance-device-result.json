@@ -1,0 +1,164 @@
+{
+  "game": "Super Mario Bros. Wonder",
+  "version": "1.2.0 / 262144",
+  "device": {
+    "name": "FlyMe",
+    "model": "iPhone 8 Plus",
+    "os": "16.7.16"
+  },
+  "run_id": "3C496E05-4CF8-41F7-8050-89B9AB6472B6",
+  "pid": 21319,
+  "debugger_attached": true,
+  "milestones": {
+    "sdk_and_module_dt_init": "returned",
+    "nnmain": "executed",
+    "core_mask": "passed with ideal=-1 mask=1",
+    "romfs_mount": "actual complete indexed read-only archive",
+    "resource_reads": 4,
+    "ios_language": "zh-Hans",
+    "graphics_driver_boundary": "nv::InitializeGraphics reached",
+    "graphics_first_frame": "not implemented or verified",
+    "independent_cold_start_this_revision": "not verified"
+  },
+  "stop": {
+    "requested_condition": "continue until a newer device is required",
+    "result": "reached capability boundary of selected D2R NVN-to-Metal path",
+    "device_query": "Apple A11 GPU Metal3=0 Apple7=0 argumentBuffersTier=0 BC=0 RAM=3118219264 OS=16.7.16",
+    "marker": "DEVICE_UPGRADE_REQUIRED",
+    "guest_behavior": "thread terminated without returning from graphics initialization",
+    "not_a_claim": "newer hardware alone does not implement Wonder graphics"
+  },
+  "romfs": {
+    "files": 19034,
+    "payload_bytes": 3730968244,
+    "archive_bytes": 3732315409,
+    "sha256": "adbbd1b5147480ad078e7eee80955929e56b065c3ef41670e7e15a79aa7cface",
+    "index_sha256": "9502fa2e6aa7c262dcbeea49e94f7eb75806d7ef3e625846ac45f8f325282c2b",
+    "sha256_measured_on": "Mac before upload",
+    "full_payload_sha256_recomputed_on_device": false,
+    "index_bounds_validated_on_device": true,
+    "device_location": "App Documents/wonder-romfs.wrom"
+  },
+  "host_tests": 28,
+  "log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/advance-final/Documents/loader-probe.log",
+    "sha256": "8b99189214aea76c19b19225bb93d1ed97d4b78d9ccbee37d106e6e1453d449e"
+  },
+  "executable": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/build/loader-probe/DerivedData/Build/Products/Debug-iphoneos/WonderLoaderProbe.app/WonderLoaderProbe",
+    "sha256": "e75425b413b9225da173f6874c315ec6cf1dad598c44daab3c7904792ee23075"
+  },
+  "inputs": {
+    "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/verified-inputs.json",
+    "sha256": "8ce2fba47cbc72e4d4b0b6bdae183e83493386367d96ef79fe28e7d0ecd03c15"
+  },
+  "checks": [
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/advance-tests5.log",
+      "sha256": "c3fed89a5addc038912ad450444b6d0cb1d34017c90004fb1b4e8377b9019c2a"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/advance-xcode5.log",
+      "sha256": "d5b2039c72e73177002c83a3ac65a58b8fc0ff241b04b4fef419c62523bd6727"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/romfs-pack.log",
+      "sha256": "cb6234c3ed033da34b91f3ae507214ac505f601305d7c5ba3965ad790a262a84"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/romfs-upload.log",
+      "sha256": "ce28f48cd0042e648ef382180b69d90af162f567e246c54bead363245b728369"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/advance-final-detach2.log",
+      "sha256": "fef7692a8828fe1b83c3683ae57300a761a9dd564317ad658ec5f63146a44bce"
+    }
+  ],
+  "sources": [
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/LoaderProbe.m",
+      "sha256": "4a9ce0f93fd88915e163ed226607c0db5c2f640b8bda047efff7cea7748aeed0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/project.yml",
+      "sha256": "61622ca3111b8700545eb8c48c8bd927268084387961ca2c8cda8cda1eb1f720"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_hooks.c",
+      "sha256": "43b1e7dcc975cf946e4c513f1d1d22a5c62b89f0c7c3ff2aa4d667c34bc8c219"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_state.c",
+      "sha256": "74bc8aef78c15074695ca024bce2728bcf729c7f200e7e322ca6666e96a63233"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/game_thread.c",
+      "sha256": "181bf1b606116c96f61121f6cbedd5d03f9ce4adddad283c56318ef6c7b498f0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/graphics_gate.c",
+      "sha256": "82250b502d93c5df0e9265fbf39a92bc0984aa29082cc82808a189097f158bbd"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/module_inits.c",
+      "sha256": "f0e57e3a674a9c8d30dce7224662914029c301b2f2248b30b84ec46e6d1ad50f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs.c",
+      "sha256": "ec1538f67c00afc196e7b0f0a56faa15511774bee6402ad98a01888915d8ff16"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs.h",
+      "sha256": "c7380b4fb8fc777f0e80ee517b6314e409cd1500511289226916d4b4a6cb4704"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs_hooks.c",
+      "sha256": "f880ebdddf7bb91f35f0a96253f6b433f6621232276a2190ba80c96c449c7c57"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_kernel.c",
+      "sha256": "ba7e94f7a4c0d6200c42a18442a7bd2a7c934fd86adcc8dd6d51c4ad7b15e691"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_service_hooks.c",
+      "sha256": "027bc29845c0d8866c092bb9740f29ccbe437f24b8168bf629f52818445e376b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.c",
+      "sha256": "aa0d38d2d3130343ea18cfb3c8deb3f091e8a32467149d5e6c359f2a1f938bfd"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.h",
+      "sha256": "698a69fb14e5a524dd2fcceb4dad70feac7f091425193201851f65016bd54aba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_startup.c",
+      "sha256": "9d8d9d40519814117d70787d315e5908e105cafc9ce829bc4012b34c83698677"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/build_loader_probe.py",
+      "sha256": "b9ffe5a4c85e89e5fb5020fecfcf207aec52685e8497b535981d82dc1b5a33a6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/inspect_bnsh.py",
+      "sha256": "1db80453c3a4976761dae5c554965ad915ed41c4850742a9ef17978ae7c654f6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/pack_romfs.py",
+      "sha256": "75a34676b281e2a9601304d9d432f2ad2f7ac84c836d4e0a089f833a7a859aab"
+    }
+  ],
+  "remaining": [
+    "NVN/VI host integration",
+    "Wonder shader translation and reflection",
+    "texture and first-frame verification",
+    "subsequent kernel threads/synchronization as actually required",
+    "input/audio/save support",
+    "independent startup and playable workflow validation"
+  ],
+  "prior_gpu_run": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/advance-run5/Documents/loader-probe.log",
+    "sha256": "3da96fba8076caca4909584297ddd87c1f7403de3f1f0a6620ac2580d1964fea"
+  },
+  "debugger_lifecycle": "attached at launch (debugger=1); detached successfully after reaching hardware boundary, no active LLDB retained"
+}

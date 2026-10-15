@@ -1,0 +1,130 @@
+{
+  "game": "Super Mario Bros. Wonder",
+  "version": "1.2.0 / 262144",
+  "device": {
+    "name": "FlyMe",
+    "model": "iPhone 8 Plus",
+    "os": "16.7.16"
+  },
+  "run_id": "52205C0C-475E-4C84-9BFB-87307A5DE739",
+  "pid": 21112,
+  "debugger_attached": false,
+  "stage": "main",
+  "milestones": {
+    "independent_sdk_cold_start": "passed on dedicated 1 MiB stack",
+    "module_constructors": "main and sdk native DT_INIT both returned; 6610 and 97 array entries declared",
+    "nnmain_entry": "actual memory queries, notification subscriptions and priority request executed",
+    "complete_game_startup": "not achieved"
+  },
+  "ordered_markers": [
+    "GAME_THREAD_OK stack=0x100000 dedicated=1",
+    "SDK_STAGE_OK nnosInitialize",
+    "SDK_STAGE_OK _init_libc1",
+    "SDK_STAGE_OK nninitInitializeSdkModule",
+    "SDK_STAGE_OK nninitStartup",
+    "SDK_STAGE_OK _init_libc2",
+    "SDK_INIT_COMPLETE",
+    "CONSTRUCTORS_OK main entries=6610",
+    "CONSTRUCTORS_OK sdk entries=97",
+    "CONSTRUCTORS_COMPLETE",
+    "NNMAIN_ENTER main+0x5b7e10",
+    "SDK_SVC phase=nnMain",
+    "HOST_NOTIFICATION_ENABLE message=16",
+    "HOST_THREAD_PRIORITY handle=0x1001 priority=44",
+    "BOOT_BLOCKED unsupported SVC 0xf during nnMain"
+  ],
+  "blocking_interface": {
+    "svc": "0x0f",
+    "name": "SetThreadCoreMask",
+    "phase": "nnMain",
+    "sdk_offset": "0x15f188",
+    "arguments": {
+      "handle": "0x1001",
+      "ideal_core": "0xffffffff (-1)",
+      "mask": "0x1"
+    },
+    "behavior": "guest thread terminated without returning success; host UI remains alive"
+  },
+  "host_tests": 25,
+  "log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/boot3-final-cold/Documents/loader-probe.log",
+    "sha256": "d307547e24b61d037ecaeea442bd056c1ec09e624eafea0b9086a71105cfa89e"
+  },
+  "executable": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/build/loader-probe/DerivedData/Build/Products/Debug-iphoneos/WonderLoaderProbe.app/WonderLoaderProbe",
+    "sha256": "34a184b8be7fff19ed62b0995a3c8864afa8133476bc096a3174456f4cf818f7"
+  },
+  "source_files": [
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/entry.S",
+      "sha256": "68f225eab1c33ab89932d2924351eb05a9dd188e4385c1f5ef99ce8f3bfaf9af"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/hle.c",
+      "sha256": "8d56a101d40931d8572a9139bb10fd481bd0b59b101de79ca3fdf7b07a15abf4"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/loader.c",
+      "sha256": "ff5d159223cc42c17a94fe2a2c24e5f7f2f693c32ba561eab10cde5568cf240f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/LoaderProbe.m",
+      "sha256": "d5511adab397599c74b7cdc8a28d146fa7f00540f4fe13c9e339f4592c72310c"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_hooks.c",
+      "sha256": "41be72ec263e4f51749c92b761df1b7f5287507121ab6a46a94e853028cef48e"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_state.c",
+      "sha256": "c219edad769551e9f205b648cba0a7508f4eb5f5143d5fdd16ff7fd961036ce0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/game_thread.c",
+      "sha256": "181bf1b606116c96f61121f6cbedd5d03f9ce4adddad283c56318ef6c7b498f0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/module_inits.c",
+      "sha256": "f0e57e3a674a9c8d30dce7224662914029c301b2f2248b30b84ec46e6d1ad50f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_kernel.c",
+      "sha256": "2d041d4911a7f3208505b5395872ec1255eba9e9ff53a22143a27ee7d199686c"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_service_hooks.c",
+      "sha256": "027bc29845c0d8866c092bb9740f29ccbe437f24b8168bf629f52818445e376b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.c",
+      "sha256": "aa0d38d2d3130343ea18cfb3c8deb3f091e8a32467149d5e6c359f2a1f938bfd"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.h",
+      "sha256": "698a69fb14e5a524dd2fcceb4dad70feac7f091425193201851f65016bd54aba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_startup.c",
+      "sha256": "1618ae39f0d93be8c8ac2fc791b999364074ab4c88f0fa6c9b87cbced9e59083"
+    }
+  ],
+  "build_log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/boot3-xcode.log",
+    "sha256": "b3fe31f2edd92c3ff41bddc550f35e6dc0a649febbe0b2a3b1b142eefbe9a3f6"
+  },
+  "test_log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/boot3-tests.log",
+    "sha256": "4f7a14e6be42a9a659b6a9081658381b09219bdd26cb0ea938c80a28ec4960b2"
+  },
+  "input_profile": {
+    "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/verified-inputs.json",
+    "sha256": "8ce2fba47cbc72e4d4b0b6bdae183e83493386367d96ef79fe28e7d0ecd03c15"
+  },
+  "not_verified": [
+    "complete subsequent system service semantics",
+    "RomFS reads on device",
+    "game menu or rendering",
+    "subthread/synchronization coverage",
+    "audio/input/saves/lifecycle"
+  ]
+}

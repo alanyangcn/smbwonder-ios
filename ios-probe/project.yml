@@ -1,0 +1,81 @@
+name: WonderLoaderProbe
+options:
+  bundleIdPrefix: two.local.smbwonder
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    ARCHS: arm64
+    SDKROOT: iphoneos
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 5H8VE3NN7D   # paid team: required for the kernel memory entitlements below
+    PRODUCT_BUNDLE_IDENTIFIER: two.local.smbwonder.loaderprobe   # registered under team 5H8VE3NN7D
+    PRODUCT_NAME: WonderLoaderProbe
+    CLANG_ENABLE_OBJC_ARC: YES
+    GCC_OPTIMIZATION_LEVEL: 1
+    HEADER_SEARCH_PATHS: ['${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host', '${SMBW_REFERENCE}/runtime', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/nvn', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex']
+    OTHER_LDFLAGS: '-framework CoreGraphics -framework Metal -framework QuartzCore -framework ImageIO -Wl,-segprot,__DMmainW,rw,rw -Wl,-segprot,__DMsdkW,rw,rw'
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ENABLE_DEBUG_DYLIB: NO
+    GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "SMBW_STRICT_IMPORTS=1"]
+targets:
+  WonderLoaderProbe:
+    type: application
+    platform: iOS
+    sources:
+      - path: '${SMBW_REFERENCE}/ios-probe/LoaderProbe.m'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/loader.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/hle.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/entry.S'
+      - path: '${SMBW_REFERENCE}/runtime/sdk_kernel.c'
+      - path: '${SMBW_REFERENCE}/runtime/sdk_startup.c'
+      - path: '${SMBW_REFERENCE}/runtime/sdk_services.c'
+      - path: '${SMBW_REFERENCE}/runtime/sdk_service_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/game_thread.c'
+      - path: '${SMBW_REFERENCE}/runtime/module_inits.c'
+      - path: '${SMBW_REFERENCE}/runtime/applet_state.c'
+      - path: '${SMBW_REFERENCE}/runtime/applet_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/romfs.c'
+      - path: '${SMBW_REFERENCE}/runtime/romfs_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/graphics_gate.c'
+      - path: '${SMBW_REFERENCE}/runtime/metal2_probe.m'
+      - path: '${SMBW_REFERENCE}/runtime/metal2_shader_check.m'
+      - path: '${SMBW_REFERENCE}/runtime/metal2_pixels.c'
+      - path: '${SMBW_REFERENCE}/runtime/kernel_threads.c'
+      - path: '${SMBW_REFERENCE}/runtime/account_state.c'
+      - path: '${SMBW_REFERENCE}/runtime/account_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/nfp_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/hid_state.c'
+      - path: '${SMBW_REFERENCE}/runtime/hid_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/crash_report.c'
+      - path: '${SMBW_REFERENCE}/runtime/vi_state.c'
+      - path: '${SMBW_REFERENCE}/runtime/vi_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/host_graphics.m'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_device.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_swapchain.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_buffer.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_texture.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_state.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_bootstrap.c'
+      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_unimpl.S'
+      - path: '${SMBW_WORK}/build/loader-probe/embed.S'
+      - path: '${SMBW_WORK}/build/loader-probe/WonderLoaderProbe.app/dm'
+        type: folder
+        buildPhase: resources
+    # Wonder's console memory model needs more address space than iOS grants by default (nvn-round13:
+    # largest reservation 1280 MiB). These require the capabilities on the App ID; signing fails if the team lacks them.
+    entitlements:
+      path: '${SMBW_WORK}/build/loader-probe/project/WonderLoaderProbe.entitlements'
+      properties:
+        com.apple.developer.kernel.extended-virtual-addressing: true
+        com.apple.developer.kernel.increased-memory-limit: true
+    settings:
+      base:
+        INFOPLIST_FILE: '${SMBW_WORK}/build/loader-probe/project/ProbeInfo.plist'
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: '1,2'
+    scheme: {}

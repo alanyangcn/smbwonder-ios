@@ -1,0 +1,78 @@
+{
+ "game": "Super Mario Bros. Wonder",
+ "display_version": "1.2.0",
+ "content_version": 262144,
+ "patched_directory": "build/cpu-native-262144",
+ "modules": {
+  "main": {
+   "module_id": "ff773e90972d544eb79406eaa65396d53c43efb9000000000000000000000000",
+   "nso": {
+    "path": "game/update-262144-nstool/0/main",
+    "sha256": "ff9a3728246d45a750a686d1625bdeafb0a361ea75e19964675a14f629f98c32"
+   },
+   "patched": {
+    "path": "build/cpu-native-262144/main.patched.bin",
+    "sha256": "10a9a247221bce33610ed4d057a400030f3bde58e022774201fdd594d26b87bc"
+   },
+   "auxiliary": [
+    {
+     "path": "build/cpu-native-262144/main.fixups.tsv",
+     "sha256": "b44b0b10b0a9faea94fa9d06175ba015ca03ca366d505ac904c5c6df642f2405"
+    },
+    {
+     "path": "build/cpu-native-262144/main.gates.tsv",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   ]
+  },
+  "sdk": {
+   "module_id": "e4bd58cac28cf13a08fb417aa013cdcb3f9622af000000000000000000000000",
+   "nso": {
+    "path": "game/update-262144-nstool/0/sdk",
+    "sha256": "73bec5989030d4d9f056503066180a6100bb7937370a4d818c8ba53960dfa2f3"
+   },
+   "patched": {
+    "path": "build/cpu-native-262144/sdk.patched.bin",
+    "sha256": "b9becba31f9bb23ba5bb3439424055048872249f12ac9a881fd90e8d7ea2abc7"
+   },
+   "auxiliary": [
+    {
+     "path": "build/cpu-native-262144/sdk.fixups.tsv",
+     "sha256": "256436238fa8c150f522fe6e7825d531ecc8f665cda869a87411c8683494ad5e"
+    },
+    {
+     "path": "build/cpu-native-262144/sdk.gates.tsv",
+     "sha256": "3d6ea12a568f0108c8f8edf0d3df91f295746e74d507450110433c0178787f35"
+    }
+   ]
+  }
+ },
+ "checks": [
+  {
+   "path": "analysis/update-262144/main-structure.log",
+   "sha256": "878c55ac8a9a5f0287512990af08c5f38508153a39c751a2f2309b28d2230eb8",
+   "marker": "STRUCT main OK"
+  },
+  {
+   "path": "analysis/update-262144/main-equivalence-fixed.log",
+   "sha256": "471880d7f0d3c50ca440cbda311e6caeb6d4888c7fbdd7e04d227be66244ec52",
+   "marker": "EQUIV main OK"
+  },
+  {
+   "path": "analysis/update-262144/sdk-structure.log",
+   "sha256": "9475f68029837f5bc05d54002a847cb42151d1ce7066e738790385c16af7168c",
+   "marker": "STRUCT sdk OK"
+  },
+  {
+   "path": "analysis/update-262144/sdk-equivalence-fixed.log",
+   "sha256": "2fb34931ac4fe813105fc5b9856dfc127f485212e166fe1fc27c9cc597561ca3",
+   "marker": "EQUIV sdk OK"
+  }
+ ],
+ "npdm": {
+  "path": "game/update-262144-nstool/0/main.npdm",
+  "sha256": "55ac02cbae560980976f77a4e9774a42eec70fbacf0cc29254df863b3a46faae",
+  "main_thread_stack_size": 1048576,
+  "system_resource_size": 16777216
+ }
+}

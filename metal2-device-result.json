@@ -1,0 +1,345 @@
+{
+  "game": "Super Mario Bros. Wonder",
+  "version": "1.2.0 / 262144",
+  "device": {
+    "name": "FlyMe",
+    "model": "iPhone 8 Plus",
+    "gpu": "Apple A11 GPU",
+    "os": "16.7.16"
+  },
+  "backend": "metal2",
+  "run_id": "38BEF81F-D9F5-48B7-BB35-3B3406961772",
+  "pid": 21516,
+  "debugger_at_launch": true,
+  "debugger_detached_successfully": true,
+  "independent_cold_start_this_revision": "not verified",
+  "milestones": {
+    "native_sdk_constructors_nnmain": "passed",
+    "actual_romfs_resource_reads": 4,
+    "gpu_probe": {
+      "msl": "2.1",
+      "explicit_binding": true,
+      "positive_pixels_verified": 4096,
+      "negative_pixels_rejected": 4096,
+      "gpu_completion_waited": true
+    },
+    "target_shader_compilation": {
+      "selected_pairs": 3,
+      "unique_stages": 6,
+      "compiled_on_a11": 6,
+      "selection": "smallest unique bundled shader pairs; not runtime traced",
+      "runtime_eligible": false,
+      "reflection_validated": false,
+      "actual_game_draw": "not implemented or verified"
+    },
+    "game_menu_or_playability": "not achieved"
+  },
+  "current_boundary": "GAME_RENDERER_PENDING; no newer device required for this Metal2 path at this stage",
+  "evidence": [
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-final/Documents/loader-probe.log",
+      "sha256": "438d00a3d70e7a55501a7c5734ca93b6ba46dd0da0847aba222c375dc5113729"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-final/Documents/metal2-probe.json",
+      "sha256": "9358b8c6fdd7a5172b88e75feb6401a6a5910fee917408f3daea3447987d7dc3"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-final/Documents/metal2-probe.png",
+      "sha256": "fef90ee253dd50e68128fa9296ed28c501acbca0bedc79055f4279cddfe18c58"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-final/Documents/Metal2ShaderSources/device-compile-result.json",
+      "sha256": "11033e2e9ec55e91a29a8afb2ba3e5d14bfa4a116ff6366a093c3c9408291463"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-device2.log",
+      "sha256": "4d0271b7d26542ba553eff3dca5bc0b4961e25352b4a3b634de43ad80170394c"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-tests-final.log",
+      "sha256": "6dcea1b3721c3575bbde76b300a79cb0e3b49bb624e8947eda2a27ae8e60a65e"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/metal2-xcode2.log",
+      "sha256": "1f69d06229d81c61f91335e70673c6f7c72959494112d580e79ffa1e8f7b9f38"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/build/metal2-shaders/exploratory/manifest.json",
+      "sha256": "45a6f41c0986e61431e71479759f44f37134590ca84f365d0a89690fbac130ec"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/build/metal2-shaders/exploratory/jobs.json",
+      "sha256": "913a1d84ea0178ffebf88ca756e8e21edf1d50780f270adca1354a855fe0420d"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/build/metal2-shaders/exploratory/spv/translation-manifest.json",
+      "sha256": "acb739154e659d2b179e14eacb5faa0c0216f56f8aaac4f7ad2353ac7de72576"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/build/metal2-shaders/ios21-bound/compile-result.json",
+      "sha256": "e2823cec6f71d53d9bf23166da9c08e0f210ef80debb95d0a05a297f8efc309d"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/build/metal2-shaders/ios21-bound/sources.json",
+      "sha256": "97a7f903abddad31d74d41e75bf1351f76215321d9f1cf7976dcc825ff0b83ee"
+    }
+  ],
+  "app": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/build/loader-probe/DerivedData/Build/Products/Debug-iphoneos/WonderLoaderProbe.app/WonderLoaderProbe",
+    "sha256": "c5fd611927452bbc4b037eb9708f0c870f011dea59a4bef61d2828308d6e4b16"
+  },
+  "verified_cpu_inputs": {
+    "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/verified-inputs.json",
+    "sha256": "8ce2fba47cbc72e4d4b0b6bdae183e83493386367d96ef79fe28e7d0ecd03c15"
+  },
+  "source_files": [
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/LoaderProbe.m",
+      "sha256": "66264ef83ab90a74c61168ddfd22c7f7bd6598c3478908c9c3eb3944102d37eb"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/project.yml",
+      "sha256": "e6044920c9ad737eea7301fa3e1eee6d27afb1a622d8ccbca57b22c8fc68863d"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_hooks.c",
+      "sha256": "43b1e7dcc975cf946e4c513f1d1d22a5c62b89f0c7c3ff2aa4d667c34bc8c219"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/applet_state.c",
+      "sha256": "74bc8aef78c15074695ca024bce2728bcf729c7f200e7e322ca6666e96a63233"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/game_thread.c",
+      "sha256": "181bf1b606116c96f61121f6cbedd5d03f9ce4adddad283c56318ef6c7b498f0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/graphics_gate.c",
+      "sha256": "2378f636ff29e582cc9a00472218b251abba1f928c01aee3da6ca9e95720864f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_pixels.c",
+      "sha256": "97d6a9a5375d75c8e87e00fd9b9e270c3d8ad86672de5aeb865978f920390fba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_pixels.h",
+      "sha256": "54e05d6093300fade9821f85d1f462040f923d0edb5ced58f3450a872bd47c9c"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_probe.h",
+      "sha256": "15c517ba1273c2c38690c1c046aafefab0cd956ef16b8763eb86ae0cf5b7d2d6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_probe.m",
+      "sha256": "9a2432d01a770712ed9094a589bcd8a5265fe22b5b9f98a766254edd9198829a"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_shader_check.h",
+      "sha256": "f328b0a13fb372e37c9cce6886c4355cf8c32e537c576b3dfdac0e3d71002a9a"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/metal2_shader_check.m",
+      "sha256": "3ddd93ca9cb743f6b8b7d149963c5e9eadfb059b6eff12a1f686265d92c63bf6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/module_inits.c",
+      "sha256": "f0e57e3a674a9c8d30dce7224662914029c301b2f2248b30b84ec46e6d1ad50f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs.c",
+      "sha256": "ec1538f67c00afc196e7b0f0a56faa15511774bee6402ad98a01888915d8ff16"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs.h",
+      "sha256": "c7380b4fb8fc777f0e80ee517b6314e409cd1500511289226916d4b4a6cb4704"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/romfs_hooks.c",
+      "sha256": "f880ebdddf7bb91f35f0a96253f6b433f6621232276a2190ba80c96c449c7c57"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_kernel.c",
+      "sha256": "ba7e94f7a4c0d6200c42a18442a7bd2a7c934fd86adcc8dd6d51c4ad7b15e691"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_service_hooks.c",
+      "sha256": "027bc29845c0d8866c092bb9740f29ccbe437f24b8168bf629f52818445e376b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.c",
+      "sha256": "aa0d38d2d3130343ea18cfb3c8deb3f091e8a32467149d5e6c359f2a1f938bfd"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.h",
+      "sha256": "698a69fb14e5a524dd2fcceb4dad70feac7f091425193201851f65016bd54aba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_startup.c",
+      "sha256": "9d8d9d40519814117d70787d315e5908e105cafc9ce829bc4012b34c83698677"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/applet_state_test.c",
+      "sha256": "9541da3316164f058b07ffa5d9b91972145754b95c5e7ac07fd153c2292857c1"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/game_thread_stop_test.c",
+      "sha256": "6f7996b05a88a7e4547b986f5bc3512589602cbcdf82eaa3a124e5dbb2a83ddb"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/game_thread_test.c",
+      "sha256": "29945098e600fdfd4c045fb20de9c302a0f2ea0d64c618da812efdede827547b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/graphics_gate_test.c",
+      "sha256": "9ed75b6d9f1956ccb1f50012258597ab90c369e4dd016f21b8458c6d8e70e168"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/metal2_pixels_test.c",
+      "sha256": "9d504efa9728cc98e30bfef4738d4cff5dda4e2f0dbe8fb599ed1094d8c91af0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/metal2_probe_test.m",
+      "sha256": "7c9e65dea48f857efaa4cbfa1a57bbf46b2b8e3ddc5dbde3cb14a84f4f330c0b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/metal2_shader_check_test.m",
+      "sha256": "f8105f8d104a652566a42be9b6ba37a642209122b49b62a6a72d8ad1d360b324"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/module_inits_test.c",
+      "sha256": "e4d1e1831e865e773a04e3db80108731f5bf6097f29d3c0f42d82b19a1bf0adb"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/romfs_test.c",
+      "sha256": "d941be17d1c267a639879b73e2fcdc2327854037c72daae9772f4dd8eaaf16a2"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/sdk_imports_test.c",
+      "sha256": "11501790b63852a46952a773dddfe87a6788f02680be52d1dfa4796e4abd4a6a"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/sdk_kernel_test.c",
+      "sha256": "22e710c73af1b536c8e82189360d70da3bb0b2ed2ffb16280150ee68cd7dfe37"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/sdk_services_test.c",
+      "sha256": "3d8c679d1569d173fb24e1e70abdaac9cb1b2320f716c57bcef5131c77942052"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_applet_state.py",
+      "sha256": "ed914f2a70955e4b0f1ba653019bdfc4af1263483e137e9aa71eb62be97de8d8"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_bnsh_inventory.py",
+      "sha256": "4f15033e0074164241e4a5c5e38a049a1345bde11247ee0bd552a7cbd57ff9ee"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_constructors.py",
+      "sha256": "c36c13527206bead6a2d2e56dd3ec6cd43a3bda8532ca5e776002ec8e7d8da69"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_disasm.py",
+      "sha256": "ffbeff53eb8b0f402861179e66771e4ad26df811e4bbfb70ce50cac17af1efa9"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_equiv_state.py",
+      "sha256": "262a5a9cb7207bde1ff503701e6cd7753805ca607f09af232081102f203c33a6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_graphics_gate.py",
+      "sha256": "4ef058da415a92ace304355699435479f20fa0911b1d46bb1b9a573ae0777e59"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_main_thread.py",
+      "sha256": "5e383682ff6a50024d4b4854b7b1e6abf07800e9f59b568aa1762b5c5e156af7"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_metal2_gpu.py",
+      "sha256": "12af45dbae5417a62328e311375e35473562a1acbf51149e0f16dd3517d7b845"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_metal2_pixels.py",
+      "sha256": "e2ac33f8e62f53f7675f0480aeec211cc145dce4407f8b2b6faca74191655175"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_metal2_sources.py",
+      "sha256": "fc4f88c90c45ddf271aee78aa2ea513e6677bad2a0f0d45c310a526cd9b36ec7"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_probe_inputs.py",
+      "sha256": "1a1be33f12486b07f4aa15ed3bb4ad1cfb0058d9bd322277658c06e5d0b53d68"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_romfs.py",
+      "sha256": "f9be8e8fe7df6270f9b375bbe2631f22668be04c3a00c81c687ec0036cea16ee"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_sdk_imports.py",
+      "sha256": "e61cc42c90aaab9955205776f591dac2778fc67fac277e3acee2a1b7b178fee1"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_sdk_kernel.py",
+      "sha256": "e21b6bf84c8b7bcf4f28c6588a9d1df02618c756e198a5065651545610dbcc3f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_sdk_services.py",
+      "sha256": "a179ba3999c5d9f95e3a26735ec61bd848fcc9bad961d2a5151057121bf48852"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_shader_jobs.py",
+      "sha256": "4956648b42dfcedaab3e048ff6fa8ede73a7c78d0c83ba3f402df56471fa27c9"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tests/test_shader_provenance.py",
+      "sha256": "f43027b67a355e405080c7db2f2212932a3536a4e0fb42a11c79f51d678081cc"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/build_loader_probe.py",
+      "sha256": "a8d221750e624a3535cf5fdd383adc9121b5745cfb3f7705271d86f5c7966dc0"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/compile_metal2_shaders.py",
+      "sha256": "e926eb9edaeb3e3ba9e0f87ecea92447b6d1d78c351edf0a1712a70968ba6861"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/inspect_bnsh.py",
+      "sha256": "1db80453c3a4976761dae5c554965ad915ed41c4850742a9ef17978ae7c654f6"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/pack_romfs.py",
+      "sha256": "75a34676b281e2a9601304d9d432f2ad2f7ac84c836d4e0a089f833a7a859aab"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/prepare_shader_jobs.py",
+      "sha256": "5a68830a06da157c8780c4a2acde6c34b90761d7873d00e3d8df27b3017794ba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/translate_shader_jobs.py",
+      "sha256": "ceec63897984841101de3c0d3da7c410e00eec46849056fd5f19422ad654d175"
+    }
+  ],
+  "host_tests": 35,
+  "review": "two rounds; SPIR-V provenance and empty/incomplete jobs issues fixed and reverified",
+  "local_tools": {
+    "dotnet_sdk": "10.0.402",
+    "translator_embedded_source_sha16": "d760b2f173ee5e0c",
+    "translator_dll": {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/tools/dmsh_xlate/dmsh_xlate.dll",
+      "sha256": "8e3fdae5fd337cb79823c99a0728c4d9db144b3818ebe0f535ebbb7b154257f1"
+    },
+    "spirv_cross_commit": "300681bbcb8365a8d1eacdacdbdd0249bbf1d6b1",
+    "spirv_cross": {
+      "path": "/Users/yanglipeng/funny/smbwonder-work/tools/spirv-cross/spirv-cross",
+      "sha256": "f35f0a5315f164ecc3f948a75ecaaa8e39cf96534e30df72ded080581dee1a45"
+    },
+    "offline_metal_toolchain": "missing; offline compile failed; source-only generation followed by actual device compilation"
+  },
+  "remaining": [
+    "Wonder NVN entrypoints and VI/CAMetalLayer",
+    "runtime vertex/buffer/texture binding and validated target reflection",
+    "first real game draw and frame comparison",
+    "further kernel threads/synchronization as required",
+    "input/audio/save and playable workflow"
+  ]
+}

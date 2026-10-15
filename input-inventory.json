@@ -1,0 +1,203 @@
+{
+  "game": "Super Mario Bros. Wonder",
+  "observed_at": "2026-10-15",
+  "stage": "metal2_gpu_probe_and_six_target_stages_compiled_on_a11",
+  "source_packages_unchanged": true,
+  "base_application_id": "010015100B514000",
+  "application_id_source": "extracted NPDM and patch CNMT",
+  "display_version": "1.2.0 (extracted Control NACP)",
+  "packages": [
+    {
+      "path": "/Users/yanglipeng/Downloads/[超级马里奥 惊奇].Super Mario Bros. Wonder/Super Mario Bros Wonder [010015100B514000][v0].nsz",
+      "size": 3505043144,
+      "sha256": "b6cc0e5d2ac45d685282ef678c8746b8b428f0c58993a7a777f9c3aa9e52c78e",
+      "container": "PFS0",
+      "entries": [
+        {
+          "name": "010015100b5140000000000000000010.tik",
+          "offset": 32768,
+          "size": 704
+        },
+        {
+          "name": "010015100b5140000000000000000010.cert",
+          "offset": 33472,
+          "size": 1792
+        },
+        {
+          "name": "32b48393a0f1306f781c9851c1604452.cnmt.nca",
+          "offset": 35264,
+          "size": 3584
+        },
+        {
+          "name": "284e64d12cbb2bc63d47989944ad18bc.ncz",
+          "offset": 38848,
+          "size": 3504176904
+        },
+        {
+          "name": "62dde0678ac69e7aca11c906e0794532.nca",
+          "offset": 3504215752,
+          "size": 570368
+        },
+        {
+          "name": "dbdf44ac5ed263398f840f5665b74cb8.nca",
+          "offset": 3504786120,
+          "size": 257024
+        }
+      ],
+      "embedded_cnmt_xml": null
+    },
+    {
+      "path": "/Users/yanglipeng/Downloads/[超级马里奥 惊奇].Super Mario Bros. Wonder/Super Mario Bros. Wonder v1.2.0[010015100B514800][v262144][UPD].nsz",
+      "size": 131934763,
+      "sha256": "413e6d7215cb32024de670154ec02cc576cd5f9a3fcc9994ca710c477068aa3e",
+      "container": "PFS0",
+      "entries": [
+        {
+          "name": "010015100b5148000000000000000011.cert",
+          "offset": 464,
+          "size": 1792
+        },
+        {
+          "name": "010015100b5148000000000000000011.tik",
+          "offset": 2256,
+          "size": 704
+        },
+        {
+          "name": "2a8870c712f2920fd7676932379778df.cnmt.nca",
+          "offset": 2960,
+          "size": 5120
+        },
+        {
+          "name": "2a8870c712f2920fd7676932379778df.cnmt.xml",
+          "offset": 8080,
+          "size": 1416
+        },
+        {
+          "name": "45a337afb8b85e758244a061a0970745.nca",
+          "offset": 9496,
+          "size": 199680
+        },
+        {
+          "name": "b800f8e397b3511bdb1af6137bbf8126.nca",
+          "offset": 209176,
+          "size": 3492864
+        },
+        {
+          "name": "d38ab06066bd76af13d8e70e8c0be32d.ncz",
+          "offset": 3702040,
+          "size": 128232723
+        }
+      ],
+      "embedded_cnmt_xml": {
+        "Type": "Patch",
+        "Id": "0x010015100b514800",
+        "Version": "262144",
+        "OriginalId": "0x010015100b514000",
+        "KeyGenerationMin": "17",
+        "RequiredSystemVersion": "1411383346",
+        "contents": [
+          {
+            "Type": "Program",
+            "Id": "d38ab06066bd76af13d8e70e8c0be32d",
+            "Size": "142978048",
+            "Hash": "d38ab06066bd76af13d8e70e8c0be32dc225bd9ac8034da1eba89f5ab7124eb9",
+            "KeyGeneration": "17"
+          },
+          {
+            "Type": "Control",
+            "Id": "b800f8e397b3511bdb1af6137bbf8126",
+            "Size": "3492864",
+            "Hash": "b800f8e397b3511bdb1af6137bbf812638bf147f4c3c3b21a255eb67c5d59a4a",
+            "KeyGeneration": "17"
+          },
+          {
+            "Type": "LegalInformation",
+            "Id": "45a337afb8b85e758244a061a0970745",
+            "Size": "199680",
+            "Hash": "45a337afb8b85e758244a061a0970745ab5f5707377e3bf73964639db5c3aaee",
+            "KeyGeneration": "17"
+          },
+          {
+            "Type": "Meta",
+            "Id": "2a8870c712f2920fd7676932379778df",
+            "Size": "5120",
+            "Hash": "2a8870c712f2920fd7676932379778df3492e1ab5dd4f2c855e1a580778cbbd5",
+            "KeyGeneration": "17"
+          }
+        ]
+      }
+    }
+  ],
+  "exefs": {
+    "available": true,
+    "path": "/Users/yanglipeng/funny/smbwonder-work/game/update-262144-nstool/0",
+    "module_ids": {
+      "main": "ff773e90972d544eb79406eaa65396d53c43efb9000000000000000000000000",
+      "sdk": "e4bd58cac28cf13a08fb417aa013cdcb3f9622af000000000000000000000000"
+    },
+    "architecture": "AArch64, NPDM Is64BitInstruction and 64-bit address space",
+    "imports": "all strong main/sdk imports resolve across modules; 27 unresolved weak symbols; not a platform-service compatibility result"
+  },
+  "romfs": {
+    "available": true,
+    "path": "/Users/yanglipeng/funny/smbwonder-work/game/update-262144-nstool/1",
+    "file_count": 19034,
+    "total_bytes": 3730968244,
+    "shader_format": "Zstandard-compressed BFSHA and SARC with embedded BNSH; metadata reconnaissance only; no translated shaders"
+  },
+  "environment": {
+    "host_arch": "x86_64",
+    "macos": "26.7.1",
+    "xcode": "26.6 (17F113)",
+    "iphoneos_sdk": "26.5",
+    "developer_dir": "/Applications/Xcode-26.6.0.app/Contents/Developer",
+    "active_developer_dir": "/Library/Developer/CommandLineTools",
+    "arm64_native_execution_on_host": false,
+    "device_inventory": "FlyMe, iPhone10,2 / iPhone 8 Plus, iOS 16.7.16, USB available via xcdevice and xctrace",
+    "tools_not_found_in_path": [
+      "hactool",
+      "hactoolnet",
+      "nsz",
+      "dotnet",
+      "spirv-cross"
+    ],
+    "entry_assembly_cross_compile": {
+      "source": "dm/host/entry.S",
+      "target": "arm64-apple-ios18.0",
+      "result": "passed; Mach-O arm64 object only; no link, signature or execution"
+    },
+    "local_tools_installed": [
+      "nsz 5.0.0",
+      "hactool 1d64a83450e025622f3468c28fc4164dad2c5ef6",
+      "nstool 1.9.2",
+      "XcodeGen 2.46.0",
+      "ios-deploy (local source build)"
+    ]
+  },
+  "required_inputs": [],
+  "milestones": {
+    "package_inventory": "complete",
+    "target_nso_analysis": "complete for main/sdk inventory; further startup ABI analysis required",
+    "cpu_rewrite": "main/sdk STRUCT and EQUIV OK; 34546 sites, 600 mutation checks; no D2R CUTS/OBS/PARAMS matched",
+    "native_boot": "nnMain actually executed; blocked at SetThreadCoreMask 0x0f",
+    "graphics": "8801 BNSH variations, 4882 unique bytecode payloads inventoried; no reflection validation, translation or rendering",
+    "ios_app": "diagnostic host remains alive after terminating guest at unsupported interface; not playable",
+    "sdk_initialization": "passed on FlyMe, debugger-assisted; host initialization backends, complete service APIs pending",
+    "independent_cold_boot": "passed; debugger=0; dedicated 1 MiB stack",
+    "module_constructors": "main/sdk DT_INIT returned"
+  },
+  "target": {
+    "model_user_reported": "iPhone 18 Pro",
+    "os_user_reported": "iOS 27",
+    "connected_target_verified": false,
+    "temporary_debug_device": {
+      "name": "FlyMe",
+      "model": "iPhone 8 Plus",
+      "os": "iOS 16.7.16",
+      "connected_verified": true,
+      "scope": "CPU, signed module mapping and relocation; reference Metal3 renderer unsupported on A11"
+    }
+  },
+  "latest_progress": "METAL2-STATUS.md",
+  "latest_device_evidence": "metal2-device-result.json"
+}

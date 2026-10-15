@@ -1,0 +1,21 @@
+# Local game inputs, derived shaders, toolchains, device evidence, builds, and signing material.
+/work/
+/build/
+/DerivedData/
+*.xcuserstate
+xcuserdata/
+__pycache__/
+*.py[cod]
+.DS_Store
+*.keys
+*.p12
+*.p8
+*.mobileprovision
+*.ipa
+*.nsp
+*.nsz
+*.xci
+*.nca
+*.nso
+*.metallib
+*.air

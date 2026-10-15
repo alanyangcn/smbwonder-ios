@@ -1,0 +1,101 @@
+{
+  "status": "SDK initialization chain passed using host service initialization backends",
+  "game": "Super Mario Bros. Wonder",
+  "version": "1.2.0 / 262144",
+  "device": {
+    "name": "FlyMe",
+    "model": "iPhone 8 Plus",
+    "os": "16.7.16 (20H392)"
+  },
+  "launch": "debugger-assisted fresh process; standalone SDK cold start not verified",
+  "log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/sdk-final-verified/Documents/loader-probe.log",
+    "sha256": "fd2d202d3894e61785466deed0c399a4df3310269f5a1d4eb9d04e82bdfc7595"
+  },
+  "executable": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/build/loader-probe/DerivedData/Build/Products/Debug-iphoneos/WonderLoaderProbe.app/WonderLoaderProbe",
+    "sha256": "5a8dbb491a6738908f8289f67abe63a07bd585a9f57f51249401e9dc1e1cbeac"
+  },
+  "source_files": [
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/entry.S",
+      "sha256": "68f225eab1c33ab89932d2924351eb05a9dd188e4385c1f5ef99ce8f3bfaf9af"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/hle.c",
+      "sha256": "8d56a101d40931d8572a9139bb10fd481bd0b59b101de79ca3fdf7b07a15abf4"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/dm/host/loader.c",
+      "sha256": "ff5d159223cc42c17a94fe2a2c24e5f7f2f693c32ba561eab10cde5568cf240f"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/LoaderProbe.m",
+      "sha256": "75183a735310fee48dc3c9ab512a34c9b0192797cd596cb4bffc7c730b17a800"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/ios-probe/project.yml",
+      "sha256": "37cf59ac2583ab3c71db19b33562b16db642d5978c45ee47debe42fd78f6e7a1"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_kernel.c",
+      "sha256": "6707860daf8055f6a9ec10113764a0e034097e482e6abe3ce2a38ec5fff6fc4d"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_service_hooks.c",
+      "sha256": "027bc29845c0d8866c092bb9740f29ccbe437f24b8168bf629f52818445e376b"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.c",
+      "sha256": "aa0d38d2d3130343ea18cfb3c8deb3f091e8a32467149d5e6c359f2a1f938bfd"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_services.h",
+      "sha256": "698a69fb14e5a524dd2fcceb4dad70feac7f091425193201851f65016bd54aba"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/runtime/sdk_startup.c",
+      "sha256": "1fd4526ef3b414efc3ad07f8276e664feb897d3ca3fb8853e095b88add9e4411"
+    },
+    {
+      "path": "/Users/yanglipeng/funny/d2r-mobile/ports/smbwonder/tools/build_loader_probe.py",
+      "sha256": "d771d5b3ff547b620cdea60d18f052b1914535e942d4b38b5866fc79f771f7dd"
+    }
+  ],
+  "build_log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/sdk-probe-xcode.log",
+    "sha256": "b12464cdac6aa64d884c4618add786c1b61a857130244459d20fadfc5c11700a"
+  },
+  "host_test_log": {
+    "path": "/Users/yanglipeng/funny/smbwonder-work/analysis/sdk-host-tests.log",
+    "sha256": "51e588833f969cbb99d767958255ca6e4c97b8c1a67da04759bfecd48d72749e"
+  },
+  "ordered_markers": [
+    "GUEST_RET_OK:",
+    "SDK_TIMER_OK",
+    "SDK_STAGE_OK nnosInitialize",
+    "SDK_THREAD_OK",
+    "SDK_STAGE_OK _init_libc1",
+    "SDK_STAGE_OK nninitInitializeSdkModule",
+    "SDK_STAGE_OK nninitStartup",
+    "SDK_STAGE_OK _init_libc2",
+    "SDK_INIT_COMPLETE stopped before constructors and nnMain"
+  ],
+  "host_initialization_hooks": 7,
+  "host_cpu_boost_hooks": 1,
+  "resource_configuration": "[dm] SDK_KERNEL diagnostic pool=512 MiB AS=0x117c78000+0x40000000",
+  "address_fallback_exercised_in_this_run": false,
+  "host_tests": 20,
+  "not_completed": [
+    "global constructors",
+    "nnMain",
+    "complete subsequent Horizon service APIs",
+    "dedicated main thread with NPDM stack",
+    "general guest ELF TLS",
+    "graphics",
+    "input",
+    "audio",
+    "game saves",
+    "standalone cold restart"
+  ]
+}
