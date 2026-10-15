@@ -11,8 +11,8 @@ class NvnDeviceTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr + result.stdout[-1500:])
             out=result.stdout
             self.assertIn('NVN_STRICT_BOOTSTRAP_OK',out)
-            self.assertRegex(out,r'NVN_PROC_TABLE pass=1 device=\S+ implemented=265 stop_thunks=269')
-            self.assertRegex(out,r'NVN_PROC_TABLE pass=2 device=0x[0-9a-f]+ implemented=265 stop_thunks=269')
+            self.assertRegex(out,r'NVN_PROC_TABLE pass=1 device=\S+ implemented=266 stop_thunks=268')
+            self.assertRegex(out,r'NVN_PROC_TABLE pass=2 device=0x[0-9a-f]+ implemented=266 stop_thunks=268')
     def test_build_script_and_xcode_project_compile_same_runtime(self):
         import importlib.util,re
         spec=importlib.util.spec_from_file_location('b',ROOT/'tools/build_loader_probe.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

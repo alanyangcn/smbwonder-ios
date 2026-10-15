@@ -42,7 +42,7 @@ uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBuffer
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
 void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
-#define EXPECTED_IMPLEMENTED 265
+#define EXPECTED_IMPLEMENTED 266
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
@@ -842,6 +842,8 @@ int main(void) {
         assert(((uint64_t (*)(const void *, const void *))slot("nvnDeviceGetTimestampInNanoseconds"))(device, counter) == 123456789);
         // Sampler getters reflect the initialized state.
         int a, b, c; float lo, hi, border[4];
+        ((void (*)(const void *, int *, int *))slot("nvnSamplerGetMinMagFilter"))(sampler, &a, &b);
+        assert(a == 3 && b == 1);   // LINEAR_MIPMAP_NEAREST / LINEAR as initialized (round54: main+0x52648 reads it back)
         ((void (*)(const void *, int *, int *, int *))slot("nvnSamplerGetWrapMode"))(sampler, &a, &b, &c);
         ((void (*)(const void *, float *, float *))slot("nvnSamplerGetLodClamp"))(sampler, &lo, &hi);
         ((void (*)(const void *, int *, int *))slot("nvnSamplerGetCompare"))(sampler, &a, &b);

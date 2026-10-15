@@ -618,6 +618,9 @@ static const struct sampler *sampler_of(const void *p, const char *who) {
     return s;
 }
 void wonder_nvnSamplerFinalize(void *sampler) { sampler_of(sampler, "nvnSamplerFinalize"); }
+void wonder_nvnSamplerGetMinMagFilter(const void *p, int *min, int *mag) {
+    const struct sampler *o = sampler_of(p, "nvnSamplerGetMinMagFilter"); *min = o->state.min; *mag = o->state.mag;
+}
 void wonder_nvnSamplerGetWrapMode(const void *p, int *s, int *t, int *r) {
     const struct sampler *o = sampler_of(p, "nvnSamplerGetWrapMode"); *s = o->state.wrap_s; *t = o->state.wrap_t; *r = o->state.wrap_r;
 }
@@ -697,6 +700,7 @@ static const struct implemented implemented[] = {
     {"nvnDeviceGetTimestampInNanoseconds", (void *)wonder_nvnDeviceGetTimestampInNanoseconds},
     {"nvnMemoryPoolFinalize", (void *)wonder_nvnMemoryPoolFinalize},
     {"nvnSamplerFinalize", (void *)wonder_nvnSamplerFinalize},
+    {"nvnSamplerGetMinMagFilter", (void *)wonder_nvnSamplerGetMinMagFilter},
     {"nvnSamplerGetWrapMode", (void *)wonder_nvnSamplerGetWrapMode},
     {"nvnSamplerGetLodClamp", (void *)wonder_nvnSamplerGetLodClamp},
     {"nvnSamplerGetLodBias", (void *)wonder_nvnSamplerGetLodBias},
