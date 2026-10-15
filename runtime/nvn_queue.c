@@ -121,6 +121,11 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
             if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
             d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1u << slot;
+            if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
+                struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
+                if (v.size < t->texture.size || !v.memory) { snprintf(why, sizeof why, "texture stage %d slot %d storage is not CPU-resolvable", stage, slot); replay_stop(opcode, why); }
+                d.tex[stage][slot].storage = v.memory; d.tex[stage][slot].storage_size = t->texture.size;
+            }
         }
     }
     for (int i = 0; i < d.vr->nattr; i++) {

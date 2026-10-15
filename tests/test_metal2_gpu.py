@@ -14,7 +14,7 @@ class Metal2ShaderLibraryTests(unittest.TestCase):
     def test_shader_library_compiles_verified_msl_and_stops_by_name(self):
         with tempfile.TemporaryDirectory() as directory:
             exe=Path(directory)/'lib'; scratch=Path(directory)/'shaders'; scratch.mkdir()
-            subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'tests/metal2_draw_test.m'),str(ROOT/'runtime/metal2_draw.m'),str(ROOT/'runtime/shader_library.c'),'-framework','Foundation','-framework','Metal','-o',str(exe)],check=True)
+            subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'tests/metal2_draw_test.m'),str(ROOT/'runtime/metal2_draw.m'),str(ROOT/'runtime/shader_library.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-framework','Foundation','-framework','Metal','-o',str(exe)],check=True)
             built=ROOT/'work/build/wonder-shaders'
             p=subprocess.run([str(exe),str(scratch),'ok']+([str(built)] if (built/'manifest.json').exists() else []),capture_output=True,text=True)
             if p.returncode==77:self.skipTest('Host has no Metal device')
@@ -24,3 +24,21 @@ class Metal2ShaderLibraryTests(unittest.TestCase):
                 q=subprocess.run([str(exe),str(scratch),case],capture_output=True,text=True)
                 self.assertEqual(q.returncode,3,(case,q.stderr[-500:])); self.assertIn(text,q.stderr)
             self.assertIn('metal2_draw shader library OK',p.stdout)
+
+class Metal2EncodeTests(unittest.TestCase):
+    def run_case(self,case):
+        with tempfile.TemporaryDirectory() as directory:
+            exe=Path(directory)/'encode'
+            subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),
+                str(ROOT/'tests/metal2_encode_test.m'),str(ROOT/'runtime/metal2_draw.m'),str(ROOT/'runtime/shader_library.c'),
+                str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),
+                str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-framework','Foundation','-framework','Metal','-o',str(exe)],check=True)
+            p=subprocess.run([str(exe),case],capture_output=True,text=True)
+            if p.returncode==77:self.skipTest('Host has no Metal device')
+            return p
+    def test_draw_textured_triangle_with_depth(self):
+        p=self.run_case('draw'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal2 encode draw OK',p.stdout)
+    def test_back_facing_triangle_is_culled(self):
+        p=self.run_case('back_facing'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('back face culled OK',p.stdout)
+    def test_vertex_format_without_metal_equivalent_stops(self):
+        p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

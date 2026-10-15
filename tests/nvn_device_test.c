@@ -802,6 +802,9 @@ int main(void) {
             assert((d->stream_mask & 1) && d->stream[0].stride == 20 && d->stream[0].span.size == 0x100);
             assert(d->ubo[1][3].size == 0x100 && d->ubo[1][3].buffer);
             assert((d->tex_mask[1] & 1) && d->tex[1][0].texture.texture.desc.width == 128 && d->tex[1][0].sampler.valid);
+            struct wonder_nvn_pool_view tv; const struct wonder_nvn_texture *rt = &d->tex[1][0].texture.texture;
+            wonder_nvn_pool_span(rt->pool, (uint64_t)rt->offset, rt->size, &tv);
+            assert(d->tex[1][0].storage == tv.memory && d->tex[1][0].storage_size == rt->size && rt->size);
             assert(d->color_count == 0 || d->targets[0].valid || !d->targets[0].valid);   // targets copied from replay state
             int depth_mode, origin; wonder_nvn_device_modes(&depth_mode, &origin); assert(d->depth_mode == depth_mode);
             // Missing bindings stop by name.

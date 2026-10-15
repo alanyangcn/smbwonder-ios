@@ -3,6 +3,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #include "kernel_events.h"
 #include "metal2_draw.h"
+#include "host_draw.h"
 #include <errno.h>
 #include <mach/mach.h>
 static id<MTLDevice> device;
@@ -97,6 +98,14 @@ void wonder_host_after_gpu(void (*fn)(void *), void *arg){
 }
 void wonder_host_fence(void (*fn)(void *), void *arg){
  pthread_mutex_lock(&replay_mutex); [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; commit_locked(); pthread_mutex_unlock(&replay_mutex);
+}
+void wonder_host_replay_lock(void){ pthread_mutex_lock(&replay_mutex); }
+void wonder_host_replay_unlock(void){ pthread_mutex_unlock(&replay_mutex); }
+void *wonder_host_replay_command_buffer(void){ return (__bridge void*)pending_buffer(); }
+void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t){
+ if(t->host) return t->host;
+ pthread_mutex_lock(&replay_mutex); id<MTLTexture> tex=render_targets[@(t->serial)]; pthread_mutex_unlock(&replay_mutex);
+ return (__bridge void*)tex;
 }
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format){
  if(t->host) return t->host;   // display textures own their render target

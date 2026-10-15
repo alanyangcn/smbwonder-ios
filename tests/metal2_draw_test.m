@@ -10,6 +10,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stderr, format, a); va_end(a); fputc('\n', stderr); exit(3); }
+// Replay hooks (host_graphics.m on device); the shader-library checks never draw.
+void wonder_host_replay_lock(void) {} void wonder_host_replay_unlock(void) {}
+void *wonder_host_replay_command_buffer(void) { return NULL; }
+void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { (void)t; return NULL; }
+void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format) { (void)t; (void)format; return NULL; }
 static NSString *dir;
 static NSString *hex(NSData *d) { unsigned char h[32]; CC_SHA256(d.bytes, (CC_LONG)d.length, h); NSMutableString *s = [NSMutableString string]; for (int i = 0; i < 32; i++) [s appendFormat:@"%02x", h[i]]; return s; }
 static void put(NSString *key, NSString *stage, NSString *msl, NSString *refl, NSMutableDictionary *keys) {
