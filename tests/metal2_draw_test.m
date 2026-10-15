@@ -48,6 +48,12 @@ static void positive(int argc, char **argv) {
     assert(wonder_host_border_color((const float[4]){1, 1, 1, 1}) == MTLSamplerBorderColorOpaqueWhite);
     assert(wonder_host_border_color((const float[4]){0.5f, 0, 0, 1}) == -1);
     assert(wonder_host_border_color_works() == 1);   // every Mac GPU honours it
+    // A transparent-black border is MTLSamplerAddressModeClampToZero, which every GPU has (the A11 samples 0 for any
+    // border colour, round100); other colours need the checked border support.
+    assert(wonder_host_border_address_mode((const float[4]){0, 0, 0, 0}, 0) == MTLSamplerAddressModeClampToZero);
+    assert(wonder_host_border_address_mode((const float[4]){1, 1, 1, 1}, 1) == MTLSamplerAddressModeClampToBorderColor);
+    assert(wonder_host_border_address_mode((const float[4]){1, 1, 1, 1}, 0) == -1);
+    assert(wonder_host_border_address_mode((const float[4]){0.5f, 0, 0, 1}, 1) == -1);
     if (argc > 3) {   // real translated stages from tools/wonder_shader_build.py
         wonder_host_shader_set_directory(argv[3]);
         pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 64 * 1024);

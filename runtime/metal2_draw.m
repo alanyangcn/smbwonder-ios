@@ -309,6 +309,12 @@ int wonder_host_border_color_works(void) {
     fprintf(stderr, "HOST_BORDER_COLOR_CHECK pixel=%#x works=%d\n", *(uint32_t *)out.contents, result);
     return result;
 }
+// Transparent black is exactly ClampToZero (all GPUs); the other two colours need the GPU's border support.
+int wonder_host_border_address_mode(const float c[4], int border_works) {
+    int color = wonder_host_border_color(c);
+    if (color == (int)MTLSamplerBorderColorTransparentBlack) return (int)MTLSamplerAddressModeClampToZero;
+    return color >= 0 && border_works ? (int)MTLSamplerAddressModeClampToBorderColor : -1;
+}
 static NSMutableDictionary<NSData *, id<MTLSamplerState>> *samplers;
 static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const struct wonder_nvn_sampler_state *m) {
     NSData *key = [NSData dataWithBytes:m length:sizeof *m];
@@ -325,7 +331,7 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
         case 1: modes[i] = MTLSamplerAddressModeRepeat; break;
         case 2: case 3: modes[i] = MTLSamplerAddressModeMirrorClampToEdge; break;
         case 6: modes[i] = MTLSamplerAddressModeMirrorRepeat; break;
-        case 5: modes[i] = MTLSamplerAddressModeClampToBorderColor; border = 1; break;
+        case 5: border = 1; break;   // CLAMP_TO_BORDER, mode chosen below
         default: unsupported(d, "sampler wrap mode (MIRROR_CLAMP_TO_BORDER has no Metal mode)", wraps[i]);
     }
     if (border) {
@@ -334,8 +340,14 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
             char what[96]; snprintf(what, sizeof what, "sampler border colour %g,%g,%g,%g (Metal: transparent/opaque black, opaque white)", m->border[0], m->border[1], m->border[2], m->border[3]);
             unsupported(d, what, 5);
         }
-        if (!wonder_host_border_color_works()) unsupported(d, "sampler CLAMP_TO_BORDER: this GPU does not sample the border colour", 5);
+        int mode = color == (int)MTLSamplerBorderColorTransparentBlack ? wonder_host_border_address_mode(m->border, 0)
+                                                                        : wonder_host_border_address_mode(m->border, wonder_host_border_color_works());
+        if (mode < 0) {
+            char what[96]; snprintf(what, sizeof what, "sampler border colour %g,%g,%g,%g: this GPU samples 0 at the border", m->border[0], m->border[1], m->border[2], m->border[3]);
+            unsupported(d, what, 5);
+        }
         sd.borderColor = (MTLSamplerBorderColor)color;
+        for (int i = 0; i < 3; i++) if (wraps[i] == 5) modes[i] = (MTLSamplerAddressMode)mode;
     }
     sd.sAddressMode = modes[0]; sd.tAddressMode = modes[1]; sd.rAddressMode = modes[2];
     sd.lodMinClamp = m->lod_min; sd.lodMaxClamp = m->lod_max;

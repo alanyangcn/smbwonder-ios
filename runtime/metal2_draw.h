@@ -11,6 +11,7 @@ void wonder_host_draw_forget_sampled(uint64_t serial);              // drops the
 unsigned wonder_host_draw_sampled_count(void);
 int wonder_host_border_color(const float rgba[4]);                  // MTLSamplerBorderColor, or -1 when Metal has no such colour
 int wonder_host_border_color_works(void);                          // 1 = this GPU samples the border colour outside [0,1]
+int wonder_host_border_address_mode(const float rgba[4], int border_works);   // MTLSamplerAddressMode for CLAMP_TO_BORDER, or -1
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 #ifdef __OBJC__
 #import <Metal/Metal.h>
