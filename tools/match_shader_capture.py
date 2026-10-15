@@ -8,11 +8,20 @@ def match_stage(control,code,candidates):
     matches={}
     for c in candidates:
         if not c['control'].startswith(control):continue
+        # The live capture is a fixed-size window into the shader pool; an original shorter than the window is
+        # followed by unrelated pool bytes, so only the bytes the original actually owns are compared. Within one
+        # binary the offset verifying the most bytes wins (a full-window match beats a truncated one); ties are ambiguous.
+        hits=[]
         for offset in (0,0x30):
-            if c['code'][offset:offset+len(code)]!=code:continue
-            identity=(digest(c['code']),digest(c['control']),offset,c['stage'])
-            if identity not in matches:matches[identity]={**c,'runtime_code_offset':offset,'origins':[]}
-            matches[identity]['origins'].append(c.get('origin'))
+            verified=min(len(code),len(c['code'])-offset)
+            if verified>0 and c['code'][offset:offset+verified]==code[:verified]:hits.append((verified,offset))
+        if not hits:continue
+        hits.sort(reverse=True)
+        if len(hits)>1 and hits[0][0]==hits[1][0]:raise ValueError('Ambiguous runtime code offset within one binary')
+        verified,offset=hits[0]
+        identity=(digest(c['code']),digest(c['control']),offset,c['stage'])
+        if identity not in matches:matches[identity]={**c,'runtime_code_offset':offset,'captured_code_bytes_verified':verified,'origins':[]}
+        matches[identity]['origins'].append(c.get('origin'))
     if len(matches)!=1:raise ValueError(f'Ambiguous or unknown live shader: {len(matches)} binary identities')
     return next(iter(matches.values()))
 
