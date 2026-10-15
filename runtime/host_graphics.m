@@ -89,6 +89,7 @@ static id<MTLRenderPipelineState> present_pipeline;
 static id<MTLSamplerState> present_sampler;
 // A failed replay command buffer is recorded here and stops the next submission by name (nvn_queue.c).
 static char gpu_error_text[256]; static _Atomic int gpu_failed;
+void wonder_host_gpu_error_reset(void){ atomic_store(&gpu_failed,0); gpu_error_text[0]=0; }
 int wonder_host_gpu_error(char *out,size_t size){ if(!atomic_load(&gpu_failed)) return 0; snprintf(out,size,"%s",gpu_error_text); return 1; }
 static id<MTLCommandBuffer> pending_buffer(void){
  if(!pending){

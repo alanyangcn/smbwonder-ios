@@ -256,6 +256,35 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
 }
 // Diagnostic mode (WONDER_DRAW_SYNC=1): commit and wait after every draw; a GPU error stops naming this draw and every
 // buffer span it read (round62-64: a page fault inside one 11-draw submit).
+static int bisect_dummy_textures;   // diagnostic bisect only
+static id<MTLTexture> dummy_texture(void) {
+    static id<MTLTexture> t; if (t) return t;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
+    td.storageMode = MTLStorageModeShared; t = [device newTextureWithDescriptor:td]; uint32_t px = 0xffffffff;
+    [t replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:&px bytesPerRow:4]; return t;
+}
+static struct wonder_host_span cpu_copy(struct wonder_host_span s) {   // bisect: same bytes in a fresh shared buffer
+    id<MTLBuffer> src = (__bridge id<MTLBuffer>)s.buffer; if (!src || !s.size) return s;
+    id<MTLBuffer> b = [device newBufferWithBytes:(uint8_t *)src.contents + s.offset length:s.size options:MTLResourceStorageModeShared];
+    return (struct wonder_host_span){(__bridge_retained void *)b, 0, s.size};   // leaked on purpose: diagnostic run stops right after
+}
+// After a faulting draw: re-run it in separate command buffers with one resource class swapped each time.
+static void bisect(const struct wonder_host_draw *d, char *out, size_t n) {
+    static struct wonder_host_draw v; size_t at = 0; char e[256];
+    for (int variant = 0; variant < 4; variant++) {
+        v = *d;
+        if (variant == 1) { if (v.index_type >= 0) v.index = cpu_copy(v.index); for (int s = 0; s < 16; s++) if (v.stream_mask >> s & 1) v.stream[s].span = cpu_copy(v.stream[s].span); }
+        if (variant == 2) for (int st = 0; st < 2; st++) for (int r = 0; r < 14; r++) if (v.ubo[st][r].buffer) v.ubo[st][r] = cpu_copy(v.ubo[st][r]);
+        bisect_dummy_textures = variant == 3;
+        wonder_host_gpu_error_reset();
+        unsetenv("WONDER_DRAW_SYNC"); wonder_host_draw(&v); setenv("WONDER_DRAW_SYNC", "1", 1);
+        wonder_host_finish();
+        int faulted = 0; for (int i = 0; i < 100 && !(faulted = wonder_host_gpu_error(e, sizeof e)); i++) usleep(1000);
+        static const char *const names[4] = {"same", "vertex+index copied", "uniforms copied", "dummy textures"};
+        at += (size_t)snprintf(out + at, n - at, " [%s: %s]", names[variant], faulted ? "FAULT" : "ok");
+    }
+    bisect_dummy_textures = 0;
+}
 static void page_protections(id<MTLBuffer> b, char *out, size_t n) {
     size_t at = 0; out[0] = 0;
     if (!b || b.storageMode != MTLStorageModeShared) { snprintf(out, n, "private"); return; }
@@ -286,7 +315,8 @@ static void sync_check(const struct wonder_host_draw *d) {
     for (int st = 0; st < 2; st++) for (int r = 0; r < 32 && at < sizeof spans - 60; r++) if (d->tex_mask[st] >> r & 1)
         at += (size_t)snprintf(spans + at, sizeof spans - at, " tex%d.%d=serial %llu", st, r, (unsigned long long)d->tex[st][r].texture.texture.serial);
     #undef SPAN
-    wonder_nvn_stop("NVN_DRAW_GPU_FAULT vs=%s fs=%s primitive=%d count=%d base_vertex=%d: %s;%s", d->vs_key, d->fs_key, d->primitive, d->count, d->base_vertex, error, spans);
+    char variants[256]; bisect(d, variants, sizeof variants);
+    wonder_nvn_stop("NVN_DRAW_GPU_FAULT vs=%s fs=%s primitive=%d count=%d base_vertex=%d: %s; bisect:%s;%s", d->vs_key, d->fs_key, d->primitive, d->count, d->base_vertex, error, variants, spans);
 }
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
@@ -382,7 +412,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         const struct wonder_shader_refl *r = refl[stage];
         for (int i = 0; i < r->ntex; i++) {
             int slot = r->tex[i].slot;
-            textures[stage][i] = sampled_texture(d, stage, slot); sampler_states[stage][i] = sampler_state(d, &d->tex[stage][slot].sampler);
+            textures[stage][i] = bisect_dummy_textures ? dummy_texture() : sampled_texture(d, stage, slot); sampler_states[stage][i] = sampler_state(d, &d->tex[stage][slot].sampler);
         }
         if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
             c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
