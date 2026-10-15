@@ -347,7 +347,7 @@ int main(void) {
     EXPECT_STOP(add_control(NULL, control, sizeof control), "NVN_INVALID_OBJECT");
     EXPECT_STOP(add_control(cmdbuf, NULL, sizeof control), "NVN_INVALID_ARGUMENT");
     EXPECT_STOP(add_control(cmdbuf, control + 1, 256), "NVN_INVALID_ARGUMENT");
-    EXPECT_STOP(add_control(cmdbuf, control, 128), "NVN_INVALID_ARGUMENT");
+    EXPECT_STOP(add_control(cmdbuf, control, 24), "NVN_INVALID_ARGUMENT");   // below header + link tail (release driver has no 256 minimum)
     EXPECT_STOP(add_control(cmdbuf, (void *)(UINTPTR_MAX - 7), 512), "NVN_INVALID_ARGUMENT");
     cmdbuf[0x11] = 1;
     EXPECT_STOP(add_control(cmdbuf, control, sizeof control), "NVN_UNSUPPORTED");
