@@ -19,7 +19,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 # Event/VI/host-graphics layer and strict NVN bootstrap; kept in sync with ios-probe/project.yml.
 RUNTIME_GRAPHICS = tuple('runtime/' + name for name in (
     'kernel_threads.c', 'account_state.c', 'account_hooks.c', 'nfp_hooks.c', 'hid_state.c', 'hid_hooks.c', 'crash_report.c', 'vi_state.c', 'vi_hooks.c', 'host_graphics.m',
-    'nvn_device.c', 'nvn_swapchain.c', 'nvn_buffer.c', 'nvn_texture.c', 'nvn_state.c', 'nvn_bootstrap.c', 'nvn_unimpl.S')) + (
+    'shared_font.c', 'host_fonts.m', 'font_hooks.c', 'nvn_device.c', 'nvn_swapchain.c', 'nvn_buffer.c', 'nvn_commands.c', 'nvn_texture.c', 'nvn_state.c', 'nvn_bootstrap.c', 'nvn_unimpl.S')) + (
     'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c',      # shared TX1 block-linear layout calculator (deko3d-derived)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c',  # NVN format -> Metal pixel format (pure C)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c',    # BC decode for GPUs without BC (A11)
@@ -99,7 +99,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
                 'runtime/graphics_gate.c', 'runtime/metal2_probe.m',
                 'runtime/metal2_pixels.c', 'runtime/metal2_shader_check.m',
                 *RUNTIME_GRAPHICS)]
-    command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', *flags, '-o', str(app / 'LoaderProbe')]
+    command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', *flags, '-o', str(app / 'LoaderProbe')]
     subprocess.run(command, check=True, env=env)
     info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe',
             'CFBundleExecutable':'LoaderProbe', 'CFBundlePackageType':'APPL',

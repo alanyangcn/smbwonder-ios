@@ -158,7 +158,11 @@ void wonder_nvnTextureFinalize(void *texture) {
     if (t->host) wonder_nvn_stop("NVN_UNSUPPORTED nvnTextureFinalize on a display texture (window teardown not implemented)");
     t->magic = 0;   // registrations keep their own snapshot; the render layer releases host objects by serial
 }
-void wonder_nvnTextureSetDebugLabel(void *texture, const char *label) { (void)label; wonder_nvn_texture_of(texture, "nvnTextureSetDebugLabel"); }
+void wonder_nvnTextureSetDebugLabel(void *texture, const char *label) {
+    const struct wonder_nvn_texture *t=wonder_nvn_texture_of(texture,"nvnTextureSetDebugLabel");
+    if(t->host) wonder_host_resource_label(t->host,label);
+    wonder_nvn_report("NVN_TEXTURE_LABEL object=%p label=%s",texture,label?label:"");
+}
 int wonder_nvnTextureGetFlags(const void *t) { return (int)wonder_nvn_texture_of(t, "nvnTextureGetFlags")->flags; }
 int wonder_nvnTextureGetFormat(const void *t) { return wonder_nvn_texture_of(t, "nvnTextureGetFormat")->desc.format; }
 int wonder_nvnTextureGetWidth(const void *t) { return (int)wonder_nvn_texture_of(t, "nvnTextureGetWidth")->desc.width; }

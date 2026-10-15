@@ -4,6 +4,7 @@
 #include "nvn_names.h"
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #define BUILDER_MAGIC 0x424456576e6f57ull   /* "WonVDB" */
 #define DEVICE_MAGIC  0x564544576e6f57ull   /* "WonDEV" */
 struct builder { uint64_t magic; int32_t flags; };
@@ -212,6 +213,19 @@ static struct pool_builder *pbuilder_of(void *p, const char *who) {
     if (!b || b->magic != PBUILDER_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT %s pool_builder=%p (SetDefaults not called)", who, p);
     return b;
 }
+struct pool_registration { const struct memory_pool *pool; struct pool_registration *next; };
+static struct pool_registration *pool_registry;
+static pthread_mutex_t pool_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+static void register_pool(const struct memory_pool *pool) {
+    pthread_mutex_lock(&pool_registry_lock);
+    for (struct pool_registration *p = pool_registry; p; p = p->next) if (p->pool == pool) {
+        pthread_mutex_unlock(&pool_registry_lock); return;
+    }
+    struct pool_registration *entry = malloc(sizeof *entry);
+    if (!entry) { pthread_mutex_unlock(&pool_registry_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY pool registry"); }
+    *entry = (struct pool_registration){pool, pool_registry}; pool_registry = entry;
+    pthread_mutex_unlock(&pool_registry_lock);
+}
 static const struct memory_pool *pool_of(const void *p, const char *who) {
     const struct memory_pool *m = p;
     if (!m || m->magic != POOL_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT %s memory_pool=%p (not initialized)", who, p);
@@ -240,14 +254,33 @@ void wonder_nvn_pool_span(const void *pool, uint64_t offset, uint64_t size, stru
     *view = (struct wonder_nvn_pool_view){m->memory + offset, size, m->flags, m->host_buffer, m->host_offset + offset};
 }
 
+void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {
+    const struct memory_pool *pool = NULL;
+    pthread_mutex_lock(&pool_registry_lock);
+    for (struct pool_registration *p = pool_registry; p; p = p->next) {
+        uint64_t base = (uintptr_t)p->pool->memory;
+        if (address >= base && address - base < p->pool->size) { pool = p->pool; break; }
+    }
+    pthread_mutex_unlock(&pool_registry_lock);
+    if (!pool) wonder_nvn_stop("NVN_INVALID_ADDRESS resource=%#llx size=%#llx", (unsigned long long)address, (unsigned long long)size);
+    if (pool->flags & 8) wonder_nvn_stop("NVN_INVALID_ADDRESS GPU_NO_ACCESS pool");
+    wonder_nvn_pool_span(pool, address - (uintptr_t)pool->memory, size, view);
+    view->flags = pool->flags;
+}
 void wonder_nvnMemoryPoolBuilderSetDefaults(void *builder) {
     if (!builder) wonder_nvn_stop("NVN_INVALID_OBJECT nvnMemoryPoolBuilderSetDefaults builder=NULL");
-    memset(builder, 0, sizeof(struct pool_builder));   // only our bytes: the slot may border live locals
     struct pool_builder *b = builder;
+    const void *device = (b->magic == PBUILDER_MAGIC || b->magic == 0x44504d57u) ? b->device : NULL;
+    memset(builder, 0, sizeof *b);   // only our bytes: the slot may border live locals
+    b->device = device;
     b->magic = PBUILDER_MAGIC; b->flags = 0x2 | 0x20;   // NVN default: CPU_UNCACHED | GPU_CACHED
 }
 void wonder_nvnMemoryPoolBuilderSetDevice(void *builder, const void *device) {
-    pbuilder_of(builder, "nvnMemoryPoolBuilderSetDevice")->device = device_of(device, "nvnMemoryPoolBuilderSetDevice");
+    if (!builder) wonder_nvn_stop("NVN_INVALID_OBJECT nvnMemoryPoolBuilderSetDevice NULL");
+    struct pool_builder *b = builder;
+    b->device = device_of(device, "nvnMemoryPoolBuilderSetDevice");
+    if (b->magic != PBUILDER_MAGIC) b->magic = 0x44504d57u; // device set, defaults still required
+
 }
 void wonder_nvnMemoryPoolBuilderSetFlags(void *builder, int flags) {
     struct pool_builder *b = pbuilder_of(builder, "nvnMemoryPoolBuilderSetFlags");
@@ -282,6 +315,7 @@ uint32_t wonder_nvnMemoryPoolInitialize(void *pool, const void *builder) {
         struct memory_pool *m = pool;
         memset(m, 0, sizeof *m);
         *m = (struct memory_pool){POOL_MAGIC, b->flags, b->device, range, b->size, 0, 0, 0, 0, 0};
+        register_pool(m);
         wonder_nvn_report("NVN_POOL_READY pool=%p virtual range=%p size=%#llx flags=%#x", pool, range, (unsigned long long)b->size, b->flags);
         return 1;
     }
@@ -293,6 +327,7 @@ uint32_t wonder_nvnMemoryPoolInitialize(void *pool, const void *builder) {
     struct memory_pool *m = pool;
     memset(m, 0, sizeof *m);
     *m = (struct memory_pool){POOL_MAGIC, b->flags, b->device, b->memory, b->size, buffer, offset, 0, 0, 0};
+    register_pool(m);
     wonder_nvn_report("NVN_POOL_READY pool=%p memory=%p size=%#llx flags=%#x host_buffer=%p offset=%#zx", pool, b->memory,
                       (unsigned long long)b->size, b->flags, buffer, offset);
     return 1;
@@ -464,8 +499,62 @@ const struct wonder_nvn_sampler_state *wonder_nvn_sampler_lookup(const void *poo
     return s->valid ? s : 0;
 }
 
+// Debug labels are host diagnostics. They do not change resource contents or GPU completion.
+void wonder_nvnDeviceSetDebugLabel(void *p, const char *label) {
+    device_of(p, "nvnDeviceSetDebugLabel"); wonder_nvn_report("NVN_DEVICE_LABEL object=%p label=%s", p, label ? label : "");
+}
+void wonder_nvnQueueSetDebugLabel(void *p, const char *label) {
+    const struct queue *q=p; if (!q || q->magic!=QUEUE_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnQueueSetDebugLabel queue=%p", p);
+    wonder_nvn_report("NVN_QUEUE_LABEL object=%p label=%s", p, label ? label : "");
+}
+void wonder_nvnSamplerSetDebugLabel(void *p, const char *label) {
+    const struct sampler *o=p; if (!o || o->magic!=SAMPLER_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnSamplerSetDebugLabel sampler=%p", p);
+    wonder_nvn_report("NVN_SAMPLER_LABEL object=%p label=%s", p, label ? label : "");
+}
+static void descriptor_label(void *p, const char *label, uint32_t magic) {
+    const struct descriptor_pool *o=p; if (!o || o->magic!=magic) wonder_nvn_stop("NVN_INVALID_OBJECT descriptor pool label object=%p",p);
+    wonder_nvn_report("NVN_DESCRIPTOR_POOL_LABEL object=%p label=%s",p,label?label:"");
+}
+void wonder_nvnTexturePoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,TPOOL_MAGIC);}
+void wonder_nvnSamplerPoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,SPOOL_MAGIC);}
+struct program_registration { void *object; struct program_registration *next; };
+static struct program_registration *programs;
+static pthread_mutex_t programs_lock=PTHREAD_MUTEX_INITIALIZER;
+static void program_check(void *p, const char *who) {
+    int found=0;pthread_mutex_lock(&programs_lock);
+    for(struct program_registration *r=programs;r;r=r->next) if(r->object==p){found=1;break;}
+    pthread_mutex_unlock(&programs_lock);
+    if(!found) wonder_nvn_stop("NVN_INVALID_OBJECT %s program=%p",who,p);
+}
+void wonder_nvnProgramSetDebugLabel(void *p, const char *label) {
+    program_check(p,"nvnProgramSetDebugLabel"); wonder_nvn_report("NVN_PROGRAM_LABEL object=%p label=%s",p,label?label:"");
+}
+
 struct implemented { const char *name; void *fn; };
+// SDK55 sdk+0x4554d0 clears exactly 0x80 bytes and stores device at +8.
+// The empty program has no shaders until ProgramSetShaders compiles them.
+uint32_t wonder_nvnProgramInitialize(void *program, const void *device) {
+    wonder_nvn_device_check(device, "nvnProgramInitialize");
+    if (!program) wonder_nvn_stop("NVN_INVALID_OBJECT nvnProgramInitialize program=NULL");
+    struct program_registration *entry=calloc(1,sizeof *entry);
+    if(!entry) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY program registry");
+    entry->object=program;pthread_mutex_lock(&programs_lock);
+    struct program_registration *existing=programs;while(existing && existing->object!=program)existing=existing->next;
+    if(!existing){entry->next=programs;programs=entry;}else free(entry);
+    pthread_mutex_unlock(&programs_lock);
+    memset(program, 0, 0x80); memcpy((uint8_t *)program + 8, &device, sizeof device);
+    wonder_nvn_report("NVN_PROGRAM_INITIALIZED program=%p device=%p shaders=0", program, device);
+    return 1;
+}
 static const struct implemented implemented[] = {
+    {"nvnDeviceSetDebugLabel", (void *)wonder_nvnDeviceSetDebugLabel},
+    {"nvnQueueSetDebugLabel", (void *)wonder_nvnQueueSetDebugLabel},
+    {"nvnSamplerSetDebugLabel", (void *)wonder_nvnSamplerSetDebugLabel},
+    {"nvnTexturePoolSetDebugLabel", (void *)wonder_nvnTexturePoolSetDebugLabel},
+    {"nvnSamplerPoolSetDebugLabel", (void *)wonder_nvnSamplerPoolSetDebugLabel},
+    {"nvnProgramSetDebugLabel", (void *)wonder_nvnProgramSetDebugLabel},
+
+    {"nvnProgramInitialize", (void *)wonder_nvnProgramInitialize},
     {"nvnDeviceBuilderSetDefaults", (void *)wonder_nvnDeviceBuilderSetDefaults},
     {"nvnDeviceBuilderSetFlags", (void *)wonder_nvnDeviceBuilderSetFlags},
     {"nvnDeviceInitialize", (void *)wonder_nvnDeviceInitialize},
@@ -508,7 +597,7 @@ static const struct implemented implemented[] = {
     {"nvnSamplerPoolRegisterSampler", (void *)wonder_nvnSamplerPoolRegisterSampler},
 };
 int wonder_nvn_implemented_count(void) {
-    return (int)(sizeof implemented / sizeof *implemented + wonder_nvn_swapchain_count + wonder_nvn_buffer_count + wonder_nvn_texture_count + wonder_nvn_state_count);
+    return (int)(sizeof implemented / sizeof *implemented + wonder_nvn_swapchain_count + wonder_nvn_buffer_count + wonder_nvn_command_count + wonder_nvn_texture_count + wonder_nvn_state_count);
 }
 int wonder_nvn_name_index(const char *name) {
     if (!name) return -1;
@@ -524,7 +613,7 @@ void *wonder_nvn_resolve(const char *name, const char *via) {
         }
     const struct { const struct wonder_nvn_entry *entries; unsigned count; } units[] = {
         {wonder_nvn_swapchain_entries, wonder_nvn_swapchain_count}, {wonder_nvn_buffer_entries, wonder_nvn_buffer_count},
-        {wonder_nvn_texture_entries, wonder_nvn_texture_count}, {wonder_nvn_state_entries, wonder_nvn_state_count}};
+        {wonder_nvn_command_entries, wonder_nvn_command_count}, {wonder_nvn_texture_entries, wonder_nvn_texture_count}, {wonder_nvn_state_entries, wonder_nvn_state_count}};
     for (unsigned u = 0; u < sizeof units / sizeof *units; u++)
         for (unsigned i = 0; i < units[u].count; i++)
             if (name && !strcmp(units[u].entries[i].name, name)) {

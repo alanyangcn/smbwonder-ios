@@ -6,6 +6,10 @@
 #include <stdarg.h>
 #include <mach/mach.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <errno.h>
 _Noreturn void wonder_game_thread_stop(const char *reason);
 extern const uint64_t wonder_nvn_unimpl_stubs[WONDER_NVN_NAME_COUNT];
 
@@ -37,6 +41,43 @@ void *wonder_nvn_unimplemented_thunk(unsigned index) {
     if (index >= WONDER_NVN_NAME_COUNT) die("NVN thunk index %u out of range", index);
     return (void *)&wonder_nvn_unimpl_stubs[index];
 }
+// Capture before the strict stop. GPU tokens are resolved through registered pool storage,
+// never cast to CPU pointers (virtual pools reserve PROT_NONE ranges).
+static int capture_bytes(const char *directory, unsigned stage, const char *kind, const void *bytes, size_t size) {
+    char path[1024];
+    if (snprintf(path, sizeof path, "%s/stage-%u.%s.bin", directory, stage, kind) >= sizeof path) return 0;
+    FILE *f = fopen(path, "wb"); if (!f) return 0;
+    int ok = fwrite(bytes, 1, size, f) == size; if (fflush(f) || fsync(fileno(f))) ok = 0;
+    if (fclose(f)) ok = 0; return ok;
+}
+static int capture_read(uint64_t address, void *bytes, size_t size) {
+    vm_size_t count = 0;
+    return address && vm_read_overwrite(mach_task_self(), address, size, (vm_address_t)bytes, &count) == KERN_SUCCESS && count == size;
+}
+static void capture_shader_arguments(const uint64_t *frame) {
+    uint64_t count = frame[3], arguments[12];
+    if (!count || count > 6 || !capture_read(frame[4], arguments, count * 16)) {
+        LOG("NVN_SHADER_CAPTURE_FAILED invalid stage arguments count=%llu", count); return;
+    }
+    const char *home = getenv("HOME"); char directory[1024], path[1100];
+    if (!home || snprintf(directory, sizeof directory, "%s/Documents/ShaderCapture", home) >= sizeof directory) return;
+    if (mkdir(directory, 0700) && errno != EEXIST) return;
+    snprintf(path, sizeof path, "%s/manifest.json", directory);
+    FILE *manifest = fopen(path, "w"); if (!manifest) return;
+    fprintf(manifest, "{\"pid\":%d,\"program\":%llu,\"count\":%llu,\"stages\":[", getpid(), frame[2], count);
+    int ok = 1;
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t control[0x880], code[256]; struct wonder_nvn_pool_view view;
+        if (!capture_read(arguments[i*2+1], control, sizeof control)) {ok = 0; break;}
+        wonder_nvn_address_span(arguments[i*2], sizeof code, &view);
+        if (view.size < sizeof code || !capture_read((uintptr_t)view.memory, code, sizeof code) ||
+            !capture_bytes(directory, i, "control", control, sizeof control) || !capture_bytes(directory, i, "code", code, sizeof code)) {ok = 0; break;}
+        fprintf(manifest, "%s{\"index\":%u,\"address\":%llu,\"control_address\":%llu}", i ? "," : "", i, arguments[i*2], arguments[i*2+1]);
+    }
+    fprintf(manifest, "],\"complete\":%s}\n", ok ? "true" : "false");
+    if (fflush(manifest) || fsync(fileno(manifest))) ok = 0; if (fclose(manifest)) ok = 0;
+    LOG("NVN_SHADER_CAPTURE pid=%d stages=%llu complete=%d directory=Documents/ShaderCapture", getpid(), count, ok);
+}
 // frame[0]=x29 frame[1]=x30 (guest return address) frame[2..9]=x0..x7, saved by nvn_unimpl.S.
 _Noreturn void wonder_nvn_unimplemented(unsigned index, const uint64_t *frame) {
     if (index >= WONDER_NVN_NAME_COUNT) die("NVN thunk index %u out of range", index);
@@ -46,6 +87,7 @@ _Noreturn void wonder_nvn_unimplemented(unsigned index, const uint64_t *frame) {
              wonder_nvn_names[index].name, wonder_nvn_names[index].slot, m ? m->name : "?",
              m ? (unsigned long long)(frame[1] - (uint64_t)m->base) : (unsigned long long)frame[1],
              (unsigned long long)frame[2], (unsigned long long)frame[3], (unsigned long long)frame[4], (unsigned long long)frame[5]);
+    if (!strcmp(wonder_nvn_names[index].name, "nvnProgramSetShaders")) capture_shader_arguments(frame);
     LOG("NVN_BLOCKED %s", reason);
     caller_chain(frame[0], frame[1]);
     wonder_game_thread_stop(reason);

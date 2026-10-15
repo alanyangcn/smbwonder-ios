@@ -2,6 +2,8 @@
 
 继续用户已授权的 Metal 2 移植：共用 CPU/SDK/RomFS，先补实际调用，不以诊断画面冒充游戏首帧。
 
+当前首帧推进：round32 已走过录制 Begin/End、DrawElements 模板、shader-code 池创建/取地址及特效系统标签，停在系统共享字体服务；CoreText 字体替代在 round34 验证中。已接入165入口；仍没有 GPU 游戏绘制或首帧。更新见 METAL2-STATUS.md；私有逐轮证据在 work/analysis/first-frame-round*/，执行日志在 work/analysis/first-frame/ledger.md。
+
 - [x] （真机 nvn-round1：svc 0x45 → 0x2001/0x2002，VSync SystemEvent 建立）实现内核事件：写/读端、关闭、signal/clear/reset、真实等待与超时、并发信号及句柄生命周期测试。
 - [x] （真机 nvn-round1：HOST_GRAPHICS_DRIVER_READY，InitializeGraphics 返回）建立持久 Metal2 设备/队列和 UIKit 的 CAMetalLayer；驱动初始化只在真实宿主上下文建立后返回，不代表 NVN device 或游戏渲染已经完成。
 - [x] （真机 nvn-round1：VI 初始化/打开/建层/VSync 全部 result=0；CADisplayLink 实际触发尚待后续轮次观察）用有状态宿主显示/图层替换 VI，VSync 使用 CADisplayLink 驱动实际事件；使用原生 SDK 构造 SystemEvent，不猜结构偏移。

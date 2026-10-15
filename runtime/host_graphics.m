@@ -60,3 +60,9 @@ int wonder_host_register_vsync(uint32_t handle){
   if(!display_link){display_link=[CADisplayLink displayLinkWithTarget:[WonderVsyncTicker new] selector:@selector(tick:)];display_link.preferredFramesPerSecond=60;[display_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];}
  });return error;
 }
+
+void wonder_host_resource_label(void *resource, const char *label) {
+ if (!resource) return;
+ id<MTLResource> object=(__bridge id<MTLResource>)resource;
+ object.label=label?[NSString stringWithUTF8String:label]:nil;
+}

@@ -14,7 +14,7 @@ settings:
     CLANG_ENABLE_OBJC_ARC: YES
     GCC_OPTIMIZATION_LEVEL: 1
     HEADER_SEARCH_PATHS: ['${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host', '${SMBW_REFERENCE}/runtime', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/nvn', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex']
-    OTHER_LDFLAGS: '-framework CoreGraphics -framework Metal -framework QuartzCore -framework ImageIO -Wl,-segprot,__DMmainW,rw,rw -Wl,-segprot,__DMsdkW,rw,rw'
+    OTHER_LDFLAGS: '-framework CoreGraphics -framework CoreText -framework Metal -framework QuartzCore -framework ImageIO -Wl,-segprot,__DMmainW,rw,rw -Wl,-segprot,__DMsdkW,rw,rw'
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ENABLE_DEBUG_DYLIB: NO
     GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "SMBW_STRICT_IMPORTS=1"]
@@ -51,9 +51,13 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/vi_state.c'
       - path: '${SMBW_REFERENCE}/runtime/vi_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/host_graphics.m'
+      - path: '${SMBW_REFERENCE}/runtime/shared_font.c'
+      - path: '${SMBW_REFERENCE}/runtime/host_fonts.m'
+      - path: '${SMBW_REFERENCE}/runtime/font_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_device.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_swapchain.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_buffer.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_commands.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_texture.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_state.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'

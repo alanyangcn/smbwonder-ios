@@ -21,6 +21,11 @@ fetch(){
   for f in loader-probe.log loader-probe.previous.log metal2-probe.json; do
     "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
   done
+  if grep -q 'NVN_SHADER_CAPTURE.*complete=1' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
+    for f in manifest.json stage-{0..5}.{code,control}.bin; do
+      "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/ShaderCapture/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+    done
+  fi
   # Crash reports for this app (the guest stops cleanly; a crash here is a host defect).
   mkdir -p "$OUT/crashes"
   if command -v idevicecrashreport >/dev/null; then idevicecrashreport -u "$DEVICE" -k -f WonderLoaderProbe "$OUT/crashes" >> "$OUT/download.log" 2>&1 || true; fi

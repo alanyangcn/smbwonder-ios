@@ -83,3 +83,10 @@ void wonder_nvn_pool_check(const void *pool, const char *who, struct wonder_nvn_
 // Shared physical pages return the same memory/host-buffer offsets, preserving byte aliasing.
 // This is a storage view, not permission to map a CPU_NO_ACCESS pool into guest code.
 void wonder_nvn_pool_span(const void *pool, uint64_t offset, uint64_t size, struct wonder_nvn_pool_view *view);
+
+extern const struct wonder_nvn_entry wonder_nvn_command_entries[];
+extern const unsigned wonder_nvn_command_count;
+
+void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view);
+
+void wonder_host_resource_label(void *resource, const char *label);

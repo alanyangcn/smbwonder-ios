@@ -98,7 +98,17 @@ int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     return 0;   // NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS
 }
 
+void wonder_nvnWindowSetDebugLabel(void *p, const char *label) {
+    const struct window *o=p;if(!o || o->magic!=WINDOW_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnWindowSetDebugLabel window=%p",p);
+    wonder_nvn_report("NVN_WINDOW_LABEL object=%p label=%s",p,label?label:"");
+}
+void wonder_nvnSyncSetDebugLabel(void *p, const char *label) {
+    const struct sync *o=p;if(!o || o->magic!=SYNC_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnSyncSetDebugLabel sync=%p",p);
+    wonder_nvn_report("NVN_SYNC_LABEL object=%p label=%s",p,label?label:"");
+}
 const struct wonder_nvn_entry wonder_nvn_swapchain_entries[] = {
+    {"nvnWindowSetDebugLabel", (void *)wonder_nvnWindowSetDebugLabel},
+    {"nvnSyncSetDebugLabel", (void *)wonder_nvnSyncSetDebugLabel},
     {"nvnSyncInitialize", (void *)wonder_nvnSyncInitialize},
     {"nvnWindowBuilderSetDefaults", (void *)wonder_nvnWindowBuilderSetDefaults},
     {"nvnWindowBuilderSetDevice", (void *)wonder_nvnWindowBuilderSetDevice},

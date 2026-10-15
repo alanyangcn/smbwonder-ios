@@ -3,6 +3,7 @@
 #include "nvn_device.h"
 #include "nvn_names.h"
 #include "nvn_texture.h"
+#include "nvn_commands.h"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -12,6 +13,8 @@
 static jmp_buf stopped; static char last_stop[512]; static int host_ready, expecting_stop;
 void wonder_nvn_report(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stdout, format, a); va_end(a); fputc('\n', stdout); }
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vsnprintf(last_stop, sizeof last_stop, format, a); va_end(a); if (!expecting_stop) { fprintf(stderr, "unexpected stop: %s\n", last_stop); abort(); } longjmp(stopped, 1); }
+static void *last_labeled_resource; static const char *last_resource_label;
+void wonder_host_resource_label(void *resource, const char *label) {last_labeled_resource=resource;last_resource_label=label;}
 int wonder_host_driver_ready(void) { return host_ready; }
 static int buffers, host_textures; static const void *native_layer = (const void *)0x281b8a400;
 void *wonder_host_display_texture(unsigned w, unsigned h, int f) { assert(w == 1280 && h == 720 && f == 0x25); return (void *)(uintptr_t)(0xc0000 + ++host_textures); }
@@ -35,6 +38,13 @@ static void loader_pass(const void *dev) {   // main+0x1080ff0: one GetProcAddre
     for (int i = 0; i < WONDER_NVN_NAME_COUNT; i++) { slots[i] = gpa(dev, wonder_nvn_names[i].name); assert(slots[i]); }
 }
 static void *slot(const char *name) { int i = wonder_nvn_name_index(name); assert(i >= 0); return slots[i]; }
+static unsigned recorded_draws;
+static void check_draw(unsigned opcode, const void *payload, size_t size, void *context) {
+    assert(opcode == WONDER_NVN_DRAW_ELEMENTS && size == sizeof(struct wonder_nvn_draw_elements));
+    const struct wonder_nvn_draw_elements *draw = payload;
+    assert(draw->primitive == 4 && draw->index_type == 0 && draw->count == 6 && draw->index_address == (uintptr_t)context);
+    recorded_draws++;
+}
 int main(void) {
     assert(WONDER_NVN_API_MAJOR == 55 && WONDER_NVN_API_MINOR_MIN == 15 && WONDER_NVN_NAME_COUNT == 534);
     // Bootstrap gives exactly the two names Wonder asks for; unknown names are NULL.
@@ -44,9 +54,9 @@ int main(void) {
     loader_pass(NULL);
     int thunks = 0;
     for (int i = 0; i < WONDER_NVN_NAME_COUNT; i++) thunks += (uintptr_t)slots[i] == 0x100000 + 8 * (uintptr_t)i;
-    assert(wonder_nvn_implemented_count() == 137 && thunks == WONDER_NVN_NAME_COUNT - 137);
+    assert(wonder_nvn_implemented_count() == 165 && thunks == WONDER_NVN_NAME_COUNT - 165);
     assert(slot("nvnQueueBuilderSetQueuePriority") == wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnQueueBuilderSetQueuePriority")));
-    assert(slot("nvnCommandBufferBeginRecording") == wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnCommandBufferBeginRecording")));
+
     // Objects are validated, never assumed.
     EXPECT_STOP(wonder_nvnDeviceBuilderSetFlags(builder, 0), "NVN_INVALID_OBJECT");
     EXPECT_STOP(wonder_nvnDeviceGetInteger(device, 0, &(int){0}), "NVN_INVALID_OBJECT");
@@ -98,6 +108,7 @@ int main(void) {
     assert(pool_size <= sizeof descriptor_memory);
     struct { unsigned char builder[0x40]; int locals[2]; } frame;    // builder must not touch the locals after it
     frame.locals[0] = 0x1234; frame.locals[1] = 0x5678;
+    ((void (*)(void *, const void *))slot("nvnMemoryPoolBuilderSetDevice"))(frame.builder, device); // legal before Defaults
     ((void (*)(void *))slot("nvnMemoryPoolBuilderSetDefaults"))(frame.builder);
     ((void (*)(void *, const void *))slot("nvnMemoryPoolBuilderSetDevice"))(frame.builder, device);
     EXPECT_STOP(wonder_nvnMemoryPoolBuilderSetFlags(frame.builder, 0x22 | 0x200), "NVN_UNSUPPORTED");     // virtual pool
@@ -107,6 +118,31 @@ int main(void) {
     ((void (*)(void *, void *, size_t))slot("nvnMemoryPoolBuilderSetStorage"))(frame.builder, descriptor_memory, pool_size);
     static _Alignas(16) unsigned char memory_pool[WONDER_NVN_MEMORY_POOL_SIZE];
     assert(((uint32_t (*)(void *, const void *))slot("nvnMemoryPoolInitialize"))(memory_pool, frame.builder) == 1 && buffers == 1);
+    assert(slot("nvnMemoryPoolGetBufferAddress") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnMemoryPoolGetBufferAddress")));
+    assert(((uint64_t (*)(const void *))slot("nvnMemoryPoolGetBufferAddress"))(memory_pool) == (uintptr_t)descriptor_memory);
+    assert(((size_t (*)(const void *))slot("nvnMemoryPoolGetSize"))(memory_pool) == pool_size);
+    const char *label_names[] = {"nvnDeviceSetDebugLabel", "nvnQueueSetDebugLabel", "nvnWindowSetDebugLabel", "nvnSyncSetDebugLabel", "nvnProgramSetDebugLabel", "nvnTexturePoolSetDebugLabel", "nvnSamplerPoolSetDebugLabel", "nvnTextureSetDebugLabel", "nvnSamplerSetDebugLabel", "nvnCommandBufferSetDebugLabel"};
+    for (unsigned i=0;i<sizeof label_names/sizeof *label_names;i++) {
+        assert(slot(label_names[i]) != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index(label_names[i])));
+        EXPECT_STOP(((void (*)(void *, const char *))slot(label_names[i]))(NULL,"invalid"), "NVN_INVALID_OBJECT");
+    }
+    _Alignas(16) unsigned char program_memory[0x90]; memset(program_memory, 0xa5, sizeof program_memory);
+    assert(slot("nvnProgramInitialize") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnProgramInitialize")));
+    assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(program_memory, device) == 1);
+    ((void (*)(void *, const char *))slot("nvnProgramSetDebugLabel"))(program_memory,"Startup shaders");
+    ((void (*)(void *, const char *))slot("nvnDeviceSetDebugLabel"))(device,"Wonder Metal2");
+    const void *program_device; memcpy(&program_device, program_memory + 8, sizeof program_device); assert(program_device == device);
+    for (unsigned i = 0x80; i < sizeof program_memory; i++) assert(program_memory[i] == 0xa5);
+    assert(slot("nvnMemoryPoolSetDebugLabel") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnMemoryPoolSetDebugLabel")));
+    ((void (*)(void *, const char *))slot("nvnMemoryPoolSetDebugLabel"))(memory_pool, "Test shader pool");
+    assert(slot("nvnBufferSetDebugLabel") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnBufferSetDebugLabel")));
+    assert(last_labeled_resource == (void *)(uintptr_t)0xb0001 && !strcmp(last_resource_label, "Test shader pool"));
+    struct wonder_nvn_pool_view resolved_address;
+    wonder_nvn_address_span((uintptr_t)descriptor_memory + 32, 64, &resolved_address);
+    assert(resolved_address.memory == descriptor_memory + 32 && resolved_address.size == 64);
+    EXPECT_STOP(wonder_nvn_address_span(0x1234, 16, &resolved_address), "NVN_INVALID_ADDRESS");
+    EXPECT_STOP(wonder_nvn_address_span((uintptr_t)descriptor_memory + pool_size - 16, 32, &resolved_address), "NVN_INVALID_ARGUMENT");
+
     static _Alignas(16) unsigned char texture_pool[WONDER_NVN_DESCRIPTOR_POOL_SIZE], sampler_pool[WONDER_NVN_DESCRIPTOR_POOL_SIZE];
     uint32_t (*pool_init)(void *, const void *, ptrdiff_t, int) = slot("nvnSamplerPoolInitialize");
     EXPECT_STOP(pool_init(sampler_pool, memory_pool, 0, smp_reserved - 1), "NVN_INVALID_ARGUMENT");       // below reserved
@@ -212,7 +248,8 @@ int main(void) {
     for (unsigned i = 0; i < 0xa0; i++)
         if (!(i >= 0x60 && i < 0x68) && i != 0x14 && i != 0x15) assert(cmdbuf[i] == 0);
     for (unsigned i = 0xa0; i < sizeof cmdbuf_storage; i++) assert(cmdbuf_storage[i] == 0xa5);
-    EXPECT_STOP(wonder_nvnCommandBufferSetMemoryCallback(cmdbuf, NULL), "NVN_INVALID_ARGUMENT");
+    wonder_nvnCommandBufferSetMemoryCallback(cmdbuf, NULL);
+    assert(((void *(*)(const void *))slot("nvnCommandBufferGetMemoryCallback"))(cmdbuf) == NULL);
     ((void (*)(void *, void *))slot("nvnCommandBufferSetMemoryCallback"))(cmdbuf, (void *)0x1dd6344);
     ((void (*)(void *, void *))slot("nvnCommandBufferSetMemoryCallbackData"))(cmdbuf, cmdbuf);
     // SDK 55 command objects are read/written inline by main+0x5c2b8: flag 0x10 must not alias callback.
@@ -270,6 +307,8 @@ int main(void) {
     static _Alignas(16) unsigned char buffer[0x30];
     assert(((uint32_t (*)(void *, const void *))slot("nvnBufferInitialize"))(buffer, bb) == 1);
     assert(((void *(*)(const void *))slot("nvnBufferMap"))(buffer) == cb_memory + 0x8000);
+    ((void (*)(void *, const char *))slot("nvnBufferSetDebugLabel"))(buffer, "Vfx buffer");
+    assert(last_labeled_resource == (void *)(uintptr_t)(0xb0000 + buffers) && !strcmp(last_resource_label, "Vfx buffer"));
     wonder_nvnBufferBuilderSetStorage(bb, sc_pool, 0, 0x20); static _Alignas(16) unsigned char gpu_only[0x30];
     assert(wonder_nvnBufferInitialize(gpu_only, bb) == 1);
     EXPECT_STOP(wonder_nvnBufferMap(gpu_only), "NVN_INVALID_ARGUMENT");                     // CPU_NO_ACCESS pool
@@ -294,6 +333,54 @@ int main(void) {
     ((void (*)(void *, int, int))slot("nvnTextureViewSetLevels"))(compact_view.view, 0, 1);
     for (unsigned i = 0; i < sizeof compact_view.canary; i++) assert(compact_view.canary[i] == 0xa5);
     assert(compact_view.view[4] == 0 && compact_view.view[5] == 1 && compact_view.view[7] == 1);
+    assert(slot("nvnCommandBufferBeginRecording") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnCommandBufferBeginRecording")));
+    void (*begin_recording)(void *) = slot("nvnCommandBufferBeginRecording");
+    begin_recording(cmdbuf);
+    assert(cmdbuf[0x11] == 1 && cmdbuf[0x12] == 0);
+    memcpy(&raw_pointer, cmdbuf + 0x20, sizeof raw_pointer); assert(raw_pointer == control + 16);
+    memcpy(&raw_pointer, cmdbuf + 0x48, sizeof raw_pointer); assert(raw_pointer == control);
+    uint64_t begin_words[2]; memcpy(begin_words, control, sizeof begin_words);
+    assert(begin_words[0] == UINT64_C(0xffffffffffffff01) && begin_words[1] == 0);
+    for (unsigned i = 16; i < sizeof control; i++) assert(control[i] == 0xa5);
+    EXPECT_STOP(begin_recording(cmdbuf), "NVN_INVALID_STATE");
+    assert(slot("nvnCommandBufferDrawElements") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnCommandBufferDrawElements")));
+    void (*draw_elements)(void *, int, int, int, uint64_t) = slot("nvnCommandBufferDrawElements");
+    uint64_t (*end_recording)(void *) = slot("nvnCommandBufferEndRecording");
+    draw_elements(cmdbuf, 4, 0, 6, (uintptr_t)descriptor_memory + 0x8000);
+    uintptr_t original_cursor, invalid_cursor, command_end;
+    memcpy(&original_cursor,cmdbuf,sizeof original_cursor);memcpy(&command_end,cmdbuf+0x18,sizeof command_end);
+    invalid_cursor=command_end+4;memcpy(cmdbuf,&invalid_cursor,sizeof invalid_cursor);
+    EXPECT_STOP(end_recording(cmdbuf),"NVN_INVALID_STATE");
+    memcpy(cmdbuf,&original_cursor,sizeof original_cursor);
+    uint64_t recorded_handle = end_recording(cmdbuf);
+    assert(recorded_handle == (uintptr_t)control + 16 && !cmdbuf[0x11]);
+    wonder_nvn_command_walk(recorded_handle, check_draw, descriptor_memory + 0x8000);
+    assert(recorded_draws == 1);
+    EXPECT_STOP(draw_elements(cmdbuf, 4, 0, 6, 0), "NVN_INVALID_STATE");
+    EXPECT_STOP(end_recording(cmdbuf), "NVN_INVALID_STATE");
+    EXPECT_STOP(wonder_nvn_command_walk(0x1234, check_draw, NULL), "NVN_INVALID_HANDLE");
+    struct wonder_nvn_command_header saved_header;
+    memcpy(&saved_header, descriptor_memory, sizeof saved_header);
+    memset(descriptor_memory, 0, 4); // native/unknown packet cannot be silently skipped
+    EXPECT_STOP(wonder_nvn_command_walk(recorded_handle, check_draw, NULL), "NVN_NATIVE_PACKET_UNSUPPORTED");
+    memcpy(descriptor_memory, &saved_header, sizeof saved_header);
+    assert(slot("nvnCommandBufferGetControlMemoryUsed") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnCommandBufferGetControlMemoryUsed")));
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetControlMemorySize"))(cmdbuf) == 512);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetControlMemoryUsed"))(cmdbuf) == 56);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetControlMemoryFree"))(cmdbuf) == 456);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemorySize"))(cmdbuf) == 4096);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryUsed"))(cmdbuf) == 40);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryFree"))(cmdbuf) == 4056);
+    assert(!((uint32_t (*)(const void *))slot("nvnCommandBufferIsRecording"))(cmdbuf));
+    assert(((void *(*)(const void *))slot("nvnCommandBufferGetMemoryCallback"))(cmdbuf) == (void *)0x1dd6344);
+    assert(((void *(*)(const void *))slot("nvnCommandBufferGetMemoryCallbackData"))(cmdbuf) == cmdbuf);
+    ((void (*)(void *))slot("nvnCommandBufferFinalize"))(cmdbuf);
+    wonder_nvn_command_walk(recorded_handle, check_draw, descriptor_memory + 0x8000);
+    assert(recorded_draws == 2); // handle's storage outlives recording object
+    ((void (*)(void *, uint64_t))slot("nvnDeviceFinalizeCommandHandle"))(device, recorded_handle);
+    EXPECT_STOP(wonder_nvn_command_walk(recorded_handle, check_draw, NULL), "NVN_INVALID_HANDLE");
+
+
     // main+0x77714: general texture via SetWidth/Height/Depth/Levels/Swizzle/Samples/DepthStencilMode, then pool registration.
     static unsigned char gtb[0x80]; memset(gtb, 0xab, sizeof gtb);
     ((void (*)(void *, const void *))slot("nvnTextureBuilderSetDevice"))(gtb, device);

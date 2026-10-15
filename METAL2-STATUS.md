@@ -2,6 +2,20 @@
 
 目标：Wonder 1.2.0 / update 262144；FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16）。继续以 Metal 2 / MSL 2.1 推进，目前没有已证实必须换新设备的停点。游戏尚未出首帧或达到可玩状态。
 
+## 首帧推进（2026-10-15，持续进行）
+
+项目已独立为 `~/funny/smbwonder-ios`，Git 分支 `first-game-frame`。执行计划在 `docs/superpowers/plans/2026-10-15-first-game-frame.md`。
+
+- round25–26：SDK55 Begin/End、DrawElements 模板录制、原生未压缩控制句柄通过真机。尚未执行绘制。
+- round27–28：命令内存统计、回调查询、对象与句柄释放通过；修复内存池 Builder 先 SetDevice 后 SetDefaults 的调用顺序，新增 GPU 地址到真实物理 span 的解析。
+- round29：run `0EB5CF03-0579-443C-8942-D17C3A3297DA`（debugger=1），154 入口，shader-code 池地址/大小和空 Program 初始化已接入；实际停在 `MemoryPoolSetDebugLabel`。45 项测试、Xcode 构建、签名、安装通过。
+- round30–32：特效系统调试标签已通过；165 入口，推进至系统共享字体服务。round32 run `3546842C-B95E-4A87-AD4D-FDFC23621EFF`。
+- 字体路径使用 CoreText 系统字体替代，重建真实 SFNT 并验证校验和与可解析性；六个本机字体及稳定地址测试通过。Nintendo 扩展符号的覆盖并不等价。round33 被未被游戏引用的强制 RequestSharedFontLoad hook 拦住，已移除。round34 run `2F7358F0-4F70-4EF0-9125-AA653D31EC3E`（debugger=1）通过系统字体替代（含 type=5 AppleSymbols），停在 `nvnTextureBuilderSetPackagedTextureLayout`（main+0x5293c）。
+- 补了合法 NULL 命令内存回调与 EndRecording 授予范围校验；ProgramSetShaders 严格停点前会捕获控制数据/代码前缀。缺失绘制语义仍明确停止。完整宿主测试目前50项。
+- 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
+
+以下审查和轮次保留为历史基线，不是当前停点。
+
 ## 本轮接续审查与修复
 
 详见 [审查记录](REVIEW-2026-10-15.md)。保留其他会话的工作，修复了目标 ABI、边界校验、并发映射和线程退出问题：
