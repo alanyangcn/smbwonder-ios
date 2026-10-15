@@ -100,3 +100,4 @@ struct wonder_nvn_program_shaders { uint64_t serial; uint32_t mask; uint64_t cod
 int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_shaders *out);
 // Shader evidence for the offline translator (nvn_bootstrap.c on device).
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders);
+int wonder_nvn_descriptor_pool_check(const void *pool, int sampler, const char *who);

@@ -557,6 +557,12 @@ uint32_t wonder_nvnProgramInitialize(void *program, const void *device) {
     wonder_nvn_report("NVN_PROGRAM_INITIALIZED program=%p device=%p shaders=0", program, device);
     return 1;
 }
+// Descriptor pools bound by SetTexturePool/SetSamplerPool: returns the descriptor count.
+int wonder_nvn_descriptor_pool_check(const void *pool, int sampler, const char *who) {
+    const struct descriptor_pool *p = pool;
+    if (!p || p->magic != (sampler ? SPOOL_MAGIC : TPOOL_MAGIC)) wonder_nvn_stop("NVN_INVALID_OBJECT %s %s pool=%p", who, sampler ? "sampler" : "texture", pool);
+    return p->count;
+}
 // ---------- Object lifetime, getters and programs (target SDK sdk+0x44dd00.. semantics) ----------
 const void *wonder_nvn_queue_check(const void *queue, const char *who) {
     const struct queue *q = queue;

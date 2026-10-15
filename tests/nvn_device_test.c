@@ -29,7 +29,7 @@ uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBuffer
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
 void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
-#define EXPECTED_IMPLEMENTED 189
+#define EXPECTED_IMPLEMENTED 256
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
@@ -49,6 +49,27 @@ static void check_draw(unsigned opcode, const void *payload, size_t size, void *
     const struct wonder_nvn_draw_elements *draw = payload;
     assert(draw->primitive == 4 && draw->index_type == 0 && draw->count == 6 && draw->index_address == (uintptr_t)context);
     recorded_draws++;
+}
+// Guest-style command-memory callback (main+0x1dd6344 equivalent): hands out the next 4 KiB of cb_pool.
+static const void *rec_pool; static ptrdiff_t rec_next; static unsigned rec_callbacks;
+static void rec_memory_callback(void *cmdbuf, int event, size_t min_size, void *data) {
+    assert(event == 0 && min_size >= 0x200 && data == (void *)0x5eed);
+    rec_callbacks++;
+    ((void (*)(void *, const void *, ptrdiff_t, size_t))wonder_nvn_resolve("nvnCommandBufferAddCommandMemory", "test"))(cmdbuf, rec_pool, rec_next, 0x1000);
+    rec_next += 0x1000;
+}
+struct rec_trace { unsigned count, opcodes[256]; float clear[4]; uint64_t uniform_word; unsigned targets; uint32_t program_mask; };
+static void trace_commands(unsigned opcode, const void *payload, size_t size, void *context) {
+    struct rec_trace *t = context; (void)size;
+    if (t->count < 256) t->opcodes[t->count] = opcode;
+    t->count++;
+    if (opcode == WONDER_NVN_DRAW_ELEMENTS) return;
+    const struct wonder_nvn_cmd *c = payload;
+    if (opcode == WONDER_NVN_CMD_CLEAR_COLOR) memcpy(t->clear, wonder_nvn_cmd_blob(c), 16);
+    if (opcode == WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER) memcpy(&t->uniform_word, wonder_nvn_cmd_blob(c), 8);
+    if (opcode == WONDER_NVN_CMD_SET_RENDER_TARGETS) t->targets = (unsigned)c->a[0];
+    if (opcode == WONDER_NVN_CMD_BIND_PROGRAM) t->program_mask = ((const struct wonder_nvn_program_shaders *)wonder_nvn_cmd_blob(c))->mask;
+    if (opcode == WONDER_NVN_CMD_CALL_COMMANDS) assert(c->a[0] == 1);
 }
 int main(void) {
     assert(WONDER_NVN_API_MAJOR == 55 && WONDER_NVN_API_MINOR_MIN == 15 && WONDER_NVN_NAME_COUNT == 534);
@@ -293,9 +314,11 @@ int main(void) {
     EXPECT_STOP(add_command(cmdbuf, memory_pool, 2, 512), "NVN_INVALID_ARGUMENT");
     EXPECT_STOP(add_command(cmdbuf, memory_pool, 0, 128), "NVN_INVALID_ARGUMENT");
     EXPECT_STOP(add_command(cmdbuf, memory_pool, pool_size, 512), "NVN_INVALID_ARGUMENT");
-    cmdbuf[0x11] = 1;
-    EXPECT_STOP(add_command(cmdbuf, memory_pool, 0, 512), "NVN_UNSUPPORTED");
-    cmdbuf[0x11] = 0;
+    {   // Outside a recording, bytes between the segment start and the cursor would be lost: refuse.
+        uintptr_t saved, moved; memcpy(&saved, cmdbuf, sizeof saved); moved = saved + 8; memcpy(cmdbuf, &moved, sizeof moved);
+        EXPECT_STOP(add_command(cmdbuf, memory_pool, 0, 512), "NVN_INVALID_STATE");
+        memcpy(cmdbuf, &saved, sizeof saved);
+    }
 
 
 
@@ -529,6 +552,59 @@ int main(void) {
     EXPECT_STOP(map_virtual(phys_pool, 1, &req), "NVN_INVALID_ARGUMENT");                                         // not virtual
     req = (struct mreq){phys_pool, 0x10000, 0x10000, UINT64_C(0xffffffffffff0000), 0x104};
     EXPECT_STOP(map_virtual(virt_pool, 1, &req), "NVN_INVALID_ARGUMENT");
+    // ---- Command recording: typed records, snapshots, callback-driven segments, CallCommands ----
+    {
+        static _Alignas(16) unsigned char rcb[0xa0]; static _Alignas(8) unsigned char rctl[512];
+        assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(rcb, device) == 1);
+        ((void (*)(void *, void *))slot("nvnCommandBufferSetMemoryCallback"))(rcb, (void *)rec_memory_callback);
+        ((void (*)(void *, void *))slot("nvnCommandBufferSetMemoryCallbackData"))(rcb, (void *)0x5eed);
+        ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(rcb, rctl, sizeof rctl);
+        rec_pool = cb_pool; rec_next = 0xa000;
+        ((void (*)(void *, const void *, ptrdiff_t, size_t))slot("nvnCommandBufferAddCommandMemory"))(rcb, cb_pool, 0x9000, 0x200);
+        ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);
+        float color[4] = {0.25f, 0.5f, 0.75f, 1.0f};
+        ((void (*)(void *, int, const float *, int))slot("nvnCommandBufferClearColor"))(rcb, 0, color, 0xf);
+        color[0] = 9.0f;                                                                  // snapshot: later writes do not leak
+        unsigned char blend[8], ds[8]; ((void (*)(void *))slot("nvnBlendStateSetDefaults"))(blend); ((void (*)(void *))slot("nvnDepthStencilStateSetDefaults"))(ds);
+        ((void (*)(void *, const void *))slot("nvnCommandBufferBindBlendState"))(rcb, blend);
+        ((void (*)(void *, const void *))slot("nvnCommandBufferBindDepthStencilState"))(rcb, ds);
+        ((void (*)(void *, int, int, int, int))slot("nvnCommandBufferSetViewport"))(rcb, 0, 0, 1280, 720);
+        ((void (*)(void *, int, int, int, int))slot("nvnCommandBufferSetScissor"))(rcb, 0, 0, 1280, 720);
+        ((void (*)(void *, float, float))slot("nvnCommandBufferSetDepthRange"))(rcb, 0.0f, 1.0f);
+        const void *rt[1] = {wt_tex};
+        ((void (*)(void *, int, const void *const *, const void *const *, const void *, const void *))slot("nvnCommandBufferSetRenderTargets"))(rcb, 1, rt, NULL, NULL, NULL);
+        uint64_t ubo = (uintptr_t)(cb_memory + 0x8000), words[4] = {0x1122334455667788u, 2, 3, 4};
+        ((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(rcb, ubo, 0x20, 0, 0x20, words);
+        words[0] = 0;
+        for (int i = 0; i < 40; i++) ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3);   // overflow 0x200 -> callback
+        ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(rcb, 0x12);
+        ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(rcb, 0, (uintptr_t)(cb_memory + 0x8000));
+        EXPECT_STOP(((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(rcb, 0, (uintptr_t)(cb_memory + 0x8004)), "16-byte aligned");
+        EXPECT_STOP(((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 15, 0, 3), "NVN_INVALID_ARGUMENT");
+        EXPECT_STOP(((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindUniformBuffer"))(rcb, 0, 0, 0x10, 0x10), "NVN_INVALID_ADDRESS");
+        uint64_t sub = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(rcb);
+        assert(rec_callbacks >= 1);
+        uint64_t group; memcpy(&group, rctl + 16, 8); assert((group & 0xffffffff) == 3 && (group >> 32) == rec_callbacks + 1);
+        struct rec_trace trace = {0};
+        wonder_nvn_command_walk(sub, trace_commands, &trace);
+        assert(trace.count == 50 && trace.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR && trace.opcodes[5] == WONDER_NVN_CMD_SET_DEPTH_RANGES);
+        assert(trace.opcodes[6] == WONDER_NVN_CMD_SET_RENDER_TARGETS && trace.targets == 1 && trace.clear[0] == 0.25f);
+        assert(trace.uniform_word == 0x1122334455667788u && trace.opcodes[49] == WONDER_NVN_CMD_REPORT_COUNTER);
+        // A second recording calls the first: handles are validated at record time.
+        ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);
+        ((void (*)(void *, int, const uint64_t *))slot("nvnCommandBufferCallCommands"))(rcb, 1, &sub);
+        uint64_t bogus = 0x777;
+        EXPECT_STOP(((void (*)(void *, int, const uint64_t *))slot("nvnCommandBufferCallCommands"))(rcb, 1, &bogus), "NVN_INVALID_HANDLE");
+        uint64_t outer = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(rcb);
+        struct rec_trace outer_trace = {0}; wonder_nvn_command_walk(outer, trace_commands, &outer_trace);
+        assert(outer_trace.count == 1 && outer_trace.opcodes[0] == WONDER_NVN_CMD_CALL_COMMANDS);
+        // Disabled callback: exhaustion stops by name instead of overrunning.
+        ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetCommandMemoryCallbackEnabled"))(rcb, 0);
+        ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);
+        EXPECT_STOP(for (int i = 0; i < 4096; i++) ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3), "NVN_COMMAND_MEMORY_EXHAUSTED");
+        rcb[0x11] = 0;
+        ((void (*)(void *))slot("nvnCommandBufferFinalize"))(rcb);
+    }
     // ---- Object lifetime / getters / programs (SDK sdk+0x44dd00.. semantics) ----
     {
         static _Alignas(8) unsigned char vs_control[0x880], fs_control[0x880], bad_control[0x880];
