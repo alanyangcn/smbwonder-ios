@@ -40,6 +40,8 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/savedata.c'
       - path: '${SMBW_REFERENCE}/runtime/fs_save_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/online_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/ngc_service.c'
+      - path: '${SMBW_REFERENCE}/runtime/ngc_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/graphics_gate.c'
       - path: '${SMBW_REFERENCE}/runtime/metal2_probe.m'
       - path: '${SMBW_REFERENCE}/runtime/metal2_shader_check.m'
