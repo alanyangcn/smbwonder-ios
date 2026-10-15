@@ -1,0 +1,47 @@
+# First-frame execution ledger
+Base: 1c0f2b6, standalone smbwonder-ios project. Implementation follows docs/superpowers/plans/2026-10-15-first-game-frame.md.
+
+Ruling: Preserve the exact SDK55 Begin control record and object ABI before choosing the command payload encoding. Detect native inline packets before replay rather than disabling guest branches. Existing signed main/sdk, game files and private toolchains are reused.
+
+2026-10-15: BeginRecording RED->GREEN: the new lookup/state/control-header/canary test failed against the 137-entry baseline; implementation adds SDK55 header 01ffffffffffffff0000000000000000 and state offsets. Targeted 3 tests and complete 45 tests passed; round25 executing on FlyMe. Missing control-memory callbacks still stop explicitly; no draw command is considered executed.
+
+Round25 B46A30B1-A318-4FA3-9D83-C0C3A904BFB5 (debugger=1): Begin accepted; next API is DrawElements(mode4,indexType0,count6), a draw template recorded before actual render state. Ruling: recording a draw template is legal without a program bound; save its parameters and stop on unsupported replay, never execute a fabricated draw.
+
+RED->GREEN: added typed draw record traversal, EndRecording state/handle, malformed/native packet rejection. Split command objects from nvn_buffer into nvn_commands.c/.h and compile lists. SDK55 uncompressed control handle is retained as a valid native form; compressed handles are not emitted. Native inline payloads are explicitly rejected at traversal. Targeted 3 tests pass; round26 running complete tests/build/device.
+
+Rounds26..29: recording lifecycle, typed DrawElements and SDK55 raw handles passed on FlyMe. Added memory accounting, command/handle finalization (151 entries). Round27 A9C6E1D4-A8CF-481D-BD93-852B460F977C exposed PoolBuilder SetDevice-before-Defaults; fixed while preserving the 32-byte builder and device. Round28 83DFE189-88DF-4B40-BDFB-773B7CE62931 passed and reached shader-code pool GetBufferAddress. GPU token resolution now resolves registered physical/virtual spans without dereferencing PROT_NONE tokens. RED->GREEN pool address/size and empty ProgramInitialize (SDK55 0x80-byte ABI) tests; round29 0EB5CF03-0579-443C-8942-D17C3A3297DA (154 entries) passed and reached MemoryPoolSetDebugLabel. No GPU submission or game frame yet.
+
+Round30 DD32876E-43AE-48BD-AA3C-A47C13E67D74 (155 entries) passed pool labels, stopped BufferSetDebugLabel. Round31 67D257AD-B79F-449C-A964-9BBAB8591344 (156 entries) passed buffer labels, stopped SamplerSetDebugLabel. Completed typed label handling across live object families (165 total entries); labels are logged and attached to existing Metal resources, never treated as GPU work. All invalid-label-object checks stop.
+
+Round32 3546842C-B95E-4A87-AD4D-FDFC23621EFF advanced past VFX initialization to actual platform shared-font service. SDK caller +0x3a2990 is GetSharedFontLoadState, not audio. Main+0x99d2e4 polls state==1, then calls GetSharedFontAddress and Size. Implementing these as host-system font substitutes: reconstruct standalone SFNT from CoreText tables, validate through CoreGraphics, preserve process-lifetime data; no Nintendo system font redistribution. This intentionally changes the shared font face/glyph coverage. Native game-bundled fonts remain untouched.
+
+RED->GREEN: NULL command-memory callback is legal (native setter simply stores it). EndRecording now rejects cursor beyond the granted command span; new negative test failed against the earlier implementation. Font SFNT checksum/layout/bounds tests pass; six actual Mac CoreText faces reconstruct and parse with stable addresses. Round33 DBE02E58-B7C1-4286-B6C7-DA2516704480 failed at loader preflight: RequestSharedFontLoad has no actual import references. Removed that unused forced hook; retained the three actually called functions. Round34 is the font device validation. Latest complete host suite: 50 tests.
+
+Round34 2F7358F0-4F70-4EF0-9125-AA653D31EC3E (debugger=1, 50 tests): shared-font substitutes accepted (six faces incl. type=5 AppleSymbols); next stop nvnTextureBuilderSetPackagedTextureLayout caller main+0x5293c. Checkpoint commit made for rounds25..34.
+
+RED->GREEN: SetPackagedTextureLayout (main+0x1084ef4 tail call with TextureInfo+0x24). RomFS survey of 3063 BRTI entries: {u32 log2 0..4, u32 0x00010007} only; 64x72 RGBA8 storage 32768 auto vs 20480 with log2=1; other words stop. GetTextureHandle = texture | sampler<<20 with bounds stops. 167 entries; nvn_device_test passes (gcc in Linux VM). Round35 pending on FlyMe.
+
+Round35 2CF81B76-04DB-4B54-9CDB-2CABD4B42564: packaged layout accepted; stop nvnProgramSetShadersExt (main+0x10857a0).
+Inventory correction: nvn_inventory.py only counted adrp+ldr slot loads; adrp+add and tail-call (br) references were missed. Full reference scan minus the loader range gives 241 referenced names, 100 missing at round35.
+SDK ground truth: sdk-internal NVN name table (strings +0xb3de9f, u32 offsets +0xb41808, entries +0xd19a08 -> dispatch slot -> implementation table +0xd36fd8).
+Batch (round36 pending): 99 of 100 implemented in three commits (objects/getters; typed recording with sdk+0x443584 callback/segments; queue replay/fence/present). Replay executes clears, buffer fills, uniform updates, timestamp/value reports, state; draws/dispatch/texture copies/conditional render/non-timestamp counters stop by name. GetZCullStorageSize left as a stop thunk (TX1 zcull hardware parameters; debug-only caller main+0x1e1f918). 265 entries, nvn_device_test passes with gcc -Werror.
+
+Round36 059CAB3C-DBDF-4D16-9DEB-841822C8B6FA: all 265 NVN entries live; Metal backend compiled on device; 3570 ProgramSetShadersExt, first program captured (2 stages complete=1). Next stop outside NVN: nn::audio::GetAudioRendererWorkBufferSize -> CreateAudioRendererManagerByHipc -> SVC 0x1f ConnectToNamedPort("sm:"). 197 nn::audio imports (AudioRenderer API).
+
+Audio (user chose silent real-time first): sdk contains client + in-process server + DSP CommandListProcessor; platform layer (nn::audio::dsp::*, server::detail::*) are stubs bound by symbol relocations. audio_platform.c: ByHipc -> native ByDfc via x8-preserving trampoline; dsp::Start/Wait (5 ms absolute pacing)/SendCommandBuffer (native SetProcessTimeMax/Setup/Process as sdk+0x20ccd4); device queries as built-in speaker stereo, master volume 1.0, real kernel events. Round37 pending.
+
+Round37: loader refused unreferenced force (master volume, direct call) -> removed. Round37b E380293E-AE28-4558-B272-396870E242A4: DFC manager live, work-buffer size computed; OpenAudioRenderer stops at SVC 0x15 CreateTransferMemory. Added transfer memory 0x15/0x51/0x52 (owner None only, move semantics, Horizon region rules + heap tail), O_HOST handles. sdk_kernel tests pass on Linux shim.
+
+Round39 4E225EA1-E27A-44DD-B7A4-B3434AE625BF: audio renderer opened (transfer memory 0x44e000 mapped). Device volume 2.0 legal (server clamps [0,128], sdk+0x2206ec); fs::SetPriorityOnCurrentThread -> IsEnabledAccessLog -> fsp-srv GetGlobalAccessLogMode: forced to retail mode 0 (false).
+
+Round40 46F9CE08-9DC8-4CC0-AAC4-EAA9DFF9F13D: game also sets AudioUsbDeviceOutput volume (accepted, not listed). Thread 0x1025 (created right after the transfer map) spins on WaitSynchronization -> 0xe401; added handle/caller diagnostics and a bounded stop.
+
+Round41 E9A04D69-4744-4F61-9978-2D1DB2AAF157: game audio thread (main+0x4ae028) waits on handle 0: the in-process server's renderer SystemEvent is process-local (CreateSystemEvent interProcess=false, sdk+0x20da24/48), QuerySystemEvent yields 0. Host now opens via the 4-arg OpenAudioRenderer, makes the game's event a kernel auto-clear event and signals it after each DSP command list while Start..Stop (handles are 16-byte by value).
+
+Round42 87B525B1-74AB-4454-A283-DF895100094F: renderer opened+started, no DSP frames: nothing in the in-process build creates AudioRenderSystemManager or calls Add (sysmodule job). Host creates the instance and Adds object+0x70 on first Start (checks vtable+0x48 == sdk+0x20d6c0). Next stop nn::time::Initialize -> time:u; time_hooks.c implements the 14 imported nn::time APIs on the iOS clock/time zone.
+
+Round43 9D2D974F-70FD-4560-8E32-5474FFA03565: AudioRenderSystemManager::Add -> InitializeUnsafe -> os::CreateThread maps the static sdk stack (sdk+0xd85000) with MapMemory; src outside heap -> d401 x64 -> abort. MapMemory now also accepts loaded modules' data/bss (Horizon CodeData is aliasable).
+
+Round44 21076A91-AC75-467B-8437-E3BA11BDCA15: host DSP running (lists processed by native CommandListProcessor), nn::time ready; main thread faulted in oe::EnterExitRequestHandlingSection (NULL am proxy). Implemented all remaining nn::oe imports (20/20).
+
+Round45 AC72FD44-D739-48A6-83D6-19C8EA583E98: oe exit section ok, language zh-Hans; optional RomFS misses (0x202) tolerated. Stop: nn::friends::Initialize -> ShimLibraryGlobal::Initialize (sdk+0x346240) -> sm:. Batch offline services: friends 11 (AsyncContext 0x28 host-owned, HasDone 0xe79 before a request as in sdk+0x344bec; Friend 0x200 zero-filled per sdk+0x344d10; key 0x40), nifm 8 (bool returns per sdk+0x38e250), aoc, nsd env, prepo Save/transmit (AddInternetConnectionStatus and buffer builders stay native, sdk+0x3a8660 is pure), err ShowError x3. Host journaled save data (runtime/savedata.c) + 16 fs save imports; shared file APIs routed by mount name / handle slot >= 0x100.

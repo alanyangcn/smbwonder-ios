@@ -96,6 +96,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
                 'runtime/game_thread.c', 'runtime/module_inits.c',
                 'runtime/applet_state.c', 'runtime/applet_hooks.c',
                 'runtime/romfs.c', 'runtime/romfs_hooks.c',
+                'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/graphics_gate.c', 'runtime/metal2_probe.m',
                 'runtime/metal2_pixels.c', 'runtime/metal2_shader_check.m',
                 *RUNTIME_GRAPHICS)]
