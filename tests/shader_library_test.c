@@ -23,6 +23,12 @@ int main(void) {
     assert(parse("stage vs\ndepth zero\n", &r, err) == 0 && r.depth_minus_one == 0);
     assert(parse("stage vs\n", &r, err) == 0 && r.depth_minus_one == -1);
     assert(parse("stage vs\ndepth sideways\n", &r, err) && strstr(err, "depth"));
+    // Bindless texture: handle read from NVN uniform slot 1 at byte 0xd0; reflected as texture slot 32 + n (round86).
+    assert(parse("stage ps\ntex 0 1 1 2d\nbtex 1 208 3 3 2d\nfout 0 float\n", &r, err) == 0);
+    assert(r.ntex == 2 && r.tex[1].slot == 32 && r.tex[1].texture == 3 && r.tex[1].sampler == 3 && r.tex[1].type == WONDER_SHADER_TEX_2D &&
+           r.tex[1].bindless && r.tex[1].ubo_slot == 1 && r.tex[1].offset == 208 && !r.tex[0].bindless);
+    assert(parse("stage ps\nbtex 14 0 3 3 2d\n", &r, err) && strstr(err, "btex"));
+    assert(parse("stage ps\nbtex 1 65534 3 3 2d\n", &r, err) && strstr(err, "btex"));   // handle must fit in the 64 KiB block
     // Rejections name the problem.
     assert(parse("stage gs\n", &r, err) && strstr(err, "stage"));
     assert(parse("cbuf 0 1\n", &r, err) && strstr(err, "stage"));                  // stage line first

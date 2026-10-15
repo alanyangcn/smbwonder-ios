@@ -42,6 +42,12 @@ def texture_slot(handle_word, cbuf_slot):
     offset = handle_word * 4 - TEX_TABLE
     if offset < 0 or offset % 8 or offset // 8 >= TEX_SLOTS: raise ValueError(f'texture handle word {handle_word} is outside c[2][0x20..0x120)')
     return offset // 8
+def sampler_type_name(t):
+    """Ryujinx SamplerType (1D 1, buffer 2, 2D 3, 3D 4, cube 5; Array 0x100, Multisample 0x200) -> reflection type."""
+    base = {1: '1d', 2: 'buffer', 3: '2d', 4: '3d', 5: 'cube'}.get(t & 0xff)
+    if not base: raise ValueError(f'sampler type {t:#x} unknown')
+    return base + ('ms' if t & 0x200 else '') + ('array' if t & 0x100 else '')
+
 def cbuf_kind(slot):
     if 3 <= slot <= 16: return ('cbuf', slot - 3)
     if slot == 1: return ('c1', None)
@@ -129,6 +135,12 @@ def reflect(census, stage_entry, job, res, msl, c1):
     if res['sbufs'] or res['images']: raise ValueError('storage buffers / images are not built yet')
     bound = {t['index'] for t in census['textures'] if t['stage'] == stage_no and t['texture']}
     for t in res['textures']:
+        if t['cbuf_slot'] not in (-1, 2):   # bindless: the handle is read at run time from a uniform buffer
+            kind, r = cbuf_kind(t['cbuf_slot'] & 0xffff)
+            if kind != 'cbuf': raise ValueError(f"bindless texture handle in c[{t['cbuf_slot']}]")
+            if t['binding'] not in textures or t['binding'] not in samplers: raise ValueError(f"texture binding {t['binding']} missing from the MSL entry")
+            lines.append(f"btex {r} {t['handle'] * 4} {t['binding']} {t['binding']} {sampler_type_name(t['type'])}")
+            continue
         r = texture_slot(t['handle'], t['cbuf_slot'])
         if r not in bound: raise ValueError(f"texture slot {r} is read but not bound to a registered texture in the census")
         if t['binding'] not in textures or t['binding'] not in samplers: raise ValueError(f"texture binding {t['binding']} missing from the MSL entry")

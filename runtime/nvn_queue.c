@@ -24,6 +24,13 @@ struct replay_state {
 static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.0f}};
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
+// UpdateUniformBuffer ranges of the current submit (GPU-ordered writes the CPU cannot read yet).
+static struct { uint64_t address, size; } ubo_updates[64]; static unsigned ubo_update_count, ubo_update_overflow;
+static int submit_ubo_updates_overlap(uint64_t address, uint64_t size) {
+    if (ubo_update_overflow) return 1;
+    for (unsigned i = 0; i < ubo_update_count; i++) if (address < ubo_updates[i].address + ubo_updates[i].size && ubo_updates[i].address < address + size) return 1;
+    return 0;
+}
 // Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
 static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages; }
     raster = {.sample_mask = 0xffffffffu, .line_width = 1.0f};
@@ -156,7 +163,13 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             d.ubo[stage][slot] = span_of(opcode, draw_state.uniform_buffer[stage][slot].address, draw_state.uniform_buffer[stage][slot].size);
         }
         for (int i = 0; i < r->ntex; i++) {
-            int slot = r->tex[i].slot; uint64_t h = draw_state.texture_handle[stage][slot];
+            int slot = r->tex[i].slot; uint64_t h;
+            if (r->tex[i].bindless) {   // combined handle stored by the game in a uniform buffer (round86)
+                uint64_t base = draw_state.uniform_buffer[stage][r->tex[i].ubo_slot].address, size = draw_state.uniform_buffer[stage][r->tex[i].ubo_slot].size;
+                if (!base || r->tex[i].offset + 4u > size) { snprintf(why, sizeof why, "bindless texture handle: uniform slot %d not bound or too small (offset %#x)", r->tex[i].ubo_slot, r->tex[i].offset); replay_stop(opcode, why); }
+                if (submit_ubo_updates_overlap(base + r->tex[i].offset, 4)) replay_stop(opcode, "bindless texture handle written by UpdateUniformBuffer in this submit (GPU-ordered; not readable yet)");
+                struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + r->tex[i].offset, 4, &v); uint32_t raw; memcpy(&raw, v.memory, 4); h = raw;
+            } else h = draw_state.texture_handle[stage][slot];
             const struct wonder_nvn_texture_registration *t = h && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)(h & 0xfffff)) : NULL;
             const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
             if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
@@ -167,7 +180,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (target < 0 || target > 10 || target_type[target] != r->tex[i].type) {
                 snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, r->tex[i].type); replay_stop(opcode, why);
             }
-            d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1u << slot;
+            d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1ull << slot;
             if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
                 struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
                 if (v.size < t->texture.size || !v.memory) { snprintf(why, sizeof why, "texture stage %d slot %d storage is not CPU-resolvable", stage, slot); replay_stop(opcode, why); }
@@ -363,6 +376,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
     case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER: {
         uint64_t address = c->a[0] + c->a[2]; size_t bytes = c->blob_size;
+        if (ubo_update_count < 64) { ubo_updates[ubo_update_count].address = address; ubo_updates[ubo_update_count++].size = bytes; } else ubo_update_overflow = 1;
         if (!bytes) break;
         void *buffer; size_t offset; host_span(address, bytes, opcode, &buffer, &offset);
         if (wonder_host_write_buffer(buffer, offset, blob, bytes)) replay_stop(opcode, "host buffer update failed");
@@ -471,7 +485,7 @@ static void submit_on_replay_stack(void *arg) {
     char gpu_error[256];
     if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
         wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);
-    state.submits++; replay_queue = "main";
+    state.submits++; replay_queue = "main"; ubo_update_count = 0; ubo_update_overflow = 0;
     unsigned before = state.commands, clears = state.clears;
     for (int i = 0; i < count; i++) {
         if (!wonder_nvn_command_handle_valid(handles[i]))

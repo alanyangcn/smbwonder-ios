@@ -13,7 +13,9 @@ struct wonder_shader_refl {
     int ncbuf; struct { uint8_t slot, buffer; } cbuf[14];    // NVN uniform slot r -> [[buffer(n)]]
     int support;                                             // Ryujinx support buffer [[buffer(n)]], -1 = none
     int c1_buffer; uint16_t c1_len; uint8_t c1[4096];         // shader's own constants (c[1]) -> [[buffer(n)]], -1 = none
-    int ntex; struct { uint8_t slot, texture, sampler, type; } tex[32];   // NVN texture slot r -> [[texture]] / [[sampler]]
+    // NVN texture slot r -> [[texture]] / [[sampler]]; bindless entries (handle read from uniform slot ubo_slot at byte
+    // offset) use slots 32 + n.
+    int ntex; struct wonder_shader_tex { uint8_t slot, texture, sampler, type, bindless, ubo_slot; uint16_t offset; } tex[40];
     int nattr; struct { uint8_t location, nvn, type; } attr[16];         // [[attribute(location)]] <- NVN vertex attribute
     uint8_t fout_mask, fout_type[8];                         // colour outputs written
     uint8_t drv_read;                                        // bit n: reads driver constant segment c[n] (0 or 2) at run time

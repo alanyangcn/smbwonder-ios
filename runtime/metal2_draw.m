@@ -332,7 +332,7 @@ static void sync_check(const struct wonder_host_draw *d) {
     const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
     for (int st = 0; st < 2; st++) for (int i = 0; i < refl[st]->ncbuf && at < sizeof spans - 100; i++) {
         char n[16]; snprintf(n, sizeof n, "ubo%d.%d", st, refl[st]->cbuf[i].slot); SPAN(n, d->ubo[st][refl[st]->cbuf[i].slot]); }
-    for (int st = 0; st < 2; st++) for (int r = 0; r < 32 && at < sizeof spans - 60; r++) if (d->tex_mask[st] >> r & 1)
+    for (int st = 0; st < 2; st++) for (int r = 0; r < 40 && at < sizeof spans - 60; r++) if (d->tex_mask[st] >> r & 1)
         at += (size_t)snprintf(spans + at, sizeof spans - at, " tex%d.%d=serial %llu", st, r, (unsigned long long)d->tex[st][r].texture.texture.serial);
     #undef SPAN
     char variants[256]; bisect(d, variants, sizeof variants);
@@ -429,7 +429,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // Resolve every resource before taking the replay lock: texture lookups and render-target creation take the same
     // (non-recursive) lock in host_graphics.m (round55 deadlocked at the first draw).
     const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
-    id<MTLTexture> textures[2][32]; id<MTLSamplerState> sampler_states[2][32]; id<MTLBuffer> c1_buffers[2] = {nil, nil};
+    id<MTLTexture> textures[2][40]; id<MTLSamplerState> sampler_states[2][40]; id<MTLBuffer> c1_buffers[2] = {nil, nil};
     for (int stage = 0; stage < 2; stage++) {
         const struct wonder_shader_refl *r = refl[stage];
         for (int i = 0; i < r->ntex; i++) {

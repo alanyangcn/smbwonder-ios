@@ -50,10 +50,18 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             if (sscanf(line, "drv %d", &a) != 1 || (a != 0 && a != 2)) return fail(err, n, "drv line %u: bank must be 0 or 2", line_no);
             r->drv_read |= (uint8_t)(1u << a);
         } else if (!strcmp(kind, "tex")) {
-            if (sscanf(line, "tex %d %d %d %15s", &a, &b, &c, word) != 4 || a < 0 || a > 31 || b < 0 || b > 95 || c < 0 || c > 15 || r->ntex >= 32)
+            if (sscanf(line, "tex %d %d %d %15s", &a, &b, &c, word) != 4 || a < 0 || a > 31 || b < 0 || b > 95 || c < 0 || c > 15 || r->ntex >= 40)
                 return fail(err, n, "tex line %u: slot 0..31, texture 0..95, sampler 0..15", line_no);
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "tex line %u: unknown texture type '%s'", line_no, word);
-            r->tex[r->ntex].slot = (uint8_t)a; r->tex[r->ntex].texture = (uint8_t)b; r->tex[r->ntex].sampler = (uint8_t)c; r->tex[r->ntex++].type = (uint8_t)t;
+            r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)t, 0, 0, 0}; r->ntex++;
+        } else if (!strcmp(kind, "btex")) {
+            int ubo = -1, offset = -1, tx = -1, sm = -1, bindless = 0;
+            for (int i = 0; i < r->ntex; i++) bindless += r->tex[i].bindless;
+            if (sscanf(line, "btex %d %d %d %d %15s", &ubo, &offset, &tx, &sm, word) != 5 || ubo < 0 || ubo > 13 || offset < 0 || offset > 0x10000 - 4 || (offset & 3) ||
+                tx < 0 || tx > 95 || sm < 0 || sm > 15 || r->ntex >= 40 || bindless >= 8)
+                return fail(err, n, "btex line %u: uniform slot 0..13, offset within 64 KiB, at most 8", line_no);
+            int t = texture_type_of(word); if (t < 0) return fail(err, n, "btex line %u: unknown texture type '%s'", line_no, word);
+            r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)(32 + bindless), (uint8_t)tx, (uint8_t)sm, (uint8_t)t, 1, (uint8_t)ubo, (uint16_t)offset}; r->ntex++;
         } else if (!strcmp(kind, "attr")) {
             if (sscanf(line, "attr %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b > 15 || r->nattr >= 16)
                 return fail(err, n, "attr line %u: location/attribute 0..15, at most 16", line_no);

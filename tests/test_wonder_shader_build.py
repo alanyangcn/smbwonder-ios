@@ -62,6 +62,11 @@ class PureHelpers(unittest.TestCase):
         self.assertIn('    int4 wonder_unwritten_locn9 [[user(locn9)]];', out)     # a paired fragment reads locn9 as int4
         self.assertIn('main0_out out = {};', out)
         self.assertEqual(build.fragment_inputs("struct main0_in\n{\n    float4 m_31 [[user(locn0)]];\n    uint4 m_3 [[user(locn4)]];\n};\n"), {0: 'float4', 4: 'uint4'})
+    def test_ryujinx_sampler_types(self):
+        # Ryujinx SamplerType: 1D 1, buffer 2, 2D 3, 3D 4, cube 5; Array 0x100, Multisample 0x200 (round86 bindless: 3).
+        self.assertEqual(build.sampler_type_name(3), '2d'); self.assertEqual(build.sampler_type_name(5 | 0x100), 'cubearray')
+        self.assertEqual(build.sampler_type_name(3 | 0x100), '2darray'); self.assertEqual(build.sampler_type_name(3 | 0x200), '2dms')
+        with self.assertRaises(ValueError): build.sampler_type_name(9)
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 

@@ -970,6 +970,16 @@ int main(void) {
               ix[3] = 13; REVIEW_OK((void)0);   // past the bound size: Maxwell reads zeros -> the stream is zero-padded (round82)
               assert(last_draw.stream[0].span.size == 0x100 && last_draw.stream[0].fetch_size == 13 * 20 + 8 + 8);
               memcpy(ix, keep, sizeof keep); }
+            // Bindless texture: the handle (texture 300 | sampler 1 << 20) is read from uniform slot 3 at byte 0x10 (round86).
+            { uint32_t *ubo = (uint32_t *)(cb_memory + 0x9100); uint32_t keep = ubo[4]; ubo[4] = 300u | 1u << 20;
+              const char *fs_bl = "stage ps\ncbuf 3 1\nbtex 3 16 2 2 2d\nfout 0 float\n";
+              assert(!wonder_shader_refl_parse(fs_bl, strlen(fs_bl), &fake_refl[1], err, sizeof err));
+              REVIEW_OK((void)0);
+              assert((last_draw.tex_mask[1] >> 32 & 1) && last_draw.tex[1][32].texture.texture.desc.width == 128 && last_draw.tex[1][32].sampler.valid);
+              const char *fs_bl2 = "stage ps\nbtex 5 16 2 2 2d\nfout 0 float\n";   // uniform slot 5 is not bound
+              assert(!wonder_shader_refl_parse(fs_bl2, strlen(fs_bl2), &fake_refl[1], err, sizeof err));
+              REVIEW_STOP((void)0, "bindless texture");
+              ubo[4] = keep; fake_refl[1] = fs_parsed; }
             // Shader texture type must match the bound texture's target (texture 300 is 2D).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_array, strlen(fs_array), &fake_refl[1], err, sizeof err));
