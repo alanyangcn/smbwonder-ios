@@ -262,7 +262,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_CLEAR_COLOR: case WONDER_NVN_CMD_CLEAR_DEPTH_STENCIL: case WONDER_NVN_CMD_CLEAR_BUFFER: case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER:
     case WONDER_NVN_CMD_REPORT_COUNTER: case WONDER_NVN_CMD_REPORT_VALUE: case WONDER_NVN_CMD_RESET_COUNTER: case WONDER_NVN_CMD_CLEAR_TEXTURE:
     case WONDER_NVN_CMD_COPY_TEXTURE_TO_BUFFER: case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE: case WONDER_NVN_CMD_DOWNSAMPLE:
-    case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT: case WONDER_NVN_CMD_SET_RENDER_ENABLE_CONDITIONAL:
+    case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT:
         return;
     default: break;
     }
@@ -300,7 +300,20 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (c->a[0] == 0 && c->a[1] >= 1) memcpy(state.depth_range, blob, 8);
         break;
     case WONDER_NVN_CMD_SET_RENDER_ENABLE: state.render_enable = (int)c->a[0]; break;
-    case WONDER_NVN_CMD_SET_RENDER_ENABLE_CONDITIONAL: replay_stop(opcode, "conditional rendering reads GPU counters (not implemented)");
+    case WONDER_NVN_CMD_SET_RENDER_ENABLE_CONDITIONAL: {
+        // Maxwell compares the 64-bit counters of the two report records at address and address+16 (EQUAL mode 0,
+        // NOT_EQUAL mode 1). Metal has no draw predication: finish the GPU work recorded so far (report writes run in
+        // its completion handlers), then evaluate on the CPU. A sync point, but exact.
+        wonder_host_finish();
+        struct wonder_nvn_pool_view v; wonder_nvn_address_span(c->a[1], 32, &v);
+        uint64_t a, b; memcpy(&a, v.memory, 8); memcpy(&b, v.memory + 16, 8);
+        state.render_enable = c->a[0] == 0 ? a == b : a != b;
+        static _Atomic unsigned logged;
+        if (atomic_fetch_add(&logged, 1) < 8)
+            wonder_nvn_report("NVN_CONDITIONAL_RENDER mode=%llu counters=%llu,%llu -> %s (submit %u)", (unsigned long long)c->a[0],
+                              (unsigned long long)a, (unsigned long long)b, state.render_enable ? "render" : "skip", state.submits);
+        break;
+    }
     case WONDER_NVN_CMD_CLEAR_COLOR: {
         if (!state.render_enable) break;
         int index = (int)c->a[0]; unsigned mask = (unsigned)c->a[1];

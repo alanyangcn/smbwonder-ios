@@ -112,9 +112,15 @@ void wonder_host_note_submit(unsigned submit){
  pthread_mutex_unlock(&replay_mutex);
 }
 void wonder_host_flush(void){ pthread_mutex_lock(&replay_mutex); commit_locked(); pthread_mutex_unlock(&replay_mutex); }
+// Waits for the GPU and for the completion handlers registered before this point (report writes, sync signals):
+// handlers of one command buffer run in registration order, so a final handler signals when they are all done.
 void wonder_host_finish(void){
- pthread_mutex_lock(&replay_mutex); commit_locked(); id<MTLCommandBuffer> last=last_committed; pthread_mutex_unlock(&replay_mutex);
- [last waitUntilCompleted];
+ dispatch_semaphore_t done=dispatch_semaphore_create(0);
+ pthread_mutex_lock(&replay_mutex);
+ [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; dispatch_semaphore_signal(done); }];
+ commit_locked();
+ pthread_mutex_unlock(&replay_mutex);
+ dispatch_semaphore_wait(done,DISPATCH_TIME_FOREVER);
 }
 void wonder_host_after_gpu(void (*fn)(void *), void *arg){
  pthread_mutex_lock(&replay_mutex); [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; pthread_mutex_unlock(&replay_mutex);

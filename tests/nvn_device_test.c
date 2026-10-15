@@ -949,6 +949,16 @@ int main(void) {
                          ((void (*)(void *, int, uint64_t, size_t))slot("nvnCommandBufferBindVertexBuffer"))(dcb, 15, (uintptr_t)(cb_memory + 0x9000), 0x100)), "vertex stream 15");
             REVIEW_OK((((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexAttribState"))(dcb, 1, attrib),
                          ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexStreamState"))(dcb, 1, stream)));
+            // Conditional rendering: draw if the counters at address and address+16 are equal (mode 0) / not equal (mode 1),
+            // evaluated after the GPU work recorded so far has completed (round80).
+            { uint64_t *cnt = (uint64_t *)(cb_memory + 0x9400); cnt[0] = 5; cnt[1] = 0; cnt[2] = 5; cnt[3] = 0;
+              void (*cond)(void *, int, uint64_t) = slot("nvnCommandBufferSetRenderEnableConditional");
+              void (*enable)(void *, uint32_t) = slot("nvnCommandBufferSetRenderEnable");
+              REVIEW_OK(cond(dcb, 0, (uintptr_t)cnt));                                   // equal, render-if-equal: drawn
+              uint64_t h_ = REVIEW_RECORD(cond(dcb, 1, (uintptr_t)cnt)); unsigned n_ = host_draws;
+              dsubmit(queue, 1, &h_); assert(host_draws == n_);                          // equal, render-if-not-equal: skipped
+              cnt[2] = 6; REVIEW_OK(cond(dcb, 1, (uintptr_t)cnt));                       // now different: drawn
+              REVIEW_OK(enable(dcb, 1)); }
             // Vertex fetch beyond the bound vertex buffer (stream 0: 0x100 bytes, stride 20, attribute RGBA16UI at offset 8):
             // index 12 reads bytes 248..255 (in range), index 13 reads 268..275 (past the end) -> stop instead of a GPU fault.
             { uint16_t *ix = (uint16_t *)(cb_memory + 0x9200); uint16_t keep[6]; memcpy(keep, ix, sizeof keep);
