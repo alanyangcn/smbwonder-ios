@@ -38,6 +38,7 @@ class PureHelpers(unittest.TestCase):
         self.assertIn('vp_c3._m0[33].z + vp_c3._m0[7u].x', out)                                   # literal indices untouched
         self.assertIn('_88 = wonder_cb(vp_c3._m0, int(uint(int(_99)) >> uint(2)))[int(_99) & 3];', out)
         self.assertIn('y = wonder_cb(fp_c1._m0, i + f(a[2]));', out)                               # nested brackets kept whole
+        self.assertIn('vp_s0._m0[int(k)]', build.guard_cbuf_indices('using namespace metal;\nz = vp_s0._m0[int(k)];\n'))   # storage buffers untouched
         # The load itself is clamped into range (the compiler may turn the ternary into load + select), then zeroed.
         self.assertIn('static inline __attribute__((unused)) float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }', out)
         self.assertEqual(out.index('static inline __attribute__((unused)) float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))

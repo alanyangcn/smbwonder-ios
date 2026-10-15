@@ -67,7 +67,7 @@ CB_GUARD = 'static inline __attribute__((unused)) float4 wonder_cb(constant floa
 def guard_cbuf_indices(msl):
     """Dynamic constant-buffer indices (<name>._m0[<expr>], expr not a literal) become wonder_cb(<name>._m0, <expr>):
     out-of-range reads return 0 as on Maxwell instead of faulting the GPU (every c[n] is declared float4[4096])."""
-    out, i, pattern = [], 0, re.compile(r'\b(\w+)\._m0\[')
+    out, i, pattern = [], 0, re.compile(r'\b(\w+_c\d+)\._m0\[')   # constant buffers only (vp_c3, fp_c1); not storage (vp_s0)
     while True:
         m = pattern.search(msl, i)
         if not m: out.append(msl[i:]); break
