@@ -54,7 +54,7 @@ int main(void) {
     loader_pass(NULL);
     int thunks = 0;
     for (int i = 0; i < WONDER_NVN_NAME_COUNT; i++) thunks += (uintptr_t)slots[i] == 0x100000 + 8 * (uintptr_t)i;
-    assert(wonder_nvn_implemented_count() == 165 && thunks == WONDER_NVN_NAME_COUNT - 165);
+    assert(wonder_nvn_implemented_count() == 167 && thunks == WONDER_NVN_NAME_COUNT - 167);
     assert(slot("nvnQueueBuilderSetQueuePriority") == wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnQueueBuilderSetQueuePriority")));
 
     // Objects are validated, never assumed.
@@ -380,6 +380,41 @@ int main(void) {
     ((void (*)(void *, uint64_t))slot("nvnDeviceFinalizeCommandHandle"))(device, recorded_handle);
     EXPECT_STOP(wonder_nvn_command_walk(recorded_handle, check_draw, NULL), "NVN_INVALID_HANDLE");
 
+
+    {   // main+0x5de9c: bindless texture handle = texture | sampler << 20.
+        uint64_t (*handle)(const void *, int, int) = (uint64_t (*)(const void *, int, int))slot("nvnDeviceGetTextureHandle");
+        assert(handle(device, 5, 3) == (UINT64_C(3) << 20 | 5));
+        assert(handle(device, 0xfffff, 0xfff) == UINT64_C(0xffffffff));
+        EXPECT_STOP(handle(device, 1 << 20, 0), "NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle");
+        EXPECT_STOP(handle(device, 0, -1), "NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle");
+        EXPECT_STOP(handle(builder, 0, 0), "NVN_INVALID_OBJECT");
+    }
+    // main+0x1084ef4: nn::gfx TextureInfo+0x24 packaged layout (RomFS BRTI survey: u32 block-height log2, u32 0x00010007).
+    {
+        typedef void (*set_layout_fn)(void *, const void *); typedef size_t (*size_fn)(const void *);
+        set_layout_fn set_layout = (set_layout_fn)slot("nvnTextureBuilderSetPackagedTextureLayout");
+        size_fn storage = (size_fn)slot("nvnTextureBuilderGetStorageSize");
+        static unsigned char ptb[0x80];
+        ((void (*)(void *, const void *))slot("nvnTextureBuilderSetDevice"))(ptb, device);
+        ((void (*)(void *))slot("nvnTextureBuilderSetDefaults"))(ptb);
+        ((void (*)(void *, int, int))slot("nvnTextureBuilderSetSize2D"))(ptb, 64, 72);
+        ((void (*)(void *, int))slot("nvnTextureBuilderSetFormat"))(ptb, 0x25);              // RGBA8: 64 px = 4 GOBs wide
+        assert(storage(ptb) == 256 * 128);                                                    // automatic: 8-GOB blocks
+        static const unsigned char log2_1[8] = {1, 0, 0, 0, 7, 0, 1, 0};
+        set_layout(ptb, log2_1);
+        assert(storage(ptb) == 256 * 80);                                                     // packaged: 2-GOB blocks, 72 -> 80 rows
+        static const unsigned char bad_word1[8] = {1, 0, 0, 0, 7, 0, 0, 0}, bad_log2[8] = {6, 0, 0, 0, 7, 0, 1, 0};
+        EXPECT_STOP(set_layout(ptb, bad_word1), "NVN_UNSUPPORTED nvnTextureBuilderSetPackagedTextureLayout");
+        EXPECT_STOP(set_layout(ptb, bad_log2), "NVN_UNSUPPORTED nvnTextureBuilderSetPackagedTextureLayout");
+        assert(storage(ptb) == 256 * 80);                                                     // rejected layouts change nothing
+        set_layout(ptb, NULL);
+        assert(storage(ptb) == 256 * 128);
+        set_layout(ptb, log2_1);
+        ((void (*)(void *))slot("nvnTextureBuilderSetDefaults"))(ptb);                         // SetDefaults clears it
+        ((void (*)(void *, int, int))slot("nvnTextureBuilderSetSize2D"))(ptb, 64, 72);
+        ((void (*)(void *, int))slot("nvnTextureBuilderSetFormat"))(ptb, 0x25);
+        assert(storage(ptb) == 256 * 128);
+    }
 
     // main+0x77714: general texture via SetWidth/Height/Depth/Levels/Swizzle/Samples/DepthStencilMode, then pool registration.
     static unsigned char gtb[0x80]; memset(gtb, 0xab, sizeof gtb);

@@ -75,6 +75,21 @@ void wonder_nvnTextureBuilderSetDepthStencilMode(void *builder, int mode) {
     if (mode != 0 && mode != 1) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnTextureBuilderSetDepthStencilMode %d", mode);
     tbuilder_of(builder, "nvnTextureBuilderSetDepthStencilMode")->depth_stencil_mode = (uint8_t)mode;
 }
+/* NVNpackagedTextureLayout is the 8-byte nn::gfx TextureInfo+0x24 blob (main+0x1084ef4 tail-calls this when info flag bit0
+ * is set). Survey of all 3063 BRTI entries in update 262144 RomFS: u32 block-height log2 (0..4) followed by u32 0x00010007.
+ * Byte 0 selects the level-0 GOB block height (dm/gfx/nvn/nvn_tex.c pkg_block_h); the second word has only ever been
+ * observed with that one value, so anything else stops rather than being guessed. NULL clears the packaged layout. */
+#define PACKAGED_LAYOUT_WORD1 0x00010007u
+void wonder_nvnTextureBuilderSetPackagedTextureLayout(void *builder, const void *layout) {
+    struct texture_builder *b = tbuilder_of(builder, "nvnTextureBuilderSetPackagedTextureLayout");
+    if (!layout) { b->has_layout = 0; memset(b->layout, 0, sizeof b->layout); b->desc.pkg_block_h = 0; return; }
+    uint8_t raw[8]; uint32_t w0, w1; memcpy(raw, layout, 8); memcpy(&w0, raw, 4); memcpy(&w1, raw + 4, 4);
+    if (w0 > 5 || w1 != PACKAGED_LAYOUT_WORD1)
+        wonder_nvn_stop("NVN_UNSUPPORTED nvnTextureBuilderSetPackagedTextureLayout layout=%02x%02x%02x%02x%02x%02x%02x%02x "
+                        "(expected u32 block-height log2 <= 5, u32 %#x)", raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6],
+                        raw[7], PACKAGED_LAYOUT_WORD1);
+    b->has_layout = 1; memcpy(b->layout, raw, 8); b->desc.pkg_block_h = (int)w0 + 1;
+}
 void wonder_nvnTextureBuilderSetStride(void *builder, ptrdiff_t stride) {
     if (stride < 0 || stride > 0x7fffffff) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnTextureBuilderSetStride %td", stride);
     tbuilder_of(builder, "nvnTextureBuilderSetStride")->desc.stride = (uint32_t)stride;
@@ -287,7 +302,7 @@ const struct wonder_nvn_entry wonder_nvn_texture_entries[] = {
     E(nvnTextureBuilderSetDevice), E(nvnTextureBuilderSetDefaults), E(nvnTextureBuilderSetSize2D), E(nvnTextureBuilderSetWidth),
     E(nvnTextureBuilderSetHeight), E(nvnTextureBuilderSetDepth), E(nvnTextureBuilderSetLevels), E(nvnTextureBuilderSetTarget),
     E(nvnTextureBuilderSetFormat), E(nvnTextureBuilderSetFlags), E(nvnTextureBuilderGetFlags), E(nvnTextureBuilderSetSamples),
-    E(nvnTextureBuilderSetSwizzle), E(nvnTextureBuilderSetDepthStencilMode), E(nvnTextureBuilderSetStride),
+    E(nvnTextureBuilderSetSwizzle), E(nvnTextureBuilderSetPackagedTextureLayout), E(nvnTextureBuilderSetDepthStencilMode), E(nvnTextureBuilderSetStride),
     E(nvnTextureBuilderGetStorageSize), E(nvnTextureBuilderGetStorageAlignment), E(nvnTextureBuilderSetStorage),
     E(nvnTextureInitialize), E(nvnTextureFinalize), E(nvnTextureSetDebugLabel), E(nvnTextureGetFlags), E(nvnTextureGetFormat),
     E(nvnTextureGetWidth), E(nvnTextureGetHeight), E(nvnTextureGetDepth), E(nvnTextureGetLevels), E(nvnTextureGetTarget),

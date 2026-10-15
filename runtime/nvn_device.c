@@ -1,5 +1,6 @@
 // Strict NVN device bootstrap for Wonder (main loader 0x1080ff0, version gate 0x5bb95c).
 // Host objects live inside the guest-owned NVN storage; a magic word guards every use.
+#include <stdatomic.h>
 #include "nvn_device.h"
 #include "nvn_names.h"
 #include <stdlib.h>
@@ -79,6 +80,16 @@ static const int device_info[0x60] = {
     [0x55] = 262144, [0x56] = 4096, [0x57] = 1, [0x58] = 4, [0x59] = 2, [0x5A] = 0, [0x5B] = 4096, [0x5C] = 16384,
     [0x5D] = 4096, [0x5E] = 128, [0x5F] = 4096,
 };
+// TX1 bindless handle: texture descriptor index in bits 0..19, sampler descriptor index in bits 20..31
+// (main+0x5de9c passes pool ids straight from the material; the result feeds BindTexture unchanged).
+uint64_t wonder_nvnDeviceGetTextureHandle(const void *device, int texture_id, int sampler_id) {
+    device_of(device, "nvnDeviceGetTextureHandle");
+    if (texture_id < 0 || texture_id >= (1 << 20) || sampler_id < 0 || sampler_id >= (1 << 12))
+        wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle texture=%d sampler=%d", texture_id, sampler_id);
+    static _Atomic unsigned logged;
+    if (atomic_fetch_add(&logged, 1) < 8) wonder_nvn_report("NVN_CALL nvnDeviceGetTextureHandle texture=%d sampler=%d", texture_id, sampler_id);
+    return (uint64_t)(uint32_t)texture_id | (uint64_t)(uint32_t)sampler_id << 20;
+}
 void wonder_nvnDeviceGetInteger(const void *device, int what, int *out) {
     device_of(device, "nvnDeviceGetInteger");
     if (!out) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceGetInteger what=%#x out=NULL", (unsigned)what);
@@ -559,6 +570,7 @@ static const struct implemented implemented[] = {
     {"nvnDeviceBuilderSetFlags", (void *)wonder_nvnDeviceBuilderSetFlags},
     {"nvnDeviceInitialize", (void *)wonder_nvnDeviceInitialize},
     {"nvnDeviceGetInteger", (void *)wonder_nvnDeviceGetInteger},
+    {"nvnDeviceGetTextureHandle", (void *)wonder_nvnDeviceGetTextureHandle},
     {"nvnDeviceGetProcAddress", (void *)wonder_nvnDeviceGetProcAddress},
     {"nvnDeviceSetWindowOriginMode", (void *)wonder_nvnDeviceSetWindowOriginMode},
     {"nvnDeviceSetDepthMode", (void *)wonder_nvnDeviceSetDepthMode},

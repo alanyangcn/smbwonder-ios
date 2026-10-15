@@ -12,6 +12,7 @@
 - round30–32：特效系统调试标签已通过；165 入口，推进至系统共享字体服务。round32 run `3546842C-B95E-4A87-AD4D-FDFC23621EFF`。
 - 字体路径使用 CoreText 系统字体替代，重建真实 SFNT 并验证校验和与可解析性；六个本机字体及稳定地址测试通过。Nintendo 扩展符号的覆盖并不等价。round33 被未被游戏引用的强制 RequestSharedFontLoad hook 拦住，已移除。round34 run `2F7358F0-4F70-4EF0-9125-AA653D31EC3E`（debugger=1）通过系统字体替代（含 type=5 AppleSymbols），停在 `nvnTextureBuilderSetPackagedTextureLayout`（main+0x5293c）。
 - 补了合法 NULL 命令内存回调与 EndRecording 授予范围校验；ProgramSetShaders 严格停点前会捕获控制数据/代码前缀。缺失绘制语义仍明确停止。完整宿主测试目前50项。
+- round35（待真机）：`nvnTextureBuilderSetPackagedTextureLayout` 按 nn::gfx TextureInfo+0x24 的 8 字节布局实现。全 RomFS 3063 个 BRTI 统计：u32 块高 log2（0..4）+ u32 0x00010007；第 0 字节决定第 0 级 GOB 块高（与自动算法可不同），其他值严格停止。`nvnDeviceGetTextureHandle` 按 TX1 句柄 texture | sampler<<20 实现（main+0x5de9c 直接传给 BindTexture）。167 入口。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
