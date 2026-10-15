@@ -48,7 +48,9 @@ def cbuf_kind(slot):
     if slot in (0, 2): return ('drv', slot)
     raise ValueError(f'constant buffer c[{slot}] is driver-internal')
 
-CB_GUARD = 'static inline float4 wonder_cb(constant float4 *a, int i) { return uint(i) < 4096u ? a[i] : float4(0.0); }\n'
+# The load is clamped into range before the zero select: the compiler may evaluate both sides of a ternary (round69 bisect:
+# the fault followed the shader, not its buffers or textures).
+CB_GUARD = 'static inline float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }\n'
 def guard_cbuf_indices(msl):
     """Dynamic constant-buffer indices (<name>._m0[<expr>], expr not a literal) become wonder_cb(<name>._m0, <expr>):
     out-of-range reads return 0 as on Maxwell instead of faulting the GPU (every c[n] is declared float4[4096])."""
