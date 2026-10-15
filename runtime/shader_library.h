@@ -1,0 +1,22 @@
+#pragma once
+// Translated-shader reflection (.refl, written by tools/wonder_shader_build.py next to <key>.metal).
+// Metal binding layout per stage (MSL 2.1, discrete slots): constant buffers / c1 / support in [[buffer(0..15)]],
+// vertex streams in [[buffer(16 + stream)]], textures/samplers at the translator's binding numbers.
+#include <stddef.h>
+#include <stdint.h>
+enum { WONDER_SHADER_FLOAT, WONDER_SHADER_UINT, WONDER_SHADER_SINT };
+enum { WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
+       WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER };
+#define WONDER_SHADER_STREAM_BUFFER_BASE 16
+struct wonder_shader_refl {
+    int stage;                                               // 0 vertex, 1 fragment (NVNshaderStage)
+    int ncbuf; struct { uint8_t slot, buffer; } cbuf[14];    // NVN uniform slot r -> [[buffer(n)]]
+    int support;                                             // Ryujinx support buffer [[buffer(n)]], -1 = none
+    int c1_buffer; uint16_t c1_len; uint8_t c1[4096];         // shader's own constants (c[1]) -> [[buffer(n)]], -1 = none
+    int ntex; struct { uint8_t slot, texture, sampler, type; } tex[32];   // NVN texture slot r -> [[texture]] / [[sampler]]
+    int nattr; struct { uint8_t location, nvn, type; } attr[16];         // [[attribute(location)]] <- NVN vertex attribute
+    uint8_t fout_mask, fout_type[8];                         // colour outputs written
+    uint8_t drv_read;                                        // bit n: reads driver constant segment c[n] (0 or 2) at run time
+};
+// 0 = parsed; otherwise non-zero with the reason in err.
+int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *out, char *err, size_t errlen);

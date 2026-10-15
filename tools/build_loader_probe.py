@@ -57,6 +57,23 @@ def validate_inputs(work, profile):
             raise ValueError('Verification evidence changed or failed: ' + check['path'])
 
 
+def copy_shaders(source, destination):
+    """Copy a tools/wonder_shader_build.py output into the app (dm/shaders): manifest.json plus each key's .metal and .refl,
+    every file checked against the manifest's sha256. No build = no shaders (draws then stop with NVN_SHADER_MISSING)."""
+    source, destination = Path(source), Path(destination)
+    if destination.exists(): shutil.rmtree(destination)
+    if not (source / 'manifest.json').exists(): return 0
+    keys = json.loads((source / 'manifest.json').read_text())['keys']
+    destination.mkdir(parents=True)
+    for key, entry in keys.items():
+        for suffix, field in (('metal', 'msl_sha256'), ('refl', 'refl_sha256')):
+            name = f'{key}.{suffix}'
+            if digest(source / name) != entry[field]: raise ValueError(f'{name} does not match the shader build manifest')
+            shutil.copy2(source / name, destination / name)
+    shutil.copy2(source / 'manifest.json', destination / 'manifest.json')
+    return len(keys)
+
+
 def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_backend="metal2"):
     profile = json.loads(profile_path.read_text())
     validate_inputs(work, profile)
@@ -82,6 +99,8 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
     for name in ('main', 'sdk'):
         for suffix in ('fixups.tsv', 'gates.tsv'):
             shutil.copy2(patch_dir / f'{name}.{suffix}', resources / f'{name}.{suffix}')
+    shaders = copy_shaders(work / 'build/wonder-shaders', resources / 'shaders')
+    print(f'translated shader stages bundled: {shaders}')
     embed = output / 'embed.S'
     flags = subprocess.check_output([sys.executable, str(REPOSITORY / 'vendor/d2r-mobile/dm/ios/tools/gen_embed.py'),
                                      str(patch_dir), str(embed), 'main', 'sdk'], text=True).split()
@@ -98,7 +117,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
                 'runtime/romfs.c', 'runtime/romfs_hooks.c',
                 'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/ngc_service.c', 'runtime/ngc_hooks.c',
-                'runtime/nvn_draw_census.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
+                'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal2_draw.m', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
                 'runtime/graphics_gate.c', 'runtime/metal2_probe.m',
                 'runtime/metal2_pixels.c', 'runtime/metal2_shader_check.m',
                 *RUNTIME_GRAPHICS)]

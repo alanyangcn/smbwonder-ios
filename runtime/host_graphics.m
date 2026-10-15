@@ -2,6 +2,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include "kernel_events.h"
+#include "metal2_draw.h"
 #include <errno.h>
 #include <mach/mach.h>
 static id<MTLDevice> device;
@@ -30,6 +31,10 @@ int wonder_host_driver_start(void *memory,unsigned long size){
   if(!surface){error=ENXIO;return;}CAMetalLayer *layer=(CAMetalLayer*)surface.layer;layer.device=created;layer.pixelFormat=MTLPixelFormatBGRA8Unorm;layer.framebufferOnly=YES;
   device=created;queue=createdQueue;
  });
+ if(!error){   // translated shaders (tools/wonder_shader_build.py) bundled at dm/shaders by tools/build_loader_probe.py
+  wonder_host_draw_set_device((__bridge void*)created);
+  wonder_host_shader_set_directory([NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/shaders"].fileSystemRepresentation);
+ }
  fprintf(stderr,"HOST_GRAPHICS_DRIVER_READY result=%d device=%s queue=%p\n",error,created.name.UTF8String,(__bridge void*)createdQueue);return error;
 }
 int wonder_host_driver_ready(void){__block int ready=0;dispatch_sync(dispatch_get_main_queue(),^{ready=device&&queue&&surface&&((CAMetalLayer*)surface.layer).device==device;});return ready;}
