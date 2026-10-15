@@ -67,6 +67,24 @@ int main(int argc, char **argv) {
             id<MTLTexture> cube = [device newTextureWithDescriptor:wonder_host_render_target_descriptor(&(nvn_texdesc){.target = 8, .format = 0x25, .width = 4, .height = 4, .depth = 6, .levels = 1}, MTLPixelFormatRGBA8Unorm)];
             assert(cube && cube.textureType == MTLTextureTypeCube);
         }
+        // Scissored / channel-masked colour clear drawn as a triangle: rect (16,16,32,32), red+alpha only, over blue.
+        if (!strcmp(mode, "clear_rect")) {
+            struct wonder_nvn_texture ct = target_texture(9, 0x25); id<MTLTexture> c = (__bridge id<MTLTexture>)wonder_host_render_target(&ct, MTLPixelFormatRGBA8Unorm);
+            MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor]; p.colorAttachments[0].texture = c;
+            p.colorAttachments[0].loadAction = MTLLoadActionClear; p.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 1, 1); p.colorAttachments[0].storeAction = MTLStoreActionStore;
+            [[(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:p] endEncoding];
+            float red[4] = {1, 0.25f, 0, 0.5f}; int rect[4] = {16, 16, 32, 32};
+            assert(wonder_host_clear_rect((__bridge void *)c, 0, 0, red, 0x9, rect) == 0);
+            id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
+            id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
+            [b copyFromTexture:c sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
+            [b endEncoding]; [pending commit]; [pending waitUntilCompleted];
+            const uint8_t *in = (const uint8_t *)rb.contents + (32 * 64 + 32) * 4, *outside = (const uint8_t *)rb.contents + (8 * 64 + 8) * 4, *edge = (const uint8_t *)rb.contents + (48 * 64 + 48) * 4;
+            printf("in %u %u %u %u outside %u %u %u %u\n", in[0], in[1], in[2], in[3], outside[0], outside[1], outside[2], outside[3]);
+            assert(in[0] == 255 && in[1] == 0 && in[2] == 255 && (in[3] == 127 || in[3] == 128));   // R and A written, G/B kept
+            assert(outside[0] == 0 && outside[2] == 255 && edge[0] == 0);                         // outside the rect untouched (x,y 48 excluded)
+            puts("metal2 clear rect OK"); return 0;
+        }
         // Vertex format table: NVN format -> MTLVertexFormat.
         assert(wonder_host_vertex_format(0x2E) == MTLVertexFormatFloat4 && wonder_host_vertex_format(0x16) == MTLVertexFormatFloat2);
         assert(wonder_host_vertex_format(0x29) == MTLVertexFormatHalf4 && wonder_host_vertex_format(0x25) == MTLVertexFormatUChar4Normalized);

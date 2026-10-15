@@ -26,7 +26,10 @@ int wonder_host_shader_available(const char key[17]);                       // 1
 void *wonder_host_shader_function(const char key[17], int stage);           // id<MTLFunction>; stops by name on failure
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 int wonder_host_draw(const struct wonder_host_draw *d);                     // 0 = encoded; unsupported state stops by name
-uint32_t wonder_host_vertex_format(int nvn_format);                          // MTLVertexFormat, 0 = none
+uint32_t wonder_host_vertex_format(int nvn_format);
+// Colour clear limited to rect {x, y, w, h} and channel mask (NVN R1 G2 B4 A8), drawn as a triangle (Metal load-clears
+// cover the whole attachment). Float/normalized formats only; 0 = encoded.
+int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]);                          // MTLVertexFormat, 0 = none
 // Replay command buffer shared with host_graphics.m (clears, fills, present): the draw encoder appends to it under the lock.
 void wonder_host_replay_lock(void);
 void wonder_host_replay_unlock(void);

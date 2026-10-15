@@ -53,6 +53,9 @@ int wonder_host_shader_available(const char key[17]) { (void)key; return shaders
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
+static unsigned host_clear_rects; static int last_clear_rect[4]; static unsigned last_clear_mask;
+int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]) {
+    (void)texture; (void)level; (void)slice; (void)rgba; memcpy(last_clear_rect, rect, 16); last_clear_mask = mask; host_clear_rects++; return 0; }
 static const char *fake_gpu_error;   // set to simulate a failed replay command buffer
 void wonder_host_note_submit(unsigned submit) { (void)submit; }
 int wonder_host_gpu_error(char *out, size_t size) { if (!fake_gpu_error) return 0; snprintf(out, size, "%s", fake_gpu_error); return 1; }
@@ -720,10 +723,12 @@ int main(void) {
         EXPECT_STOP(submit(queue, 1, &draw), "NVN_REPLAY_PENDING DrawArrays");
         begin(qcb); set_targets(qcb, 1, target, NULL, NULL, NULL); scissor(qcb, 0, 0, 64, 64); clear(qcb, 0, blue, 0xf);
         uint64_t partial = end(qcb);
-        EXPECT_STOP(submit(queue, 1, &partial), "scissored clear");
+        unsigned rects = host_clear_rects; submit(queue, 1, &partial);   // scissored clear: drawn over the scissor rect
+        assert(host_clear_rects == rects + 1 && last_clear_rect[0] == 0 && last_clear_rect[2] == 64 && last_clear_rect[3] == 64 && last_clear_mask == 0xf);
         begin(qcb); scissor(qcb, 0, 0, 4096, 4096); clear(qcb, 0, blue, 0x7);
         uint64_t masked = end(qcb);
-        EXPECT_STOP(submit(queue, 1, &masked), "partial channel-mask");
+        rects = host_clear_rects; submit(queue, 1, &masked);              // channel-masked clear: drawn with the write mask
+        assert(host_clear_rects == rects + 1 && last_clear_mask == 0x7);
         begin(qcb); ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetRenderEnable"))(qcb, 0);
         ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(qcb, 4, 0, 3);   // disabled rendering: no-op
         ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetRenderEnable"))(qcb, 1);

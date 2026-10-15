@@ -306,11 +306,13 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         int index = (int)c->a[0]; unsigned mask = (unsigned)c->a[1];
         if (!state.has_targets || index >= state.color_count || !state.targets[index].valid) replay_stop(opcode, "no color target bound at the index");
         if (!mask) break;
-        if (mask != 0xf) replay_stop(opcode, "partial channel-mask clear needs a shader clear");
         const struct wonder_nvn_texture_snapshot *t = &state.targets[index];
-        if (!scissor_covers(&t->texture)) replay_stop(opcode, "scissored clear needs a shader clear");
         float rgba[4]; memcpy(rgba, blob, 16); int level, slice; view_level_slice(t, &level, &slice);
-        if (wonder_host_clear_color(target_texture(t, opcode), level, slice, rgba)) replay_stop(opcode, "host clear failed");
+        if (mask != 0xf || !scissor_covers(&t->texture)) {   // drawn over the scissor rectangle with the channel mask
+            int full[4] = {0, 0, (int)t->texture.desc.width, (int)t->texture.desc.height};
+            if (wonder_host_clear_rect(target_texture(t, opcode), level, slice, rgba, mask, state.scissor_set ? state.scissor : full))
+                replay_stop(opcode, "scissored/masked clear failed (integer target formats are not drawn yet)");
+        } else if (wonder_host_clear_color(target_texture(t, opcode), level, slice, rgba)) replay_stop(opcode, "host clear failed");
         state.clears++;
         break;
     }

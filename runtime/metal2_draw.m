@@ -514,6 +514,45 @@ MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t,
     d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
     return d;
 }
+// ---------- Scissored / masked colour clears ----------
+static NSString *const clear_source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+    "struct V { float4 p [[position]]; };\n"
+    "vertex V clear_vs(uint id [[vertex_id]]) { V o; o.p = float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0.0, 1.0); return o; }\n"
+    "fragment float4 clear_fs(constant float4 &c [[buffer(0)]]) { return c; }\n";
+int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]) {
+    id<MTLTexture> t = (__bridge id<MTLTexture>)texture; if (!t || !device) return 1;
+    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines_by_key; static id<MTLLibrary> library;
+    if (!library) { NSError *e = nil; library = [device newLibraryWithSource:clear_source options:nil error:&e]; if (!library) return 2; }
+    MTLPixelFormat f = t.pixelFormat;
+    MTLColorWriteMask wm = (mask & 1 ? MTLColorWriteMaskRed : 0) | (mask & 2 ? MTLColorWriteMaskGreen : 0) | (mask & 4 ? MTLColorWriteMaskBlue : 0) | (mask & 8 ? MTLColorWriteMaskAlpha : 0);
+    NSNumber *key = @((NSUInteger)f << 4 | wm);
+    if (!pipelines_by_key) pipelines_by_key = [NSMutableDictionary dictionary];
+    id<MTLRenderPipelineState> pso = pipelines_by_key[key];
+    if (!pso) {
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [library newFunctionWithName:@"clear_vs"]; pd.fragmentFunction = [library newFunctionWithName:@"clear_fs"];
+        pd.colorAttachments[0].pixelFormat = f; pd.colorAttachments[0].writeMask = wm;
+        NSError *e = nil; pso = [device newRenderPipelineStateWithDescriptor:pd error:&e]; if (!pso) return 3;   // e.g. integer formats
+        pipelines_by_key[key] = pso;
+    }
+    NSUInteger w = MAX((NSUInteger)1, t.width >> level), h = MAX((NSUInteger)1, t.height >> level);
+    long x0 = MAX(0, rect[0]), y0 = MAX(0, rect[1]), x1 = MIN((long)w, (long)rect[0] + rect[2]), y1 = MIN((long)h, (long)rect[1] + rect[3]);
+    if (x1 <= x0 || y1 <= y0 || !wm) return 0;   // nothing to clear
+    MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+    p.colorAttachments[0].texture = t; p.colorAttachments[0].level = level;
+    if (t.textureType == MTLTextureType3D) p.colorAttachments[0].depthPlane = slice; else p.colorAttachments[0].slice = slice;
+    p.colorAttachments[0].loadAction = MTLLoadActionLoad; p.colorAttachments[0].storeAction = MTLStoreActionStore;
+    wonder_host_replay_lock();
+    id<MTLRenderCommandEncoder> e = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:p];
+    [e setRenderPipelineState:pso];
+    [e setScissorRect:(MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)}];
+    [e setFragmentBytes:rgba length:16 atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+    wonder_host_replay_unlock();
+    return 0;
+}
+
 // ---------- Render target readback (evidence) ----------
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
