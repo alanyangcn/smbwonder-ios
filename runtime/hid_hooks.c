@@ -88,6 +88,15 @@ HLE_FORCE("_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE"
 HLE_FORCE("_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE", "Vibration not permitted: value discarded", void, h_hid_vib_send, const uint32_t *h, const void *value) {
     (void)value; if (!valid_handle(h)) die("hid: SendVibrationValue foreign handle");
 }
+// The SDK's VibrationTarget queues samples and VibrationNode::Update flushes them through this
+// interposable detail call (sdk PLT); with vibration not permitted the values are discarded.
+HLE_FORCE("_ZN2nn3hid6detail19SendVibrationValuesEPKNS0_21VibrationDeviceHandleEPKNS0_14VibrationValueEi",
+          "Vibration not permitted: queued values from VibrationNode::Update discarded", uint32_t, h_hid_vib_send_many,
+          const uint32_t *handles, const void *values, int count) {
+    if (count < 0 || (count && (!handles || !values))) die("hid: detail::SendVibrationValues invalid arrays (count %d)", count);
+    for (int i = 0; i < count; i++) if (!valid_handle(&handles[i])) die("hid: detail::SendVibrationValues foreign handle %#x", handles[i]);
+    return 0;
+}
 HLE_FORCE("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE",
           "Six-axis handles for the handheld", int, h_hid_sixaxis_handles, uint32_t *out, int count, const uint32_t *id, uint32_t style) {
     need_npad("GetSixAxisSensorHandles");
