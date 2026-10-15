@@ -32,6 +32,15 @@ HLE_FORCE("_ZN2nn3hid18SetNpadJoyHoldTypeENS0_15NpadJoyHoldTypeE", "Joy-Con hold
 HLE_FORCE("_ZN2nn3hid30SetNpadJoyAssignmentModeSingleERKj", "Joy-Con assignment bookkeeping", void, h_hid_single, const uint32_t *id) {
     need_npad("SetNpadJoyAssignmentModeSingle"); joy_assignment[npad_id(id, "SetNpadJoyAssignmentModeSingle")] = 1;
 }
+// L/R assignment mode lets console players re-pair Joy-Con by pressing L+R. The host has one built-in
+// handheld controller and nothing to re-pair, so the mode only changes this flag (functional difference).
+static int lr_assignment_mode;
+HLE_FORCE("_ZN2nn3hid21StartLrAssignmentModeEv", "L/R assignment mode: nothing to re-pair on the host handheld", void, h_hid_lr_start, void) {
+    lr_assignment_mode = 1; LOG("HOST_HID_LR_ASSIGNMENT start (no effect: built-in handheld)");
+}
+HLE_FORCE("_ZN2nn3hid20StopLrAssignmentModeEv", "L/R assignment mode: nothing to re-pair on the host handheld", void, h_hid_lr_stop, void) {
+    lr_assignment_mode = 0; LOG("HOST_HID_LR_ASSIGNMENT stop");
+}
 HLE_FORCE("_ZN2nn3hid20GetNpadJoyAssignmentERKj", "Joy-Con assignment bookkeeping", uint32_t, h_hid_get_assignment, const uint32_t *id) {
     need_npad("GetNpadJoyAssignment"); return joy_assignment[npad_id(id, "GetNpadJoyAssignment")];
 }
