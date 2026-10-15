@@ -18,3 +18,9 @@ HLE_FORCE("_ZN2nn2oe15SetCpuBoostModeENS0_12CpuBoostModeE","Map loading CPU requ
     if(rc)die("CPU boost QoS request failed %d",rc);
     LOG("HOST_CPU_BOOST mode=%u QoS applied",mode);
 }
+
+// nn::fs::detail::IsEnabledAccessLog(mask) (sdk+0xe7060): when the local target byte matches it asks fsp-srv for the
+// global access-log mode (IFileSystemProxy vtable+0x350). Retail systems report mode 0, so access logging is off;
+// the host has no fsp-srv and answers exactly that. Callers (e.g. SetPriorityOnCurrentThread, sdk+0xd4344) then
+// take their non-logging paths.
+HLE_FORCE("_ZN2nn2fs6detail18IsEnabledAccessLogEj","Global fs access-log mode is 0 (retail): no fsp-srv query",uint32_t,wonder_fs_access_log,unsigned mask){(void)mask;return 0;}

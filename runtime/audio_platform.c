@@ -126,8 +126,9 @@ HLE_FORCE("_ZN2nn5audio6server6detail30GetActiveAudioOutputDeviceNameEPNS0_15Aud
 HLE_FORCE("_ZN2nn5audio6server6detail21GetActiveChannelCountEv", "Built-in speaker output is stereo", int, h_active_channels, void) { return 2; }
 HLE_FORCE("_ZN2nn5audio6server6detail26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEfRKNS_6applet20AppletResourceUserIdEj",
           "Per-device output volume kept by the host", void, h_set_device_volume, const char *name, float volume, const void *aruid, unsigned session) {
+    // AudioDeviceImpl::SetAudioDeviceOutputVolumeInternal (sdk+0x2206ec) clamps to [0, 128] before calling here.
     (void)aruid; (void)session; int i = device_index(name);
-    if (i < 0 || !(volume >= 0.f && volume <= 1.f)) die("audio SetAudioDeviceOutputVolume name=%.32s volume=%f", name, volume);
+    if (i < 0 || !(volume >= 0.f && volume <= 128.f)) die("audio SetAudioDeviceOutputVolume name=%.32s volume=%f", name, volume);
     pthread_mutex_lock(&device_lock); device_volume[i] = volume; pthread_mutex_unlock(&device_lock);
     LOG("HOST_AUDIO_DEVICE_VOLUME %s=%.3f", output_devices[i], volume);
 }

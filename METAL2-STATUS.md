@@ -28,6 +28,7 @@
 - 音频方案（用户选择：先静音实时消耗）：sdk 静态链接了完整 AudioRenderer 栈：客户端、进程内服务端（AudioRendererManagerImpl/AudioRenderSystem/InfoUpdater/CommandGenerator）、DSP 命令处理器（CommandListProcessor）。本构建只有平台层是空实现。round37（待真机）：`CreateAudioRendererManagerByHipc` 转到 sdk 自己的 `ByDfc`（sdk+0x1e0a38 在 executionMode==1 时本就走它）；宿主 DSP：`dsp::SendCommandBuffer` 按 sdk+0x20ccd4 的方式运行原生 CommandListProcessor，`dsp::Wait` 按 5 ms DSP 帧绝对时间节拍；音频设备按 iPhone 扬声器（内置扬声器、立体声、主音量 1.0）作答，设备事件为真实内核事件。最终混音暂留内存，下一步接 iOS 出声。
 - round37 加载器拒绝未被引用的强制接管（GetAudioSystemMasterVolumeSetting 为 sdk 内部直接调用，已移除）。round37b run `E380293E-AE28-4558-B272-396870E242A4`：进程内音频服务端生效（GetAudioRendererWorkBufferSize 通过），OpenAudioRenderer 停在 SVC 0x15 CreateTransferMemory。
 - round38（待真机）：内核实现传输内存 0x15/0x51/0x52：仅支持所有者权限 None，映射时按 16 KiB 宿主页搬移内容，解除时搬回；按 Horizon 规则拒绝堆已用部分和 alias 区（返回 0xd401 让 SDK 换随机地址），另外接受堆区未用尾部，SetHeapSize 不允许扩到传输映射上。句柄表新增通用宿主对象类型。
+- round38 run `E77572E4-3904-4DEC-BE04-1B7C275BAA93`：MapTransferMemory 权限须等于所有者权限（None），已修正。round39 run `4E225EA1-E27A-44DD-B7A4-B3434AE625BF`：音频渲染器打开，4.3 MB 工作内存映射成功；游戏设置设备音量（扬声器 2.0，服务端本就钳到 [0,128]，校验已改）；另一线程的 `fs::SetPriorityOnCurrentThread` 经 `IsEnabledAccessLog` 查询 fsp-srv 全局访问日志模式，按零售默认 0 接管。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
