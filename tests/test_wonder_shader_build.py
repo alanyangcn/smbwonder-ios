@@ -1,0 +1,77 @@
+"""Offline shader build from a draw census: keys, facts, reflection lines, MSL 2.1 flags.
+Pure helpers always run; the end-to-end build needs work/ tools and a census (WONDER_CENSUS or round53)."""
+from pathlib import Path
+import importlib.util, json, os, tempfile, unittest
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('wonder_shader_build', ROOT / 'tools/wonder_shader_build.py')
+build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
+CENSUS = Path(os.environ.get('WONDER_CENSUS', ROOT / 'work/analysis/first-frame-round53/Documents/DrawCensus'))
+TOOLS = (ROOT / 'work/tools/wonder_xlate/wonder_xlate').exists() and (ROOT / 'work/tools/spirv-cross/spirv-cross').exists()
+
+class PureHelpers(unittest.TestCase):
+    def test_format_component_types(self):
+        self.assertEqual(build.component_type(41), 'float')   # RGBA16F (round53 vertex attribute)
+        self.assertEqual(build.component_type(37), 'float')   # RGBA8 (render target)
+        self.assertEqual(build.component_type(39), 'uint')    # RGBA8UI
+        self.assertEqual(build.component_type(40), 'sint')    # RGBA8I
+        with self.assertRaises(ValueError): build.component_type(0)
+    def test_texture_slot_from_handle(self):
+        self.assertEqual(build.texture_slot(8, -1), 0)        # word 8 = c[2] byte 0x20 = slot 0
+        self.assertEqual(build.texture_slot(10, 2), 1)
+        for bad in (7, 9, 0x48):                               # below the table, unaligned, past slot 31
+            with self.assertRaises(ValueError): build.texture_slot(bad, -1)
+        with self.assertRaises(ValueError): build.texture_slot(8, 3)   # handle from another constant buffer
+    def test_constant_buffer_kinds(self):
+        self.assertEqual(build.cbuf_kind(3), ('cbuf', 0))
+        self.assertEqual(build.cbuf_kind(16), ('cbuf', 13))
+        self.assertEqual(build.cbuf_kind(1), ('c1', None))
+        self.assertEqual(build.cbuf_kind(0), ('drv', 0))
+        self.assertEqual(build.cbuf_kind(2), ('drv', 2))
+        with self.assertRaises(ValueError): build.cbuf_kind(17)
+    def test_texture_target_names(self):
+        self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
+
+@unittest.skipUnless(TOOLS and (CENSUS / 'draw.json').exists(), 'needs work/ translator, spirv-cross and a draw census')
+class CensusBuild(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory(); cls.out = Path(cls.tmp.name)
+        build.build([CENSUS], cls.out)
+        cls.census = json.loads((CENSUS / 'draw.json').read_text())
+        cls.manifest = json.loads((cls.out / 'manifest.json').read_text())
+        cls.keys = {s['name']: s['key'] for s in cls.census['program']['stages']}
+    @classmethod
+    def tearDownClass(cls): cls.tmp.cleanup()
+    def refl(self, stage): return (self.out / f"{self.keys[stage]}.refl").read_text().splitlines()
+    def test_keys_match_census(self):
+        self.assertEqual(set(self.manifest['keys']), set(self.keys.values()))
+        for name, key in self.keys.items():
+            self.assertTrue((self.out / f'{key}.metal').exists())
+            self.assertEqual(self.manifest['keys'][key]['stage'], {'vs': 'vs', 'fs': 'ps'}[name])
+    def test_texture_slots_within_census(self):
+        bound = {(t['stage'], t['index']) for t in self.census['textures'] if t['texture']}
+        for name, stage in (('vs', 0), ('fs', 1)):
+            for line in self.refl(name):
+                if line.startswith('tex '): self.assertIn((stage, int(line.split()[1])), bound)
+        self.assertIn('tex 0 1 1 2d', self.refl('fs'))
+    def test_buffer_slots_disjoint_below_16(self):
+        for name in self.keys:
+            used = [int(l.split()[2]) for l in self.refl(name) if l.split()[0] in ('cbuf', 'c1')] + \
+                   [int(l.split()[1]) for l in self.refl(name) if l.startswith('support ')]
+            self.assertEqual(len(used), len(set(used))); self.assertTrue(all(0 <= b < 16 for b in used))
+        self.assertIn('cbuf 0 1', self.refl('vs'))
+    def test_vertex_attr_types_from_census(self):
+        jobs = json.loads((self.out / 'jobs.json').read_text())
+        vs = next(j for j in jobs if j['key'] == self.keys['vs'])
+        self.assertEqual(vs['attr'], {'0': 'float'}); self.assertTrue(vs['depth_minus_one'])
+        self.assertIn('attr 0 0 float', self.refl('vs')); self.assertIn('fout 0 float', self.refl('fs'))
+    def test_msl_21_flags(self):
+        for flag in ('--msl-ios', '--msl-version', '20100', '--msl-decoration-binding'): self.assertIn(flag, self.manifest['spirv_cross_command'])
+        self.assertIn('gl_Position.z = fma(', (self.out / f"{self.keys['vs']}.metal").read_text())
+    def test_manifest_hashes(self):
+        import hashlib
+        for key, entry in self.manifest['keys'].items():
+            self.assertEqual(entry['msl_sha256'], hashlib.sha256((self.out / f'{key}.metal').read_bytes()).hexdigest())
+            self.assertEqual(entry['refl_sha256'], hashlib.sha256((self.out / f'{key}.refl').read_bytes()).hexdigest())
+
+if __name__ == '__main__': unittest.main()

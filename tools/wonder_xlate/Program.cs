@@ -1,5 +1,5 @@
-// Wonder copy of vendor/d2r-mobile/dm/gfx/tools/dmsh_xlate/Program.cs (D2R). Change: job field "depth_minus_one"
-// (Wonder sets NVN NEAR_IS_MINUS_W) turns on Ryujinx's vertex depth remap; everything else is D2R's translator unchanged.
+// Wonder copy of vendor/d2r-mobile/dm/gfx/tools/dmsh_xlate/Program.cs (D2R). Changes: job field "depth_minus_one"
+// (Wonder sets NVN NEAR_IS_MINUS_W) turns on Ryujinx's vertex depth remap; the c[2] texture handle table starts at 0x20.
 // Switch 原版着色器（Maxwell 机器码）→ SPIR-V（Ryujinx.Graphics.Shader 翻译器），供 B 路线离线出 metallib。
 // 与 Ryujinx.ShaderTools 的区别：翻译器的「查询」按真实情况作答，而不是一律缺省值——
 //   贴图类型 / 图像格式 / 顶点属性类型 / 片元输出类型 / 计算线程组大小取自作业文件（由映射表配对的 PC 反射给出，同槽号 = 同资源）；
@@ -30,7 +30,9 @@ using System.Text.Json.Nodes;
 
 static class SwshXlate
 {
-    const int TexBase = 0x168, SampBase = 0x568;   // NVN 分离贴图 / 采样器句柄在 c[2] 的字节基址（每槽 8 字节；dm/gfx/tools/maxwell_refs.py 全量实测） | byte base of NVN separate texture / sampler handles in c[2] (8 bytes per slot; full measurement in dm/gfx/tools/maxwell_refs.py)
+    // Wonder SDK: nvnCommandBufferBindTexture (sdk+0x468840) writes texture slot r's combined handle at c[2][0x20 + 8r]
+    // (32 slots, table ends at 0x120). D2R's SDK used 0x168 / separate samplers at 0x568; Wonder binds combined handles.
+    const int TexBase = 0x20, SampBase = 0x120;
 
     sealed class Accessor : IGpuAccessor
     {
