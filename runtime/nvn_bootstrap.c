@@ -84,6 +84,17 @@ void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_pro
     if (fflush(manifest) || fsync(fileno(manifest))) ok = 0; if (fclose(manifest)) ok = 0;
     LOG("NVN_SHADER_CAPTURE pid=%d stages=%u complete=%d directory=Documents/ShaderCapture", getpid(), count, ok);
 }
+// First-draw census sink (nvn_draw_census.h): Documents/DrawCensus/<name>, fsynced.
+int wonder_host_census_write(const char *name, const void *data, size_t size) {
+    const char *home = getenv("HOME"); char directory[1024];
+    if (!home || snprintf(directory, sizeof directory, "%s/Documents/DrawCensus", home) >= (int)sizeof directory) return -1;
+    if (mkdir(directory, 0700) && errno != EEXIST) return -1;
+    char path[1200]; if (snprintf(path, sizeof path, "%s/%s", directory, name) >= (int)sizeof path) return -1;
+    FILE *f = fopen(path, "wb"); if (!f) return -1;
+    int ok = fwrite(data, 1, size, f) == size; if (fflush(f) || fsync(fileno(f))) ok = 0; if (fclose(f)) ok = 0;
+    if (ok) LOG("NVN_DRAW_CENSUS wrote Documents/DrawCensus/%s (%zu bytes)", name, size);
+    return ok ? 0 : -1;
+}
 // frame[0]=x29 frame[1]=x30 (guest return address) frame[2..9]=x0..x7, saved by nvn_unimpl.S.
 _Noreturn void wonder_nvn_unimplemented(unsigned index, const uint64_t *frame) {
     if (index >= WONDER_NVN_NAME_COUNT) die("NVN thunk index %u out of range", index);

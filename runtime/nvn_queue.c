@@ -4,6 +4,7 @@
 // copies/downsamples/clears, non-timestamp counters (TIMESTAMP and TIMESTAMP_TOP run), conditional rendering: replay stops by name before any
 // of them is skipped or faked. Host backend: host_graphics.m (device) or the test harness.
 #include "nvn_commands.h"
+#include "nvn_draw_census.h"
 #include "nvn_fmt_mtl.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -19,6 +20,8 @@ struct replay_state {
     unsigned submits, commands, clears;
 };
 static struct replay_state state = {.render_enable = 1};
+// Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
+static struct wonder_nvn_draw_state draw_state;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
 static _Atomic(pthread_t *) replay_owner;
@@ -71,6 +74,17 @@ static void host_span(uint64_t address, uint64_t size, unsigned opcode, void **b
     *buffer = view.host_buffer; *offset = view.host_offset;
 }
 
+// Draws stop until shaders are translated; the first draw with a program writes the census the offline build needs.
+_Noreturn static void draw_stop(unsigned opcode, struct wonder_nvn_draw_call d) {
+    d.name = wonder_nvn_command_name(opcode);
+    for (int i = 0; i <= state.color_count && i < 9; i++) draw_state.targets[i] = state.targets[i];
+    draw_state.color_count = state.color_count; draw_state.has_targets = state.has_targets;
+    memcpy(draw_state.viewport, state.viewport, sizeof state.viewport); draw_state.viewport_set = state.viewport_set;
+    memcpy(draw_state.scissor, state.scissor, sizeof state.scissor); draw_state.scissor_set = state.scissor_set;
+    char summary[160]; wonder_nvn_draw_census(&draw_state, &d, summary, sizeof summary);
+    char why[256]; snprintf(why, sizeof why, "draw execution needs translated shaders and PSOs; %s", summary);
+    replay_stop(opcode, why);
+}
 static void replay_visit(unsigned opcode, const void *payload, size_t size, void *context);
 static void replay_handle(uint64_t handle, unsigned depth) {
     if (depth > 8) wonder_nvn_stop("NVN_INVALID_COMMAND CallCommands nesting deeper than 8");
@@ -78,7 +92,10 @@ static void replay_handle(uint64_t handle, unsigned depth) {
 }
 static void replay_visit(unsigned opcode, const void *payload, size_t size, void *context) {
     (void)size; state.commands++;
-    if (opcode == WONDER_NVN_DRAW_ELEMENTS) replay_stop(opcode, "draw execution needs translated shaders and PSOs");
+    if (opcode == WONDER_NVN_DRAW_ELEMENTS) {
+        const struct wonder_nvn_draw_elements *e = payload;
+        draw_stop(opcode, (struct wonder_nvn_draw_call){.primitive = e->primitive, .index_type = e->index_type, .count = e->count, .instances = 1, .index_address = e->index_address});
+    }
     const struct wonder_nvn_cmd *c = payload; const uint8_t *blob = wonder_nvn_cmd_blob(c);
     switch (opcode) {
     case WONDER_NVN_CMD_CALL_COMMANDS: {
@@ -163,17 +180,39 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         break;
     }
     case WONDER_NVN_CMD_RESET_COUNTER: replay_stop(opcode, "counter reset (occlusion/statistics counters not implemented)");
-    // Pure state: retained for draws (which stop until shaders are translated).
-    case WONDER_NVN_CMD_BIND_BLEND: case WONDER_NVN_CMD_BIND_CHANNEL_MASK: case WONDER_NVN_CMD_BIND_COLOR:
-    case WONDER_NVN_CMD_BIND_DEPTH_STENCIL: case WONDER_NVN_CMD_BIND_MULTISAMPLE: case WONDER_NVN_CMD_BIND_POLYGON:
-    case WONDER_NVN_CMD_BIND_VERTEX_ATTRIB: case WONDER_NVN_CMD_BIND_VERTEX_STREAM: case WONDER_NVN_CMD_BIND_PROGRAM:
-    case WONDER_NVN_CMD_BIND_VERTEX_BUFFER: case WONDER_NVN_CMD_BIND_UNIFORM_BUFFER: case WONDER_NVN_CMD_BIND_STORAGE_BUFFER:
-    case WONDER_NVN_CMD_BIND_TEXTURE: case WONDER_NVN_CMD_BIND_TEXTURES: case WONDER_NVN_CMD_BIND_IMAGE:
+    // Draw state (snapshotted at record time; kept for draws and the census).
+    case WONDER_NVN_CMD_BIND_PROGRAM:
+        draw_state.has_program = c->a[1] != 0;
+        memcpy(&draw_state.program, blob, sizeof draw_state.program);
+        break;
+    case WONDER_NVN_CMD_BIND_VERTEX_ATTRIB:
+        draw_state.nattrib = (int)c->a[0]; memcpy(draw_state.attrib, blob, (size_t)draw_state.nattrib * 4); break;
+    case WONDER_NVN_CMD_BIND_VERTEX_STREAM:
+        draw_state.nstream = (int)c->a[0]; memcpy(draw_state.stream, blob, (size_t)draw_state.nstream * 8); break;
+    case WONDER_NVN_CMD_BIND_VERTEX_BUFFER:
+        draw_state.vertex_buffer[c->a[0]].address = c->a[1]; draw_state.vertex_buffer[c->a[0]].size = c->a[2]; break;
+    case WONDER_NVN_CMD_BIND_UNIFORM_BUFFER:
+        draw_state.uniform_buffer[c->a[0]][c->a[1]].address = c->a[2]; draw_state.uniform_buffer[c->a[0]][c->a[1]].size = c->a[3]; break;
+    case WONDER_NVN_CMD_BIND_TEXTURE: draw_state.texture_handle[c->a[0]][c->a[1]] = c->a[2]; break;
+    case WONDER_NVN_CMD_BIND_TEXTURES: memcpy(&draw_state.texture_handle[c->a[0]][c->a[1]], blob, c->a[2] * 8); break;
+    case WONDER_NVN_CMD_SET_TEXTURE_POOL: draw_state.texture_pool = (const void *)(uintptr_t)c->a[0]; break;
+    case WONDER_NVN_CMD_SET_SAMPLER_POOL: draw_state.sampler_pool = (const void *)(uintptr_t)c->a[0]; break;
+    case WONDER_NVN_CMD_BIND_BLEND: {
+        wonder_nvn_blend_state b; memcpy(&b, blob, sizeof b);
+        draw_state.blend[b.target] = b; draw_state.blend_set |= (uint8_t)(1u << b.target); break;
+    }
+    case WONDER_NVN_CMD_BIND_COLOR: memcpy(&draw_state.color, blob, sizeof draw_state.color); draw_state.states_set |= 1; break;
+    case WONDER_NVN_CMD_BIND_CHANNEL_MASK: memcpy(&draw_state.channel_mask, blob, sizeof draw_state.channel_mask); draw_state.states_set |= 2; break;
+    case WONDER_NVN_CMD_BIND_DEPTH_STENCIL: memcpy(&draw_state.depth_stencil, blob, sizeof draw_state.depth_stencil); draw_state.states_set |= 4; break;
+    case WONDER_NVN_CMD_BIND_POLYGON: memcpy(&draw_state.polygon, blob, sizeof draw_state.polygon); draw_state.states_set |= 8; break;
+    case WONDER_NVN_CMD_BIND_MULTISAMPLE: memcpy(&draw_state.multisample, blob, sizeof draw_state.multisample); draw_state.states_set |= 16; break;
+    // Pure state not consumed by the first draw yet.
+    case WONDER_NVN_CMD_BIND_STORAGE_BUFFER: case WONDER_NVN_CMD_BIND_IMAGE:
     case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_BLEND_COLOR: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
     case WONDER_NVN_CMD_SET_DEPTH_BOUNDS: case WONDER_NVN_CMD_SET_DEPTH_CLAMP: case WONDER_NVN_CMD_SET_DEPTH_RANGES:
     case WONDER_NVN_CMD_SET_LINE_WIDTH: case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
     case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP: case WONDER_NVN_CMD_SET_PRIMITIVE_RESTART: case WONDER_NVN_CMD_SET_RASTERIZER_DISCARD:
-    case WONDER_NVN_CMD_SET_SAMPLE_MASK: case WONDER_NVN_CMD_SET_SAMPLER_POOL: case WONDER_NVN_CMD_SET_TEXTURE_POOL:
+    case WONDER_NVN_CMD_SET_SAMPLE_MASK:
     case WONDER_NVN_CMD_SET_SHADER_SCRATCH: case WONDER_NVN_CMD_SET_STENCIL_MASK: case WONDER_NVN_CMD_SET_STENCIL_REF:
     case WONDER_NVN_CMD_SET_STENCIL_VALUE_MASK:
         break;
@@ -182,9 +221,20 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_SET_COLOR_REDUCTION_ENABLE: case WONDER_NVN_CMD_SET_COLOR_REDUCTION_THRESHOLDS: case WONDER_NVN_CMD_BARRIER:
         break;
     case WONDER_NVN_CMD_DRAW_ARRAYS: case WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED: case WONDER_NVN_CMD_DRAW_ELEMENTS_BASE_VERTEX:
-    case WONDER_NVN_CMD_DRAW_ELEMENTS_INDIRECT: case WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED:
+    case WONDER_NVN_CMD_DRAW_ELEMENTS_INDIRECT: case WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED: {
         if (!state.render_enable) break;
-        replay_stop(opcode, "draw execution needs translated shaders and PSOs");
+        struct wonder_nvn_draw_call d = {.primitive = (int)c->a[0], .instances = 1};
+        if (opcode == WONDER_NVN_CMD_DRAW_ARRAYS || opcode == WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED) {
+            d.index_type = -1; d.first = (int)c->a[1]; d.count = (int)c->a[2];
+            if (opcode == WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED) { d.base_instance = (int)c->a[3]; d.instances = (int)c->a[4]; }
+        } else if (opcode == WONDER_NVN_CMD_DRAW_ELEMENTS_INDIRECT) {
+            d.index_type = (int)c->a[1]; d.index_address = c->a[2]; d.indirect_address = c->a[3];
+        } else {
+            d.index_type = (int)c->a[1]; d.count = (int)c->a[2]; d.index_address = c->a[3]; d.base_vertex = (int)(int64_t)c->a[4];
+            if (opcode == WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED) { d.base_instance = (int)c->a[5]; d.instances = (int)c->a[6]; }
+        }
+        draw_stop(opcode, d);
+    }
     case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT:
         replay_stop(opcode, "compute execution needs translated shaders");
     case WONDER_NVN_CMD_CLEAR_TEXTURE: case WONDER_NVN_CMD_COPY_TEXTURE_TO_BUFFER: case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE:

@@ -2,17 +2,11 @@
 // Layouts follow D2R dm/gfx/nvn/nvn_obj.h; defaults follow NVN/GL. Enum ranges are validated (stop on misuse).
 // NVNboolean parameters arrive in w0..; only the low 8 bits are meaningful (Switch callers do not extend).
 #include "nvn_device.h"
+#include "nvn_state.h"
 #include <string.h>
-typedef struct { uint64_t target : 3, src_rgb : 7, dst_rgb : 7, src_a : 7, dst_a : 7, eq_rgb : 3, eq_a : 3; } blend_st;   // NVNblendState 8
-typedef struct { uint32_t blend_en : 8, logic_op : 4, alpha_func : 4, alpha_ref_bits : 16; } color_st;                       // 4 bytes
-typedef struct { uint32_t mask; } chmask_st;                                                                                  // 4
-typedef struct { uint8_t enable, samples, a2c, a2c_dither, raster_samples, cov_mod, cov2color_en, cov2color_out, sl_en, sl_grid; } ms_st;   // 0x18
-typedef struct { uint32_t cull : 2, front : 1, mode : 2, offset_en : 3; } poly_st;                                            // 4
-typedef struct { uint64_t dt : 1, dw : 1, df : 4, st : 1, sf_f : 4, sf_b : 4, fail_f : 4, zfail_f : 4, zpass_f : 4, fail_b : 4, zfail_b : 4, zpass_b : 4; } ds_st;   // 8
-typedef struct { uint32_t fmt : 8, offset : 19, stream : 5; } va_st;                                                          // 4
-typedef struct { uint32_t stride, divisor; } vs_st;                                                                           // 8
-_Static_assert(sizeof(blend_st) <= 8 && sizeof(color_st) <= 4 && sizeof(chmask_st) <= 4 && sizeof(ms_st) <= 0x18 &&
-               sizeof(poly_st) <= 4 && sizeof(ds_st) <= 8 && sizeof(va_st) <= 4 && sizeof(vs_st) <= 8, "NVN state reserved sizes");
+typedef wonder_nvn_blend_state blend_st; typedef wonder_nvn_color_state color_st; typedef wonder_nvn_channel_mask_state chmask_st;
+typedef wonder_nvn_multisample_state ms_st; typedef wonder_nvn_polygon_state poly_st; typedef wonder_nvn_depth_stencil_state ds_st;
+typedef wonder_nvn_vertex_attrib_state va_st; typedef wonder_nvn_vertex_stream_state vs_st;
 #define B(x) (((unsigned)(x) & 0xff) != 0)
 static void need(const void *p, const char *who) { if (!p) wonder_nvn_stop("NVN_INVALID_OBJECT %s state=NULL", who); }
 static int range(int v, int lo, int hi, const char *who) { if (v < lo || v > hi) wonder_nvn_stop("NVN_INVALID_ARGUMENT %s value=%d", who, v); return v; }

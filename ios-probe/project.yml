@@ -42,6 +42,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/online_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/ngc_service.c'
       - path: '${SMBW_REFERENCE}/runtime/ngc_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/nvn_draw_census.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_service.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/os_hooks.c'

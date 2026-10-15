@@ -104,16 +104,19 @@ int wonder_nvn_info(int what) { return info(what); }
 const void *wonder_nvn_device_check(const void *p, const char *who) { return device_of(p, who); }
 
 // ---------- Device state (main+0x984e90 / 0x984ea4) ----------
+// Wonder creates one device; the replay reads the modes it set (-1 = never set, NVN defaults apply).
+static _Atomic int last_window_origin = -1, last_depth_mode = -1;
+void wonder_nvn_device_modes(int *depth_mode, int *window_origin) { *depth_mode = atomic_load(&last_depth_mode); *window_origin = atomic_load(&last_window_origin); }
 void wonder_nvnDeviceSetWindowOriginMode(void *device, int mode) {
     struct device *d = (struct device *)device_of(device, "nvnDeviceSetWindowOriginMode");
     if (mode != 0 && mode != 1) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceSetWindowOriginMode mode=%d", mode);
-    d->window_origin = mode;
+    d->window_origin = mode; atomic_store(&last_window_origin, mode);
     wonder_nvn_report("NVN_CALL nvnDeviceSetWindowOriginMode %s", mode ? "UPPER_LEFT (matches Metal)" : "LOWER_LEFT (GL; host must flip)");
 }
 void wonder_nvnDeviceSetDepthMode(void *device, int mode) {
     struct device *d = (struct device *)device_of(device, "nvnDeviceSetDepthMode");
     if (mode != 0 && mode != 1) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceSetDepthMode mode=%d", mode);
-    d->depth_mode = mode;
+    d->depth_mode = mode; atomic_store(&last_depth_mode, mode);
     wonder_nvn_report("NVN_CALL nvnDeviceSetDepthMode %s", mode ? "NEAR_IS_ZERO (matches Metal)" : "NEAR_IS_MINUS_W (GL; host must remap)");
 }
 

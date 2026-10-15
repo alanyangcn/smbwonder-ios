@@ -10,10 +10,22 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <CommonCrypto/CommonDigest.h>
 static jmp_buf stopped; static char last_stop[512]; static int host_ready, expecting_stop;
 void wonder_nvn_report(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stdout, format, a); va_end(a); fputc('\n', stdout); }
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vsnprintf(last_stop, sizeof last_stop, format, a); va_end(a); if (!expecting_stop) { fprintf(stderr, "unexpected stop: %s\n", last_stop); abort(); } longjmp(stopped, 1); }
 static void *last_labeled_resource; static const char *last_resource_label;
+// Draw census sink (Documents/DrawCensus on device): files kept in memory for assertions.
+static struct { char name[64]; unsigned char *data; size_t size; } census_files[16]; static unsigned census_count;
+int wonder_host_census_write(const char *name, const void *data, size_t size) {
+    assert(census_count < 16); snprintf(census_files[census_count].name, 64, "%s", name);
+    census_files[census_count].data = malloc(size ? size : 1); memcpy(census_files[census_count].data, data, size);
+    census_files[census_count++].size = size; return 0;
+}
+static const unsigned char *census_file(const char *name, size_t *size) {
+    for (unsigned i = 0; i < census_count; i++) if (!strcmp(census_files[i].name, name)) { *size = census_files[i].size; return census_files[i].data; }
+    return NULL;
+}
 void wonder_host_resource_label(void *resource, const char *label) {last_labeled_resource=resource;last_resource_label=label;}
 int wonder_host_driver_ready(void) { return host_ready; }
 static int buffers, host_textures; static const void *native_layer = (const void *)0x281b8a400;
@@ -712,6 +724,57 @@ int main(void) {
         stages[1].control = bad_control; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_UNSUPPORTED");
         stages[1].control = fs_control + 4; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_INVALID_ARGUMENT");
         stages[1].code = UINT64_C(0x10); stages[1].control = fs_control; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_INVALID_ADDRESS");
+        // ---- First-draw census: everything the offline shader build needs, written before the draw stops ----
+        {
+            assert(census_count == 0);   // the program-less DrawArrays above did not consume the census
+            uint32_t length = 0x100; memcpy(vs_control + 0x704, &length, 4); memcpy(fs_control + 0x704, &length, 4);
+            for (unsigned i = 0; i < 0x200; i++) cb_memory[0x100 + i] = (unsigned char)(i * 7 + 1);
+            stages[0].code = code; stages[0].control = vs_control; stages[1].code = code + 0x100; stages[1].control = fs_control;
+            assert(set_shaders(program_memory, 2, stages) == 1);
+            static _Alignas(16) unsigned char dcb[0xa0]; static _Alignas(8) unsigned char dctl[512];
+            assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(dcb, device) == 1);
+            ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(dcb, dctl, sizeof dctl);
+            ((void (*)(void *, const void *, ptrdiff_t, size_t))slot("nvnCommandBufferAddCommandMemory"))(dcb, cb_pool, 0xe000, 0x1000);
+            unsigned char attrib[4], stream[8];
+            ((void (*)(void *))slot("nvnVertexAttribStateSetDefaults"))(attrib);
+            ((void (*)(void *, int, ptrdiff_t))slot("nvnVertexAttribStateSetFormat"))(attrib, 0x2c, 8);
+            ((void (*)(void *))slot("nvnVertexStreamStateSetDefaults"))(stream);
+            ((void (*)(void *, ptrdiff_t))slot("nvnVertexStreamStateSetStride"))(stream, 20);
+            uint64_t handle = ((uint64_t (*)(const void *, int, int))slot("nvnDeviceGetTextureHandle"))(device, 300, 1);
+            ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
+            ((void (*)(void *, const void *))slot("nvnCommandBufferSetTexturePool"))(dcb, texture_pool);
+            ((void (*)(void *, const void *))slot("nvnCommandBufferSetSamplerPool"))(dcb, sampler_pool);
+            ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
+            ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexAttribState"))(dcb, 1, attrib);
+            ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexStreamState"))(dcb, 1, stream);
+            ((void (*)(void *, int, uint64_t, size_t))slot("nvnCommandBufferBindVertexBuffer"))(dcb, 0, (uintptr_t)(cb_memory + 0x9000), 0x100);
+            ((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindUniformBuffer"))(dcb, 1, 3, (uintptr_t)(cb_memory + 0x9100), 0x100);
+            ((void (*)(void *, int, int, uint64_t))slot("nvnCommandBufferBindTexture"))(dcb, 1, 0, handle);
+            ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));
+            uint64_t draw = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb);
+            void (*dsubmit)(void *, int, const uint64_t *) = slot("nvnQueueSubmitCommands");
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "census=DrawCensus");
+            assert(strstr(last_stop, "draw execution needs translated shaders"));
+            unsigned char digest[CC_SHA256_DIGEST_LENGTH]; char key[17];
+            CC_SHA256(vs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key + 2 * i, "%02x", digest[i]);
+            assert(strstr(last_stop, key));
+            size_t n; const unsigned char *bytes = census_file("stage-0.control.bin", &n); assert(bytes && n == 0x880 && !memcmp(bytes, vs_control, 0x880));
+            bytes = census_file("stage-1.code.bin", &n); assert(bytes && n == 0x100 && !memcmp(bytes, cb_memory + 0x200, 0x100));
+            bytes = census_file("draw.json", &n); assert(bytes);
+            char *json = calloc(1, n + 1); memcpy(json, bytes, n);
+            char want[64]; snprintf(want, sizeof want, "\"key\":\"%s\"", key); assert(strstr(json, want));
+            assert(strstr(json, "\"primitive\":4") && strstr(json, "\"index_type\":1") && strstr(json, "\"count\":6"));
+            assert(strstr(json, "\"depth_mode\":") && strstr(json, "\"window_origin\":"));
+            assert(strstr(json, "{\"location\":0,\"format\":44,\"offset\":8,\"stream\":0}"));
+            assert(strstr(json, "\"stride\":20"));
+            assert(strstr(json, "{\"stage\":1,\"index\":3,\"size\":256,\"address\":"));
+            assert(strstr(json, "\"stage\":1,\"index\":0,\"texture_id\":300,\"sampler_id\":1"));
+            assert(strstr(json, "\"width\":128"));
+            free(json);
+            unsigned files = census_count;
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "draw execution needs translated shaders");
+            assert(census_count == files);   // written once per run
+        }
         ((void (*)(void *))slot("nvnProgramFinalize"))(program_memory);
         EXPECT_STOP(wonder_nvn_program_snapshot(program_memory, &shaders), "NVN_INVALID_OBJECT");
         // Device helpers: release-driver debug callback no-op, image handle sxtw, ns timestamps.
