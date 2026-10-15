@@ -212,9 +212,11 @@ static int present_setup(void){
 // (the game sets NVN_WINDOW_ORIGIN_MODE_UPPER_LEFT).
 // Evidence of what reaches the screen: the presented texture is saved as Documents/Present/present-<n>.png for the first
 // 5 presents, then every 60th (at most 20 files), before it is drawn to the drawable.
+// WONDER_PRESENT_EVERY=<n> (diagnostic) changes the period and allows 60 files, for animations and loops.
 static void capture_present(id<MTLTexture> t){
- static unsigned presents, saved; unsigned n=++presents;
- if(saved>=20||!(n<=5||n%60==0)) return;
+ static unsigned presents, saved, every, limit; unsigned n=++presents;
+ if(!every){ const char *e=getenv("WONDER_PRESENT_EVERY"); every=e&&atoi(e)>0?(unsigned)atoi(e):60; limit=e?60:20; }
+ if(saved>=limit||!(n<=5||n%every==0)) return;
  NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
  [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
  if(!wonder_host_readback_png((__bridge void*)t,0,0,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]].fileSystemRepresentation)) saved++;
