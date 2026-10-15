@@ -93,6 +93,7 @@ void wonder_host_resource_label(void *resource, const char *label);
 
 // Lifetime helpers (host_graphics.m on device, the test harness on the host).
 void wonder_host_release(void *resource);
+void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash);   // since the previous call (nvn_queue.c)
 void wonder_host_texture_forget(uint64_t serial);   // nvnTextureFinalize: release host GPU textures made for this serial
 void wonder_host_unreserve(void *memory, size_t size);
 const void *wonder_nvn_queue_check(const void *queue, const char *who);

@@ -22,6 +22,14 @@ struct replay_state {
     unsigned submits, commands, clears;
 };
 static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.0f}};
+// Per-present summary (diagnostic: compares good and bad frames): draws encoded since the last present, their
+// program/count sequence hash, and clears.
+static _Atomic unsigned frame_draws; static _Atomic uint64_t frame_hash = 1469598103934665603ull;
+void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash) {
+    static unsigned clears_at_last; unsigned c = state.clears;
+    *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
+    *clears = c - clears_at_last; clears_at_last = c;
+}
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
 // UpdateUniformBuffer ranges recorded since the replay last finished the GPU (GPU-ordered writes the CPU cannot see yet,
@@ -273,6 +281,9 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     if (!first_draw_captured && !first_draw_pending)
         for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
     submit_draws++;
+    { uint64_t h = atomic_load(&frame_hash); for (const char *k = d.vs_key; *k; k++) h = (h ^ (uint8_t)*k) * 1099511628211ull;
+      for (const char *k = d.fs_key; *k; k++) h = (h ^ (uint8_t)*k) * 1099511628211ull;
+      h = (h ^ (uint32_t)call.count) * 1099511628211ull; atomic_store(&frame_hash, h); atomic_fetch_add(&frame_draws, 1); }
     { char pair[24]; snprintf(pair, sizeof pair, "%.8s-%.8s", d.vs_key, d.fs_key); size_t used = strlen(submit_programs);
       if (!strstr(submit_programs, pair) && used + strlen(pair) + 2 < sizeof submit_programs) snprintf(submit_programs + used, sizeof submit_programs - used, "%s%s", used ? "," : "", pair); }
     static _Atomic unsigned logged;

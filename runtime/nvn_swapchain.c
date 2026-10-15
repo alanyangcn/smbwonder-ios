@@ -2,6 +2,7 @@
 // Textures live in nvn_texture.c.
 #include "nvn_device.h"
 #include "nvn_texture.h"
+#include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <time.h>
@@ -145,6 +146,9 @@ void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
     w->presented[index]++; wonder_host_after_gpu(release_texture, (void *)&w->released[index]);   // same command buffer as the present
     if (wonder_host_present(t->host, crop, w->interval)) wonder_nvn_stop("NVN_HOST_PRESENT_FAILED nvnQueuePresentTexture index=%d", index);
     w->acquired &= ~(1ull << index); w->presents++;
+    { static int every = -1; if (every < 0) { const char *e = getenv("WONDER_PRESENT_EVERY"); every = e ? atoi(e) : 0; }
+      if (every > 0) { unsigned draws, clears; uint64_t hash; wonder_nvn_frame_summary(&draws, &clears, &hash);
+          wonder_nvn_report("NVN_FRAME present=%u index=%d draws=%u clears=%u hash=%016llx", w->presents, index, draws, clears, (unsigned long long)hash); } }
     if (w->presents <= 8 || w->presents % 600 == 0)
         wonder_nvn_report("NVN_PRESENT window=%p index=%d present=%u crop=%d,%d %dx%d interval=%d", window, index, w->presents, crop[0], crop[1], crop[2], crop[3], w->interval);
 }
