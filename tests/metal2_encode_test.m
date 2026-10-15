@@ -51,6 +51,20 @@ int main(int argc, char **argv) {
         queue = [device newCommandQueue]; targets = [NSMutableDictionary dictionary];
         wonder_host_draw_set_device((__bridge void *)device);
         const char *mode = argc > 1 ? argv[1] : "draw";
+        // Render target descriptors by NVN target: 2D, 2D array, rectangle, cube and cube array (depth = layer-faces).
+        {
+            nvn_texdesc c = {.target = 8, .format = 0x3f, .width = 128, .height = 128, .depth = 6, .levels = 8};
+            MTLTextureDescriptor *x = wonder_host_render_target_descriptor(&c, MTLPixelFormatRG11B10Float);
+            assert(x && x.textureType == MTLTextureTypeCube && x.mipmapLevelCount == 8 && x.arrayLength == 1);
+            c.target = 9; c.depth = 12; x = wonder_host_render_target_descriptor(&c, MTLPixelFormatRG11B10Float);
+            assert(x && x.textureType == MTLTextureTypeCubeArray && x.arrayLength == 2);
+            c.target = 4; c.depth = 3; x = wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm);
+            assert(x && x.textureType == MTLTextureType2DArray && x.arrayLength == 3);
+            c.target = 2; assert(!wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm));   // 3D: not a render target here
+            c.target = 9; c.depth = 7; assert(!wonder_host_render_target_descriptor(&c, MTLPixelFormatRGBA8Unorm));   // not whole cubes
+            id<MTLTexture> cube = [device newTextureWithDescriptor:wonder_host_render_target_descriptor(&(nvn_texdesc){.target = 8, .format = 0x25, .width = 4, .height = 4, .depth = 6, .levels = 1}, MTLPixelFormatRGBA8Unorm)];
+            assert(cube && cube.textureType == MTLTextureTypeCube);
+        }
         // Vertex format table: NVN format -> MTLVertexFormat.
         assert(wonder_host_vertex_format(0x2E) == MTLVertexFormatFloat4 && wonder_host_vertex_format(0x16) == MTLVertexFormatFloat2);
         assert(wonder_host_vertex_format(0x29) == MTLVertexFormatHalf4 && wonder_host_vertex_format(0x25) == MTLVertexFormatUChar4Normalized);

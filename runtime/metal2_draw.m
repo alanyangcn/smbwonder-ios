@@ -147,7 +147,8 @@ static MTLPixelFormat attachment_format(const struct wonder_host_draw *d, const 
     return (MTLPixelFormat)mtl;
 }
 static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct wonder_nvn_texture_snapshot *s, int depth, int *level, int *slice) {
-    if (s->texture.desc.target != 1 && s->texture.desc.target != 4 && s->texture.desc.target != 7) unsupported(d, "render target texture target", s->texture.desc.target);
+    int target = s->texture.desc.target;
+    if (target != 1 && target != 4 && target != 7 && target != 8 && target != 9) unsupported(d, "render target texture target", target);
     *level = s->has_view && s->view.set_levels ? s->view.base_level : 0; *slice = s->has_view && s->view.set_layers ? s->view.min_layer : 0;
     id<MTLTexture> t = (__bridge id<MTLTexture>)wonder_host_render_target(&s->texture, (uint32_t)attachment_format(d, &s->texture, depth));
     if (!t) unsupported(d, "render target creation failed for serial", (long)s->texture.serial);
@@ -497,6 +498,20 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     return 0;
 }
 
+MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t, MTLPixelFormat format) {
+    MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+    NSUInteger depth = t->depth ? t->depth : 1;
+    switch (t->target) {
+    case 1: case 7: d.textureType = MTLTextureType2D; break;
+    case 4: d.textureType = MTLTextureType2DArray; d.arrayLength = depth; break;
+    case 8: if (depth != 6 && depth != 1) return nil; d.textureType = MTLTextureTypeCube; break;
+    case 9: if (depth % 6) return nil; d.textureType = MTLTextureTypeCubeArray; d.arrayLength = depth / 6; break;
+    default: return nil;
+    }
+    d.pixelFormat = format; d.width = t->width; d.height = t->height; d.mipmapLevelCount = t->levels ? t->levels : 1;
+    d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
+    return d;
+}
 // ---------- Render target readback (evidence) ----------
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture;

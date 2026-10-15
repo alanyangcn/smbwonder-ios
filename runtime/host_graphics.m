@@ -137,12 +137,8 @@ void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t for
  if(!render_targets) render_targets=[NSMutableDictionary new];
  id<MTLTexture> tex=render_targets[@(t->serial)];
  if(!tex){
-  MTLTextureDescriptor *d=[MTLTextureDescriptor new];
-  d.textureType=t->desc.target==4?MTLTextureType2DArray:MTLTextureType2D; d.pixelFormat=(MTLPixelFormat)format;
-  d.width=t->desc.width; d.height=t->desc.height; d.mipmapLevelCount=t->desc.levels?t->desc.levels:1;
-  if(t->desc.target==4) d.arrayLength=t->desc.depth?t->desc.depth:1;
-  d.usage=MTLTextureUsageRenderTarget|MTLTextureUsageShaderRead|MTLTextureUsagePixelFormatView; d.storageMode=MTLStorageModePrivate;
-  tex=[device newTextureWithDescriptor:d];
+  MTLTextureDescriptor *d=wonder_host_render_target_descriptor(&t->desc,(MTLPixelFormat)format);   // 2D/array/rectangle/cube/cube array
+  tex=d?[device newTextureWithDescriptor:d]:nil;
   if(tex){ tex.label=[NSString stringWithFormat:@"NVN texture %llu %ux%u fmt %#x",(unsigned long long)t->serial,t->desc.width,t->desc.height,t->desc.format]; render_targets[@(t->serial)]=tex; }
  }
  pthread_mutex_unlock(&replay_mutex);
