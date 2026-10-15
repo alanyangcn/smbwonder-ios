@@ -4,6 +4,7 @@
 // copies/downsamples/clears, non-timestamp counters (TIMESTAMP and TIMESTAMP_TOP run), conditional rendering: replay stops by name before any
 // of them is skipped or faked. Host backend: host_graphics.m (device) or the test harness.
 #include "nvn_commands.h"
+#include "nvn_tex.h"
 #include "nvn_draw_census.h"
 #include "host_draw.h"
 #include "nvn_fmt_mtl.h"
@@ -192,6 +193,33 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             for (int i = 0; i < call.count; i++) {
                 uint32_t x = call.index_type == 0 ? v.memory[i] : call.index_type == 1 ? ((const uint16_t *)v.memory)[i] : ((const uint32_t *)v.memory)[i];
                 if (x == (uint32_t)raster.restart_index) { snprintf(why, sizeof why, "primitive restart index %#x appears in a list draw", raster.restart_index); replay_stop(opcode, why); }
+            }
+        }
+    }
+    // Vertex fetch range: NVN bounds each stream by its bound size; Metal would read past the pool's buffer (round62: GPU
+    // address fault). Indices are scanned on the CPU (they are in pool memory) for the highest vertex.
+    if (d.nattr && call.count > 0) {
+        int64_t max_vertex;
+        if (call.index_type >= 0) {
+            struct wonder_nvn_pool_view v; wonder_nvn_address_span(call.index_address, (uint64_t)call.count << call.index_type, &v);
+            uint32_t top = 0;
+            for (int i = 0; i < call.count; i++) {
+                uint32_t x = call.index_type == 0 ? v.memory[i] : call.index_type == 1 ? ((const uint16_t *)v.memory)[i] : ((const uint32_t *)v.memory)[i];
+                if (raster.restart && x == (uint32_t)raster.restart_index) continue;
+                if (x > top) top = x;
+            }
+            max_vertex = (int64_t)top + call.base_vertex;
+        } else max_vertex = (int64_t)call.first + call.count - 1;
+        int64_t max_instance = (int64_t)call.base_instance + (call.instances > 0 ? call.instances - 1 : 0);
+        for (int i = 0; i < d.nattr; i++) {
+            int s = (int)d.attr[i].stream, bw, bh, bytes = nvn_fmt_bpb((int)d.attr[i].format, &bw, &bh);
+            uint32_t stride = d.stream[s].stride, divisor = d.stream[s].divisor;
+            int64_t element = !stride ? 0 : divisor ? max_instance / divisor : max_vertex;
+            uint64_t end = (uint64_t)element * stride + d.attr[i].offset + (uint64_t)(bytes > 0 ? bytes : 1);
+            if (max_vertex < 0 || end > d.stream[s].span.size) {
+                snprintf(why, sizeof why, "vertex fetch past the bound vertex buffer: stream %d element %lld stride %u attribute offset %u ends at %#llx, bound %#zx",
+                         s, (long long)element, stride, d.attr[i].offset, (unsigned long long)end, d.stream[s].span.size);
+                replay_stop(opcode, why);
             }
         }
     }

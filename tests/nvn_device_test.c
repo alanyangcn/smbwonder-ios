@@ -917,6 +917,12 @@ int main(void) {
                          ((void (*)(void *, int, uint64_t, size_t))slot("nvnCommandBufferBindVertexBuffer"))(dcb, 15, (uintptr_t)(cb_memory + 0x9000), 0x100)), "vertex stream 15");
             REVIEW_OK((((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexAttribState"))(dcb, 1, attrib),
                          ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexStreamState"))(dcb, 1, stream)));
+            // Vertex fetch beyond the bound vertex buffer (stream 0: 0x100 bytes, stride 20, attribute RGBA16UI at offset 8):
+            // index 12 reads bytes 248..255 (in range), index 13 reads 268..275 (past the end) -> stop instead of a GPU fault.
+            { uint16_t *ix = (uint16_t *)(cb_memory + 0x9200); uint16_t keep[6]; memcpy(keep, ix, sizeof keep);
+              for (int i = 0; i < 6; i++) ix[i] = 12; REVIEW_OK((void)0);
+              ix[3] = 13; REVIEW_STOP((void)0, "vertex fetch");
+              memcpy(ix, keep, sizeof keep); }
             // Shader texture type must match the bound texture's target (texture 300 is 2D).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_array, strlen(fs_array), &fake_refl[1], err, sizeof err));
