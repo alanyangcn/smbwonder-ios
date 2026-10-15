@@ -525,6 +525,10 @@ static void submit_on_replay_stack(void *arg) {
                         programs, list, state.submits);
     }
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
+    // Diagnostic (WONDER_SUBMIT_SYNC=1): wait for the GPU after every submit, to tell CPU/GPU memory races from
+    // wrong rendering.
+    { static int sync = -1; if (sync < 0) { const char *e = getenv("WONDER_SUBMIT_SYNC"); sync = e && *e == '1'; }
+      if (sync) wonder_host_finish(); }
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
     wonder_host_note_submit(submits);
