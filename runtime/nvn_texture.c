@@ -12,7 +12,7 @@
 #define DEVICE_SET_MARK 0x56454454u      /* SetDevice may precede SetDefaults (main+0x984a4c, 0x77748) */
 #define TEXTURE_MAGIC 0x54584554u        /* "TEXT" */
 struct texture_builder { uint32_t magic, device_mark; const void *device; nvn_texdesc desc; const void *pool; int64_t offset;
-                         uint8_t swizzle[4], depth_stencil_mode, has_layout, layout[8]; };
+                         uint8_t swizzle[4], depth_stencil_mode, has_layout, layout[8]; const void *packaged_data; };
 _Static_assert(sizeof(struct texture_builder) <= WONDER_NVN_TEXTURE_BUILDER_SIZE, "texture builder storage");
 _Static_assert(sizeof(struct wonder_nvn_texture) <= WONDER_NVN_TEXTURE_SIZE, "texture storage");
 _Static_assert(sizeof(struct wonder_nvn_texture_view) <= WONDER_NVN_TEXTURE_VIEW_SIZE, "texture view storage");
@@ -297,8 +297,27 @@ const struct wonder_nvn_texture_registration *wonder_nvn_texture_lookup(const vo
     return r->valid ? r : 0;
 }
 
+// View getters (sdk+0x45bfa0/0x45bfc0/0x45c050): outputs plus whether the field was set.
+static const struct wonder_nvn_texture_view *view_in(const void *v, const char *who) {
+    if (!v) wonder_nvn_stop("NVN_INVALID_OBJECT %s view=NULL", who);
+    return v;
+}
+uint32_t wonder_nvnTextureViewGetLevels(const void *v, int *base, int *count) {
+    const struct wonder_nvn_texture_view *o = view_in(v, "nvnTextureViewGetLevels"); *base = o->base_level; *count = o->levels; return o->set_levels;
+}
+uint32_t wonder_nvnTextureViewGetLayers(const void *v, int *min, int *count) {
+    const struct wonder_nvn_texture_view *o = view_in(v, "nvnTextureViewGetLayers"); *min = o->min_layer; *count = (uint16_t)o->layers; return o->set_layers;
+}
+uint32_t wonder_nvnTextureViewGetTarget(const void *v, int *target) {
+    const struct wonder_nvn_texture_view *o = view_in(v, "nvnTextureViewGetTarget"); *target = o->target; return o->set_target;
+}
+// sdk+0x45be10 only stores the pointer (builder+0x60); Initialize never reads it in this driver.
+void wonder_nvnTextureBuilderSetPackagedTextureData(void *builder, const void *data) {
+    tbuilder_of(builder, "nvnTextureBuilderSetPackagedTextureData")->packaged_data = data;
+}
 const struct wonder_nvn_entry wonder_nvn_texture_entries[] = {
 #define E(n) {#n, (void *)wonder_##n}
+    E(nvnTextureViewGetLevels), E(nvnTextureViewGetLayers), E(nvnTextureViewGetTarget), E(nvnTextureBuilderSetPackagedTextureData),
     E(nvnTextureBuilderSetDevice), E(nvnTextureBuilderSetDefaults), E(nvnTextureBuilderSetSize2D), E(nvnTextureBuilderSetWidth),
     E(nvnTextureBuilderSetHeight), E(nvnTextureBuilderSetDepth), E(nvnTextureBuilderSetLevels), E(nvnTextureBuilderSetTarget),
     E(nvnTextureBuilderSetFormat), E(nvnTextureBuilderSetFlags), E(nvnTextureBuilderGetFlags), E(nvnTextureBuilderSetSamples),

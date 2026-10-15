@@ -66,3 +66,5 @@ void wonder_host_resource_label(void *resource, const char *label) {
  id<MTLResource> object=(__bridge id<MTLResource>)resource;
  object.label=label?[NSString stringWithUTF8String:label]:nil;
 }
+
+void wonder_host_release(void *resource){ if(resource) CFRelease(resource); }

@@ -29,6 +29,11 @@ uint32_t wonder_nvnBufferInitialize(void *, const void *); void wonder_nvnBuffer
 void wonder_nvnCommandBufferSetMemoryCallback(void *, void *);
 int wonder_nvnTextureGetWidth(const void *); void wonder_nvnBlendStateSetBlendFunc(void *, int, int, int, int); void wonder_nvnDepthStencilStateSetDepthFunc(void *, int); void wonder_nvnWindowBuilderSetTextures(void *, int, const void *const *);
 void *wonder_host_pool_buffer(void *memory, size_t size, size_t *offset) { assert(memory && size && offset); *offset = 0; buffers++; return (void *)(uintptr_t)(0xb0000 + buffers); }
+#define EXPECTED_IMPLEMENTED 189
+static unsigned released_resources, captured_programs;
+void wonder_host_release(void *resource) { if (resource) released_resources++; }
+void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
+void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders) { (void)program; (void)shaders; captured_programs++; }
 void *wonder_nvn_unimplemented_thunk(unsigned index) { assert(index < WONDER_NVN_NAME_COUNT); return (void *)(0x100000 + 8 * (uintptr_t)index); }
 #define EXPECT_STOP(expr, text) do { last_stop[0] = 0; expecting_stop = 1; if (!setjmp(stopped)) { expr; assert(!"expected stop: " text); } expecting_stop = 0; assert(strstr(last_stop, text)); } while (0)
 static unsigned char device[WONDER_NVN_DEVICE_SIZE], builder[WONDER_NVN_DEVICE_BUILDER_SIZE];
@@ -54,7 +59,7 @@ int main(void) {
     loader_pass(NULL);
     int thunks = 0;
     for (int i = 0; i < WONDER_NVN_NAME_COUNT; i++) thunks += (uintptr_t)slots[i] == 0x100000 + 8 * (uintptr_t)i;
-    assert(wonder_nvn_implemented_count() == 167 && thunks == WONDER_NVN_NAME_COUNT - 167);
+    assert(wonder_nvn_implemented_count() == EXPECTED_IMPLEMENTED && thunks == WONDER_NVN_NAME_COUNT - EXPECTED_IMPLEMENTED);
     assert(slot("nvnQueueBuilderSetQueuePriority") == wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnQueueBuilderSetQueuePriority")));
 
     // Objects are validated, never assumed.
@@ -383,8 +388,8 @@ int main(void) {
 
     {   // main+0x5de9c: bindless texture handle = texture | sampler << 20.
         uint64_t (*handle)(const void *, int, int) = (uint64_t (*)(const void *, int, int))slot("nvnDeviceGetTextureHandle");
-        assert(handle(device, 5, 3) == (UINT64_C(3) << 20 | 5));
-        assert(handle(device, 0xfffff, 0xfff) == UINT64_C(0xffffffff));
+        assert(handle(device, 5, 3) == (UINT64_C(1) << 32 | UINT64_C(3) << 20 | 5));          // sdk+0x44e150
+        assert(handle(device, 0xfffff, 0xfff) == UINT64_C(0xffffffffffffffff));               // sign-extended
         EXPECT_STOP(handle(device, 1 << 20, 0), "NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle");
         EXPECT_STOP(handle(device, 0, -1), "NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle");
         EXPECT_STOP(handle(builder, 0, 0), "NVN_INVALID_OBJECT");
@@ -524,5 +529,62 @@ int main(void) {
     EXPECT_STOP(map_virtual(phys_pool, 1, &req), "NVN_INVALID_ARGUMENT");                                         // not virtual
     req = (struct mreq){phys_pool, 0x10000, 0x10000, UINT64_C(0xffffffffffff0000), 0x104};
     EXPECT_STOP(map_virtual(virt_pool, 1, &req), "NVN_INVALID_ARGUMENT");
+    // ---- Object lifetime / getters / programs (SDK sdk+0x44dd00.. semantics) ----
+    {
+        static _Alignas(8) unsigned char vs_control[0x880], fs_control[0x880], bad_control[0x880];
+        uint32_t magic = 0x98761234u, stage_vs = 0, stage_fs = 1, stage_bad = 6;
+        memcpy(vs_control, &magic, 4); memcpy(vs_control + 0x714, &stage_vs, 4);
+        memcpy(fs_control, &magic, 4); memcpy(fs_control + 0x714, &stage_fs, 4);
+        memcpy(bad_control, &magic, 4); memcpy(bad_control + 0x714, &stage_bad, 4);
+        uint64_t code = (uintptr_t)(cb_memory + 0x100);
+        struct { uint64_t code; const void *control; } stages[2] = {{code, vs_control}, {code + 0x100, fs_control}};
+        uint32_t (*set_shaders)(void *, int, const void *) = slot("nvnProgramSetShaders");
+        assert(set_shaders(program_memory, 2, stages) == 1 && captured_programs == 1);
+        struct wonder_nvn_program_shaders shaders; assert(wonder_nvn_program_snapshot(program_memory, &shaders));
+        assert(shaders.mask == 3 && shaders.code[1] == code + 0x100 && shaders.control[0] == vs_control);
+        struct { uint64_t code; const void *control; uint64_t extra; } ext[1] = {{code, fs_control, 0x1234}};
+        assert(((uint32_t (*)(void *, int, const void *))slot("nvnProgramSetShadersExt"))(program_memory, 1, ext) == 1);
+        assert(wonder_nvn_program_snapshot(program_memory, &shaders) && shaders.mask == 2 && shaders.extra[1] == 0x1234);
+        stages[1].control = vs_control; EXPECT_STOP(set_shaders(program_memory, 2, stages), "duplicate shader stage");
+        stages[1].control = bad_control; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_UNSUPPORTED");
+        stages[1].control = fs_control + 4; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_INVALID_ARGUMENT");
+        stages[1].code = UINT64_C(0x10); stages[1].control = fs_control; EXPECT_STOP(set_shaders(program_memory, 2, stages), "NVN_INVALID_ADDRESS");
+        ((void (*)(void *))slot("nvnProgramFinalize"))(program_memory);
+        EXPECT_STOP(wonder_nvn_program_snapshot(program_memory, &shaders), "NVN_INVALID_OBJECT");
+        // Device helpers: release-driver debug callback no-op, image handle sxtw, ns timestamps.
+        ((void (*)(const void *, void *, void *, uint32_t))slot("nvnDeviceInstallDebugCallback"))(device, (void *)1, NULL, 1);
+        assert(((uint64_t (*)(const void *, int))slot("nvnDeviceGetImageHandle"))(device, 77) == 77);
+        uint64_t counter[2] = {0, 123456789};
+        assert(((uint64_t (*)(const void *, const void *))slot("nvnDeviceGetTimestampInNanoseconds"))(device, counter) == 123456789);
+        // Sampler getters reflect the initialized state.
+        int a, b, c; float lo, hi, border[4];
+        ((void (*)(const void *, int *, int *, int *))slot("nvnSamplerGetWrapMode"))(sampler, &a, &b, &c);
+        ((void (*)(const void *, float *, float *))slot("nvnSamplerGetLodClamp"))(sampler, &lo, &hi);
+        ((void (*)(const void *, int *, int *))slot("nvnSamplerGetCompare"))(sampler, &a, &b);
+        ((void (*)(const void *, float *))slot("nvnSamplerGetBorderColor"))(sampler, border);
+        (void)((float (*)(const void *))slot("nvnSamplerGetLodBias"))(sampler);
+        assert(((float (*)(const void *))slot("nvnSamplerGetMaxAnisotropy"))(sampler) >= 1.0f);
+        (void)((int (*)(const void *))slot("nvnSamplerGetReductionFilter"))(sampler);
+        ((void (*)(void *))slot("nvnSamplerFinalize"))(sampler);
+        EXPECT_STOP(((void (*)(void *))slot("nvnSamplerFinalize"))(device), "NVN_INVALID_OBJECT");
+        // View getters return the stored fields and whether they were set.
+        unsigned char gv[16]; ((void (*)(void *))slot("nvnTextureViewSetDefaults"))(gv);
+        assert(((uint32_t (*)(const void *, int *, int *))slot("nvnTextureViewGetLevels"))(gv, &a, &b) == 0);
+        ((void (*)(void *, int, int))slot("nvnTextureViewSetLevels"))(gv, 2, 3);
+        assert(((uint32_t (*)(const void *, int *, int *))slot("nvnTextureViewGetLevels"))(gv, &a, &b) == 1 && a == 2 && b == 3);
+        assert(((uint32_t (*)(const void *, int *, int *))slot("nvnTextureViewGetLayers"))(gv, &a, &b) == 0);
+        assert(((uint32_t (*)(const void *, int *))slot("nvnTextureViewGetTarget"))(gv, &a) == 0);
+        // Buffer flush/invalidate forward to the pool range check; Finalize keeps pool storage.
+        ((void (*)(const void *, ptrdiff_t, size_t))slot("nvnBufferFlushMappedRange"))(buffer, 0, 0x20);
+        ((void (*)(const void *, ptrdiff_t, size_t))slot("nvnBufferInvalidateMappedRange"))(buffer, 0x10, 0x10);
+        EXPECT_STOP(((void (*)(const void *, ptrdiff_t, size_t))slot("nvnBufferFlushMappedRange"))(buffer, 0x10, 0x20), "NVN_INVALID_ARGUMENT");
+        ((void (*)(void *))slot("nvnBufferFinalize"))(gpu_only);
+        // Pool finalize: a pool backing a virtual mapping cannot go; an unreferenced pool releases its Metal view.
+        EXPECT_STOP(((void (*)(void *))slot("nvnMemoryPoolFinalize"))(phys_pool), "still backs virtual pool");
+        unsigned before = released_resources;
+        ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(wt_pool);
+        assert(released_resources == before + 1);
+        EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
+    }
     puts("NVN_STRICT_BOOTSTRAP_OK");
 }

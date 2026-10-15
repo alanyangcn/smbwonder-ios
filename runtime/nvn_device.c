@@ -80,15 +80,15 @@ static const int device_info[0x60] = {
     [0x55] = 262144, [0x56] = 4096, [0x57] = 1, [0x58] = 4, [0x59] = 2, [0x5A] = 0, [0x5B] = 4096, [0x5C] = 16384,
     [0x5D] = 4096, [0x5E] = 128, [0x5F] = 4096,
 };
-// TX1 bindless handle: texture descriptor index in bits 0..19, sampler descriptor index in bits 20..31
-// (main+0x5de9c passes pool ids straight from the material; the result feeds BindTexture unchanged).
+// Target SDK sdk+0x44e150: orr w8, w1, w2, lsl #20; sxtw x8, w8; orr x0, x8, #0x100000000. The handle is the
+// sign-extended 32-bit (texture | sampler << 20) with bit 32 set; main+0x5de9c feeds it to BindTexture unchanged.
 uint64_t wonder_nvnDeviceGetTextureHandle(const void *device, int texture_id, int sampler_id) {
     device_of(device, "nvnDeviceGetTextureHandle");
     if (texture_id < 0 || texture_id >= (1 << 20) || sampler_id < 0 || sampler_id >= (1 << 12))
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceGetTextureHandle texture=%d sampler=%d", texture_id, sampler_id);
     static _Atomic unsigned logged;
     if (atomic_fetch_add(&logged, 1) < 8) wonder_nvn_report("NVN_CALL nvnDeviceGetTextureHandle texture=%d sampler=%d", texture_id, sampler_id);
-    return (uint64_t)(uint32_t)texture_id | (uint64_t)(uint32_t)sampler_id << 20;
+    return (uint64_t)(int64_t)(int32_t)((uint32_t)texture_id | (uint32_t)sampler_id << 20) | UINT64_C(0x100000000);
 }
 void wonder_nvnDeviceGetInteger(const void *device, int what, int *out) {
     device_of(device, "nvnDeviceGetInteger");
@@ -528,7 +528,7 @@ static void descriptor_label(void *p, const char *label, uint32_t magic) {
 }
 void wonder_nvnTexturePoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,TPOOL_MAGIC);}
 void wonder_nvnSamplerPoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,SPOOL_MAGIC);}
-struct program_registration { void *object; struct program_registration *next; };
+struct program_registration { void *object; struct wonder_nvn_program_shaders shaders; struct program_registration *next; };
 static struct program_registration *programs;
 static pthread_mutex_t programs_lock=PTHREAD_MUTEX_INITIALIZER;
 static void program_check(void *p, const char *who) {
@@ -551,13 +551,154 @@ uint32_t wonder_nvnProgramInitialize(void *program, const void *device) {
     if(!entry) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY program registry");
     entry->object=program;pthread_mutex_lock(&programs_lock);
     struct program_registration *existing=programs;while(existing && existing->object!=program)existing=existing->next;
-    if(!existing){entry->next=programs;programs=entry;}else free(entry);
+    if(!existing){entry->next=programs;programs=entry;}else{existing->shaders=(struct wonder_nvn_program_shaders){0};free(entry);}
     pthread_mutex_unlock(&programs_lock);
     memset(program, 0, 0x80); memcpy((uint8_t *)program + 8, &device, sizeof device);
     wonder_nvn_report("NVN_PROGRAM_INITIALIZED program=%p device=%p shaders=0", program, device);
     return 1;
 }
+// ---------- Object lifetime, getters and programs (target SDK sdk+0x44dd00.. semantics) ----------
+const void *wonder_nvn_queue_check(const void *queue, const char *who) {
+    const struct queue *q = queue;
+    if (!q || q->magic != QUEUE_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT %s queue=%p", who, queue);
+    return q->device;
+}
+// sdk+0x44dd00 is `ret` in this release driver: debug callbacks are never invoked.
+void wonder_nvnDeviceInstallDebugCallback(const void *device, void *callback, void *data, uint32_t enable) {
+    device_of(device, "nvnDeviceInstallDebugCallback");
+    wonder_nvn_report("NVN_CALL nvnDeviceInstallDebugCallback callback=%p data=%p enable=%u (release driver: no-op)", callback, data, enable);
+}
+// sdk+0x44e0d0: sxtw x0, w1.
+uint64_t wonder_nvnDeviceGetImageHandle(const void *device, int image_id) {
+    device_of(device, "nvnDeviceGetImageHandle");
+    if (image_id < 0 || image_id >= (1 << 20)) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceGetImageHandle id=%d", image_id);
+    return (uint64_t)(int64_t)image_id;
+}
+// sdk+0x44e160 converts NVNcounterData.timestamp (+8) with the device tick ratio. Host counters
+// (nvn_commands.c replay) store nanoseconds, so the host ratio is 1:1.
+uint64_t wonder_nvnDeviceGetTimestampInNanoseconds(const void *device, const void *counter) {
+    device_of(device, "nvnDeviceGetTimestampInNanoseconds");
+    if (!counter) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnDeviceGetTimestampInNanoseconds counter=NULL");
+    uint64_t ticks; memcpy(&ticks, (const uint8_t *)counter + 8, sizeof ticks); return ticks;
+}
+// Memory pools: sdk+0x4537e0 unlinks the pool from the device and frees its mapping. Host: unregister,
+// release the zero-copy Metal view (in-flight command buffers retain it) and the virtual reservation.
+void wonder_nvnMemoryPoolFinalize(void *pool) {
+    struct memory_pool *m = (struct memory_pool *)pool_of(pool, "nvnMemoryPoolFinalize");
+    pthread_mutex_lock(&pool_registry_lock);
+    for (struct pool_registration *p = pool_registry; p; p = p->next)
+        if ((p->pool->flags & 0x200) && p->pool != m)
+            for (uint32_t i = 0; i < p->pool->mapping_count; i++)
+                if (p->pool->mappings[i].physical == m) {
+                    pthread_mutex_unlock(&pool_registry_lock);
+                    wonder_nvn_stop("NVN_INVALID_STATE nvnMemoryPoolFinalize pool=%p still backs virtual pool %p", pool, (const void *)p->pool);
+                }
+    for (struct pool_registration **p = &pool_registry; *p; p = &(*p)->next)
+        if ((*p)->pool == m) { struct pool_registration *dead = *p; *p = dead->next; free(dead); break; }
+    pthread_mutex_unlock(&pool_registry_lock);
+    if (m->host_buffer) wonder_host_release(m->host_buffer);
+    if (m->flags & 0x200) wonder_host_unreserve(m->memory, m->size);
+    free(m->mappings);
+    wonder_nvn_report("NVN_POOL_FINALIZED pool=%p memory=%p size=%#llx flags=%#x", pool, (void *)m->memory, (unsigned long long)m->size, m->flags);
+    memset(m, 0, sizeof *m);
+}
+// Samplers: sdk+0x459ab0 Finalize is `ret`; getters read the initialized state (sdk+0x459ae0..0x459c00).
+static const struct sampler *sampler_of(const void *p, const char *who) {
+    const struct sampler *s = p;
+    if (!s || s->magic != SAMPLER_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT %s sampler=%p", who, p);
+    return s;
+}
+void wonder_nvnSamplerFinalize(void *sampler) { sampler_of(sampler, "nvnSamplerFinalize"); }
+void wonder_nvnSamplerGetWrapMode(const void *p, int *s, int *t, int *r) {
+    const struct sampler *o = sampler_of(p, "nvnSamplerGetWrapMode"); *s = o->state.wrap_s; *t = o->state.wrap_t; *r = o->state.wrap_r;
+}
+void wonder_nvnSamplerGetLodClamp(const void *p, float *min, float *max) {
+    const struct sampler *o = sampler_of(p, "nvnSamplerGetLodClamp"); *min = o->state.lod_min; *max = o->state.lod_max;
+}
+float wonder_nvnSamplerGetLodBias(const void *p) { return sampler_of(p, "nvnSamplerGetLodBias")->state.lod_bias; }
+void wonder_nvnSamplerGetCompare(const void *p, int *mode, int *func) {
+    const struct sampler *o = sampler_of(p, "nvnSamplerGetCompare"); *mode = o->state.compare_mode; *func = o->state.compare_func;
+}
+void wonder_nvnSamplerGetBorderColor(const void *p, float *color) { memcpy(color, sampler_of(p, "nvnSamplerGetBorderColor")->state.border, 16); }
+float wonder_nvnSamplerGetMaxAnisotropy(const void *p) { return sampler_of(p, "nvnSamplerGetMaxAnisotropy")->state.anisotropy; }
+int wonder_nvnSamplerGetReductionFilter(const void *p) { return sampler_of(p, "nvnSamplerGetReductionFilter")->state.reduction; }
+
+// Programs. NVNshaderData = {u64 code GPU address, const void *control}; ShaderDataExt adds a third u64
+// (sdk+0x456050 splits 24-byte entries into the 16-byte array plus that word). Control sections start with
+// magic 0x98761234 and carry the NVNshaderStage at +0x714 (survey of all 16600 stage controls in
+// SecredUber.Product.100: 0 = vertex, 1 = fragment); sdk+0x456158 rejects stages above 5 (compute).
+#define SHADER_CONTROL_MAGIC 0x98761234u
+#define SHADER_CONTROL_STAGE 0x714
+static struct wonder_nvn_program_shaders *program_shaders_of(void *p, const char *who) {
+    struct wonder_nvn_program_shaders *found = NULL;
+    pthread_mutex_lock(&programs_lock);
+    for (struct program_registration *r = programs; r; r = r->next) if (r->object == p) { found = &r->shaders; break; }
+    pthread_mutex_unlock(&programs_lock);
+    if (!found) wonder_nvn_stop("NVN_INVALID_OBJECT %s program=%p", who, p);
+    return found;
+}
+static uint32_t program_set_shaders(void *program, int count, const uint8_t *stages, size_t stride, const char *who) {
+    struct wonder_nvn_program_shaders *ps = program_shaders_of(program, who);
+    if (count < 1 || count > 6 || !stages) wonder_nvn_stop("NVN_INVALID_ARGUMENT %s count=%d stages=%p", who, count, (const void *)stages);
+    struct wonder_nvn_program_shaders next = {0};
+    for (int i = 0; i < count; i++) {
+        uint64_t code, extra = 0; const uint8_t *control;
+        memcpy(&code, stages + i * stride, 8); memcpy(&control, stages + i * stride + 8, 8);
+        if (stride == 24) memcpy(&extra, stages + i * stride + 16, 8);
+        if (!control || ((uintptr_t)control & 7) || !code)
+            wonder_nvn_stop("NVN_INVALID_ARGUMENT %s stage %d code=%#llx control=%p", who, i, (unsigned long long)code, (const void *)control);
+        uint32_t magic, stage; memcpy(&magic, control, 4); memcpy(&stage, control + SHADER_CONTROL_STAGE, 4);
+        if (magic != SHADER_CONTROL_MAGIC || stage > 5)
+            wonder_nvn_stop("NVN_UNSUPPORTED %s stage %d control magic=%#x stage=%u", who, i, magic, stage);
+        if (next.mask & (1u << stage)) wonder_nvn_stop("NVN_INVALID_ARGUMENT %s duplicate shader stage %u", who, stage);
+        struct wonder_nvn_pool_view view; wonder_nvn_address_span(code, 4, &view);   // code must live in a GPU pool
+        next.mask |= 1u << stage; next.code[stage] = code; next.control[stage] = control; next.extra[stage] = extra;
+    }
+    static _Atomic uint64_t serial;
+    next.serial = atomic_fetch_add(&serial, 1) + 1;
+    *ps = next;
+    wonder_nvn_report("NVN_PROGRAM_SHADERS program=%p serial=%llu stages=%#x vs=%#llx fs=%#llx via=%s", program,
+                      (unsigned long long)next.serial, next.mask, (unsigned long long)next.code[0], (unsigned long long)next.code[1], who);
+    wonder_nvn_capture_shaders(program, &next);
+    return 1;
+}
+uint32_t wonder_nvnProgramSetShaders(void *program, int count, const void *stages) {
+    return program_set_shaders(program, count, stages, 16, "nvnProgramSetShaders");
+}
+uint32_t wonder_nvnProgramSetShadersExt(void *program, int count, const void *stages) {
+    return program_set_shaders(program, count, stages, 24, "nvnProgramSetShadersExt");
+}
+// Snapshot used by BindProgram recording; NULL when the program has no shaders yet.
+int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_shaders *out) {
+    *out = *program_shaders_of((void *)program, "program snapshot");
+    return out->mask != 0;
+}
+void wonder_nvnProgramFinalize(void *program) {
+    pthread_mutex_lock(&programs_lock);
+    struct program_registration **r = &programs;
+    while (*r && (*r)->object != program) r = &(*r)->next;
+    struct program_registration *dead = *r; if (dead) *r = dead->next;
+    pthread_mutex_unlock(&programs_lock);
+    if (!dead) wonder_nvn_stop("NVN_INVALID_OBJECT nvnProgramFinalize program=%p", program);
+    free(dead);
+}
 static const struct implemented implemented[] = {
+    {"nvnDeviceInstallDebugCallback", (void *)wonder_nvnDeviceInstallDebugCallback},
+    {"nvnDeviceGetImageHandle", (void *)wonder_nvnDeviceGetImageHandle},
+    {"nvnDeviceGetTimestampInNanoseconds", (void *)wonder_nvnDeviceGetTimestampInNanoseconds},
+    {"nvnMemoryPoolFinalize", (void *)wonder_nvnMemoryPoolFinalize},
+    {"nvnSamplerFinalize", (void *)wonder_nvnSamplerFinalize},
+    {"nvnSamplerGetWrapMode", (void *)wonder_nvnSamplerGetWrapMode},
+    {"nvnSamplerGetLodClamp", (void *)wonder_nvnSamplerGetLodClamp},
+    {"nvnSamplerGetLodBias", (void *)wonder_nvnSamplerGetLodBias},
+    {"nvnSamplerGetCompare", (void *)wonder_nvnSamplerGetCompare},
+    {"nvnSamplerGetBorderColor", (void *)wonder_nvnSamplerGetBorderColor},
+    {"nvnSamplerGetMaxAnisotropy", (void *)wonder_nvnSamplerGetMaxAnisotropy},
+    {"nvnSamplerGetReductionFilter", (void *)wonder_nvnSamplerGetReductionFilter},
+    {"nvnProgramSetShaders", (void *)wonder_nvnProgramSetShaders},
+    {"nvnProgramSetShadersExt", (void *)wonder_nvnProgramSetShadersExt},
+    {"nvnProgramFinalize", (void *)wonder_nvnProgramFinalize},
+
     {"nvnDeviceSetDebugLabel", (void *)wonder_nvnDeviceSetDebugLabel},
     {"nvnQueueSetDebugLabel", (void *)wonder_nvnQueueSetDebugLabel},
     {"nvnSamplerSetDebugLabel", (void *)wonder_nvnSamplerSetDebugLabel},

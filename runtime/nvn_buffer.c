@@ -110,7 +110,26 @@ void wonder_nvnMemoryPoolInvalidateMappedRange(const void *pool, ptrdiff_t offse
 }
 
 
+// sdk+0x442da0 BufferFinalize is `ret`: the buffer is a view of pool storage with no host resource.
+void wonder_nvnBufferFinalize(void *buffer) {
+    const struct buffer *b = buffer;
+    if (!b || b->magic != BUFFER_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnBufferFinalize buffer=%p", buffer);
+}
+// sdk+0x442df0/0x442e00 forward to the pool call with offset = buffer offset + range offset.
+static void buffer_range(const void *buffer, ptrdiff_t offset, size_t size, int invalidate) {
+    const struct buffer *b = buffer;
+    const char *who = invalidate ? "nvnBufferInvalidateMappedRange" : "nvnBufferFlushMappedRange";
+    if (!b || b->magic != BUFFER_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT %s buffer=%p", who, buffer);
+    if (offset < 0 || (uint64_t)offset > b->size || size > b->size - (uint64_t)offset)
+        wonder_nvn_stop("NVN_INVALID_ARGUMENT %s offset=%#tx size=%#zx buffer_size=%#llx", who, offset, size, (unsigned long long)b->size);
+    struct wonder_nvn_pool_view view; pool_range(b->pool, b->offset + offset, size, who, &view);
+}
+void wonder_nvnBufferFlushMappedRange(const void *buffer, ptrdiff_t offset, size_t size) { buffer_range(buffer, offset, size, 0); }
+void wonder_nvnBufferInvalidateMappedRange(const void *buffer, ptrdiff_t offset, size_t size) { buffer_range(buffer, offset, size, 1); }
 const struct wonder_nvn_entry wonder_nvn_buffer_entries[] = {
+    {"nvnBufferFinalize", (void *)wonder_nvnBufferFinalize},
+    {"nvnBufferFlushMappedRange", (void *)wonder_nvnBufferFlushMappedRange},
+    {"nvnBufferInvalidateMappedRange", (void *)wonder_nvnBufferInvalidateMappedRange},
     {"nvnBufferBuilderSetDevice", (void *)wonder_nvnBufferBuilderSetDevice},
     {"nvnBufferBuilderSetDefaults", (void *)wonder_nvnBufferBuilderSetDefaults},
     {"nvnBufferBuilderSetStorage", (void *)wonder_nvnBufferBuilderSetStorage},

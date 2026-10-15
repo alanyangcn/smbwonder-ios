@@ -90,3 +90,13 @@ extern const unsigned wonder_nvn_command_count;
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view);
 
 void wonder_host_resource_label(void *resource, const char *label);
+
+// Lifetime helpers (host_graphics.m on device, the test harness on the host).
+void wonder_host_release(void *resource);
+void wonder_host_unreserve(void *memory, size_t size);
+const void *wonder_nvn_queue_check(const void *queue, const char *who);
+// Program shaders keyed by NVNshaderStage (0 vertex, 1 fragment, 2 geometry, 3 tess control, 4 tess eval, 5 compute).
+struct wonder_nvn_program_shaders { uint64_t serial; uint32_t mask; uint64_t code[6], extra[6]; const void *control[6]; };
+int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_shaders *out);
+// Shader evidence for the offline translator (nvn_bootstrap.c on device).
+void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders);
