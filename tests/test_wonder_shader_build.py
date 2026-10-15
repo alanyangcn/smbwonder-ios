@@ -50,6 +50,18 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(build.support_bindings(msl.replace('constant _10& support_buffer [[buffer(0)]], ', '')), set())
         used = msl.replace('    float _m5[73];', '    float4 _m5[73];').replace('    uint _m1[8];', '    uint4 _m1[8];')   # as emitted when read (round77)
         self.assertEqual(build.support_bindings(used), {0})
+    def test_unwritten_varyings_become_zero_outputs(self):
+        # Round78: vs 4d338cef88ef2962 writes only its position; fs 84a6cd3c9abd22a8 reads user(locn0) -> Metal rejects the
+        # pipeline. Maxwell leaves unwritten varyings undefined; the vertex shader declares them (zeroed by `out = {}`).
+        vs = ("struct main0_out\n{\n    float4 m_9 [[user(locn2)]];\n    float4 gl_Position [[position]];\n};\n"
+              "vertex main0_out main0()\n{\n    main0_out out = {};\n    return out;\n}\n")
+        out = build.pad_vertex_outputs(vs, {9: 'int4'})
+        self.assertIn('    float4 wonder_unwritten_locn0 [[user(locn0)]];', out)
+        self.assertIn('    float4 wonder_unwritten_locn7 [[user(locn7)]];', out)
+        self.assertNotIn('wonder_unwritten_locn2', out)                          # written by the shader itself
+        self.assertIn('    int4 wonder_unwritten_locn9 [[user(locn9)]];', out)     # a paired fragment reads locn9 as int4
+        self.assertIn('main0_out out = {};', out)
+        self.assertEqual(build.fragment_inputs("struct main0_in\n{\n    float4 m_31 [[user(locn0)]];\n    uint4 m_3 [[user(locn4)]];\n};\n"), {0: 'float4', 4: 'uint4'})
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 

@@ -76,6 +76,22 @@ def support_bindings(msl):
     if not m or not structs: return set()
     return {int(b) for t, b in re.findall(r'constant (\w+)& \w+ \[\[buffer\((\d+)\)\]\]', m.group(1)) if t in structs}
 
+VARYING = re.compile(r'^\s+(\w+) \w+ \[\[user\(locn(\d+)\)\]\];', re.M)
+def fragment_inputs(msl):
+    """user(locnN) inputs of a fragment stage: {location: MSL type}."""
+    m = re.search(r'struct main0_in\n\{(.*?)\n\};', msl, re.S)
+    return {int(loc): t for t, loc in VARYING.findall(m.group(1))} if m else {}
+def pad_vertex_outputs(msl, wanted):
+    """Declare every varying a fragment may read (locations 0..7, plus `wanted` {location: type} from paired fragments)
+    that the vertex stage does not write: Metal rejects unmatched fragment inputs, Maxwell leaves them undefined; the
+    added members are zero through `main0_out out = {};`."""
+    m = re.search(r'(struct main0_out\n\{)(.*?)(\n\};)', msl, re.S)
+    if not m or '[[position]]' not in m.group(2): return msl
+    written = {int(loc) for _, loc in VARYING.findall(m.group(2))}
+    needed = {loc: 'float4' for loc in range(8)}; needed.update(wanted)
+    extra = ''.join(f'\n    {t} wonder_unwritten_locn{loc} [[user(locn{loc})]];' for loc, t in sorted(needed.items()) if loc not in written)
+    return msl[:m.end(2)] + extra + msl[m.end(2):]
+
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
     m = re.search(r'^(vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
@@ -134,11 +150,11 @@ def reflect(census, stage_entry, job, res, msl, c1):
 def build(census_dirs, out):
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, 'DOTNET_ROOT': str(ROOT / 'work/tools/dotnet')}
-    jobs, sources = [], {}
+    jobs, sources, censuses = [], {}, []
     with tempfile.TemporaryDirectory(prefix='wonder-shaders-') as tmp:
         tmp = Path(tmp)
         for directory in map(Path, census_dirs):
-            raw = (directory / 'draw.json').read_bytes(); census = json.loads(raw)
+            raw = (directory / 'draw.json').read_bytes(); census = json.loads(raw); censuses.append(census)
             for entry in census['program']['stages']:
                 key = entry['key']
                 if key in sources: continue
@@ -161,7 +177,7 @@ def build(census_dirs, out):
         manifest = {'scope': 'Wonder draw-census shader build (MSL 2.1, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
                     'translator_source_sha': subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip(),
                     'keys': {}}
-        manifest['failed'] = {}
+        manifest['failed'] = {}; built = {}
         for job in jobs:
             key = job['key']; census, entry, census_sha = sources[key]
             # A stage that cannot be built faithfully is left out (with its reason): its program then stops by name on device.
@@ -174,8 +190,17 @@ def build(census_dirs, out):
             except (ValueError, subprocess.CalledProcessError) as error:
                 manifest['failed'][key] = {'stage': job['stage'], 'reason': str(error)[:300], 'census_sha256': census_sha}
                 continue
+            built[key] = (job['stage'], msl, refl, census_sha)
+        # Vertex stages declare the varyings their paired fragments read but they do not write (round78).
+        reads = {}
+        for census in censuses:
+            keys = {s_['name']: s_['key'] for s_ in census['program']['stages']}
+            if keys.get('vs') in built and keys.get('fs') in built:
+                reads.setdefault(keys['vs'], {}).update(fragment_inputs(built[keys['fs']][1]))
+        for key, (stage, msl, refl, census_sha) in built.items():
+            if stage == 'vs': msl = pad_vertex_outputs(msl, reads.get(key, {}))
             (out / f'{key}.metal').write_text(msl); (out / f'{key}.refl').write_text(refl)
-            manifest['keys'][key] = {'stage': job['stage'], 'msl_sha256': sha(msl.encode()), 'refl_sha256': sha(refl.encode()), 'census_sha256': census_sha}
+            manifest['keys'][key] = {'stage': stage, 'msl_sha256': sha(msl.encode()), 'refl_sha256': sha(refl.encode()), 'census_sha256': census_sha}
     (out / 'jobs.json').write_text(json.dumps([{k: v for k, v in j.items() if k != 'code'} for j in jobs], indent=1) + '\n')
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=1) + '\n')
     return manifest
