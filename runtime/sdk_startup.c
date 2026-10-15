@@ -28,7 +28,31 @@ uint64_t svc_dispatch(int number,uint64_t *regs,uint64_t original) {
         if(regs[0]&&atomic_fetch_add(&failures,1)<64)LOG("SDK_SVC_ERROR nr=%#x result=%#llx",number,(unsigned long long)regs[0]);
         return regs[0];
     }
-    if(wonder_event_call(number,regs)){if(seen<16)LOG("SDK_SVC_RESULT nr=%#x result=%#llx x1=%#llx x2=%#llx",number,regs[0],regs[1],regs[2]);return regs[0];}
+    uint64_t in1=regs[1],in2=regs[2],in29=regs[29],in30=regs[30];
+    if(wonder_event_call(number,regs)){
+        if(seen<16)LOG("SDK_SVC_RESULT nr=%#x result=%#llx x1=%#llx x2=%#llx",number,regs[0],regs[1],regs[2]);
+        // WaitSynchronization on a handle the kernel does not know: show the handles and who waits; a guest spinning
+        // on it forever is a host defect, so it stops after a bounded number of retries.
+        if(number==0x18&&regs[0]==0xe401){
+            static _Atomic unsigned bad_waits;
+            unsigned n=atomic_fetch_add(&bad_waits,1);
+            if(n<3){
+                uint32_t handles[8]={0};vm_size_t count=0;unsigned k=in2<8?(unsigned)in2:8;
+                if(k)vm_read_overwrite(mach_task_self(),in1,k*4,(vm_address_t)handles,&count);
+                LOG("WAIT_INVALID_HANDLE count=%llu handles=%#x %#x %#x %#x",(unsigned long long)in2,handles[0],handles[1],handles[2],handles[3]);
+                uint64_t fp=in29,pc=in30;
+                for(unsigned depth=0;depth<12;depth++){
+                    module_t *m=module_of((void *)pc);
+                    if(m)LOG("WAIT_CALLER depth=%u %s+%#llx",depth,m->name,(unsigned long long)(pc-(uint64_t)m->base));
+                    uint64_t frame[2];count=0;
+                    if(!fp||(fp&15)||vm_read_overwrite(mach_task_self(),fp,sizeof frame,(vm_address_t)frame,&count)!=KERN_SUCCESS||count!=sizeof frame||frame[0]<=fp)break;
+                    fp=frame[0];pc=frame[1];
+                }
+            }
+            if(n==1000){LOG("BOOT_BLOCKED WAIT_INVALID_HANDLE spin");wonder_game_thread_stop("WaitSynchronization spinning on an invalid handle");}
+        }
+        return regs[0];
+    }
     if(number==0x27){fwrite((const void *)regs[0],1,(size_t)regs[1],stderr);fputc('\n',stderr);regs[0]=0;return 0;}
     if(number==0x26 && (regs[0]&0x80000000u))return regs[0];
     if(number==0x26){

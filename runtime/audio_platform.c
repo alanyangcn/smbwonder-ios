@@ -98,11 +98,14 @@ HLE_FORCE("_ZN2nn5audio3dsp17SendCommandBufferEimmibm", "Host DSP: run the sdk's
 #define DEVICE_NAME 256
 static const char *const output_devices[] = {"AudioTvOutput", "AudioStereoJackOutput", "AudioBuiltInSpeakerOutput"};
 static const char *const active_output = "AudioBuiltInSpeakerOutput";
-static float device_volume[3] = {1, 1, 1};
+// AudioUsbDeviceOutput exists on current firmware (the game sets its volume) but no USB audio device is attached,
+// so it is not listed; only its volume setting is kept.
+static const char *const volume_devices[] = {"AudioTvOutput", "AudioStereoJackOutput", "AudioBuiltInSpeakerOutput", "AudioUsbDeviceOutput"};
+static float device_volume[4] = {1, 1, 1, 1};
 static pthread_mutex_t device_lock = PTHREAD_MUTEX_INITIALIZER;
 static int device_index(const char *name) {
     if (!name) die("audio device name=NULL");
-    for (int i = 0; i < 3; i++) if (!strncmp(name, output_devices[i], DEVICE_NAME)) return i;
+    for (int i = 0; i < 4; i++) if (!strncmp(name, volume_devices[i], DEVICE_NAME)) return i;
     return -1;
 }
 static int list_devices(char *names, int count) {
@@ -130,7 +133,7 @@ HLE_FORCE("_ZN2nn5audio6server6detail26SetAudioDeviceOutputVolumeEPKNS0_15AudioD
     (void)aruid; (void)session; int i = device_index(name);
     if (i < 0 || !(volume >= 0.f && volume <= 128.f)) die("audio SetAudioDeviceOutputVolume name=%.32s volume=%f", name, volume);
     pthread_mutex_lock(&device_lock); device_volume[i] = volume; pthread_mutex_unlock(&device_lock);
-    LOG("HOST_AUDIO_DEVICE_VOLUME %s=%.3f", output_devices[i], volume);
+    LOG("HOST_AUDIO_DEVICE_VOLUME %s=%.3f", volume_devices[i], volume);
 }
 HLE_FORCE("_ZN2nn5audio6server6detail26GetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameERKNS_6applet20AppletResourceUserIdEj",
           "Per-device output volume kept by the host", float, h_get_device_volume, const char *name, const void *aruid, unsigned session) {
