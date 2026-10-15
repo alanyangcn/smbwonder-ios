@@ -11,7 +11,7 @@ static int texture_type_of(const char *s) {
 }
 static int hex_value(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *r, char *err, size_t n) {
-    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1;
+    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1; r->depth_minus_one = -1;
     size_t at = 0; unsigned line_no = 0;
     while (at < size) {
         size_t end = at; while (end < size && text[end] != '\n') end++;
@@ -43,6 +43,9 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
                 r->c1[i] = (uint8_t)(hi << 4 | lo);
             }
             r->c1_buffer = a; r->c1_len = (uint16_t)(hex / 2);
+        } else if (!strcmp(kind, "depth")) {
+            if (sscanf(line, "depth %15s", word) != 1 || (strcmp(word, "minus_one") && strcmp(word, "zero"))) return fail(err, n, "depth line %u: minus_one or zero", line_no);
+            r->depth_minus_one = !strcmp(word, "minus_one");
         } else if (!strcmp(kind, "drv")) {
             if (sscanf(line, "drv %d", &a) != 1 || (a != 0 && a != 2)) return fail(err, n, "drv line %u: bank must be 0 or 2", line_no);
             r->drv_read |= (uint8_t)(1u << a);

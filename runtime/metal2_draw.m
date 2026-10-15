@@ -65,7 +65,9 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         NSError *error = nil;
         id<MTLLibrary> library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&error];
         if (!library) {
-            NSString *first = [error.localizedDescription componentsSeparatedByString:@"\n"].firstObject ?: @"?";
+            NSString *first = nil;   // the compiler's own "program_source:L:C: error:" line when there is one
+            for (NSString *line in [error.localizedDescription componentsSeparatedByString:@"\n"]) if ([line containsString:@"error:"]) { first = line; break; }
+            if (!first) first = [error.localizedDescription componentsSeparatedByString:@"\n"].firstObject ?: @"?";
             wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s error=%s", key_c, first.UTF8String);
         }
         f = [library newFunctionWithName:@"main0"];
@@ -287,11 +289,14 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     }
     pd.vertexDescriptor = vd;
     // Pipeline cache keyed by everything the descriptor depends on.
-    struct { void *vs, *fs; uint32_t formats[10]; uint64_t blend[8]; uint32_t color, mask; uint32_t attr[16][3]; uint32_t stream[16][2]; } pk;
+    // Keyed on the effective descriptor values (write masks, blending on/off), not raw state bytes: an unset (zeroed)
+    // channel mask and a bound mask of 0 must not share a pipeline.
+    struct { void *vs, *fs; uint32_t formats[10]; uint64_t blend[8]; uint8_t write_mask[8], blending[8]; uint32_t attr[16][3]; uint32_t stream[16][2]; } pk;
     memset(&pk, 0, sizeof pk); pk.vs = d->vs; pk.fs = d->fs;
     for (int i = 0; i < 8; i++) { pk.formats[i] = (uint32_t)pd.colorAttachments[i].pixelFormat; memcpy(&pk.blend[i], &d->blend[i], sizeof d->blend[i]); }
     pk.formats[8] = (uint32_t)pd.depthAttachmentPixelFormat; pk.formats[9] = (uint32_t)pd.stencilAttachmentPixelFormat;
-    memcpy(&pk.color, &d->color, 4); memcpy(&pk.mask, &d->channel_mask, 4);
+    for (int i = 0; i < 8; i++) { pk.write_mask[i] = (uint8_t)pd.colorAttachments[i].writeMask; pk.blending[i] = pd.colorAttachments[i].blendingEnabled;
+                                   if (!pk.blending[i]) pk.blend[i] = 0; }
     for (int i = 0; i < d->nattr; i++) { pk.attr[i][0] = d->attr[i].format; pk.attr[i][1] = d->attr[i].offset; pk.attr[i][2] = d->attr[i].stream | (uint32_t)d->vr->attr[i].location << 8; }
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) { pk.stream[s][0] = d->stream[s].stride; pk.stream[s][1] = d->stream[s].divisor; }
     NSData *pipeline_key = [NSData dataWithBytes:&pk length:sizeof pk];
@@ -328,6 +333,22 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // Encode.
     wonder_host_replay_lock();
     id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
+    // Translated shaders declare every c[n] as 64 KiB; Maxwell returns 0 past the bound size, Metal would read the next pool
+    // bytes (or past the pool's MTLBuffer). Each read uniform buffer is copied on the GPU, in command order (after any
+    // UpdateUniformBuffer blits already in this command buffer), into a zero-filled 64 KiB buffer.
+    id<MTLBuffer> ubo_copies[2][14] = {{nil}};
+    id<MTLBlitCommandEncoder> ubo_blit = nil;
+    for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ncbuf; i++) {
+        int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
+        id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
+        if (!src || u->offset + n > src.length) { wonder_host_replay_unlock(); unsupported(d, "uniform buffer span outside its pool buffer, slot", slot); }
+        if (!ubo_blit) ubo_blit = [cb blitCommandEncoder];
+        id<MTLBuffer> copy = [device newBufferWithLength:0x10000 options:MTLResourceStorageModePrivate];
+        [ubo_blit fillBuffer:copy range:NSMakeRange(0, 0x10000) value:0];
+        if (n) [ubo_blit copyFromBuffer:src sourceOffset:u->offset toBuffer:copy destinationOffset:0 size:n];
+        ubo_copies[stage][slot] = copy;
+    }
+    [ubo_blit endEncoding];
     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
     if (!e) { wonder_host_replay_unlock(); unsupported(d, "render encoder creation", 0); }
     e.label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
@@ -352,7 +373,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         const struct wonder_shader_refl *r = refl[stage];
         void (^buffer)(id<MTLBuffer>, NSUInteger, NSUInteger) = ^(id<MTLBuffer> b, NSUInteger offset, NSUInteger index) {
             if (stage) [e setFragmentBuffer:b offset:offset atIndex:index]; else [e setVertexBuffer:b offset:offset atIndex:index]; };
-        for (int i = 0; i < r->ncbuf; i++) { const struct wonder_host_span *u = &d->ubo[stage][r->cbuf[i].slot]; buffer((__bridge id<MTLBuffer>)u->buffer, u->offset, r->cbuf[i].buffer); }
+        for (int i = 0; i < r->ncbuf; i++) buffer(ubo_copies[stage][r->cbuf[i].slot], 0, r->cbuf[i].buffer);
         if (r->c1_buffer >= 0) buffer(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
         if (r->support >= 0) buffer(support_buffer, 0, (NSUInteger)r->support);
         for (int i = 0; i < r->ntex; i++) {

@@ -80,13 +80,28 @@ void wonder_host_release(void *resource){ if(resource) CFRelease(resource); }
 // handlers run CPU-side report writes and sync signals in commit order.
 #include "nvn_texture.h"
 #include <pthread.h>
+#include <stdatomic.h>
 #include <math.h>
 static pthread_mutex_t replay_mutex = PTHREAD_MUTEX_INITIALIZER;
 static id<MTLCommandBuffer> pending, last_committed;
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *render_targets;
 static id<MTLRenderPipelineState> present_pipeline;
 static id<MTLSamplerState> present_sampler;
-static id<MTLCommandBuffer> pending_buffer(void){ if(!pending){ pending=[queue commandBuffer]; pending.label=@"Wonder NVN submit"; } return pending; }
+// A failed replay command buffer is recorded here and stops the next submission by name (nvn_queue.c).
+static char gpu_error_text[256]; static _Atomic int gpu_failed;
+int wonder_host_gpu_error(char *out,size_t size){ if(!atomic_load(&gpu_failed)) return 0; snprintf(out,size,"%s",gpu_error_text); return 1; }
+static id<MTLCommandBuffer> pending_buffer(void){
+ if(!pending){
+  pending=[queue commandBuffer]; pending.label=@"Wonder NVN submit";
+  [pending addCompletedHandler:^(id<MTLCommandBuffer> b){
+   if(b.status==MTLCommandBufferStatusError&&!atomic_exchange(&gpu_failed,1)){
+    snprintf(gpu_error_text,sizeof gpu_error_text,"%s",b.error.localizedDescription.UTF8String?:"?");
+    fprintf(stderr,"HOST_GPU_ERROR %s\n",gpu_error_text);
+   }
+  }];
+ }
+ return pending;
+}
 static void commit_locked(void){ if(pending){ [pending commit]; last_committed=pending; pending=nil; } }
 void wonder_host_flush(void){ pthread_mutex_lock(&replay_mutex); commit_locked(); pthread_mutex_unlock(&replay_mutex); }
 void wonder_host_finish(void){

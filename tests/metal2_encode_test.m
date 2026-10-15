@@ -33,8 +33,10 @@ void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t for
 static NSString *const vs_src = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "struct I { float4 p [[attribute(0)]]; };\nstruct O { float4 p [[position]]; };\nstruct C1 { float4 v[4]; };\n"
     "vertex O main0(I in [[stage_in]], constant C1& c1 [[buffer(2)]]) { O o; o.p = in.p + c1.v[0]; return o; }\n";
-static NSString *const fs_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; };\n"
-    "fragment float4 main0(constant U& u [[buffer(1)]], texture2d<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float2(0.25, 0.75)) * u.tint; }\n";
+// The uniform block declares more than the game binds (like translated Maxwell c[n] arrays): reads past the bound size
+// must see zeros, as on Maxwell, not neighbouring pool bytes.
+static NSString *const fs_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
+    "fragment float4 main0(constant U& u [[buffer(1)]], texture2d<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float2(0.25, 0.75)) * u.tint + u.beyond; }\n";
 static id<MTLFunction> function(NSString *source) {
     NSError *e = nil; MTLCompileOptions *o = [MTLCompileOptions new]; o.languageVersion = MTLLanguageVersion2_1;
     id<MTLLibrary> l = [device newLibraryWithSource:source options:o error:&e]; assert(l); return [l newFunctionWithName:@"main0"];
@@ -67,7 +69,7 @@ int main(int argc, char **argv) {
         id<MTLBuffer> pool = [device newBufferWithLength:0x1000 options:MTLResourceStorageModeShared];
         memcpy(pool.contents, vertices, sizeof vertices);
         uint8_t indices[3] = {0, 1, 2}; memcpy((uint8_t *)pool.contents + 0x100, indices, 3);
-        float tint[4] = {1, 0.5f, 1, 1}; memcpy((uint8_t *)pool.contents + 0x200, tint, 16);
+        float tint[4] = {1, 0.5f, 1, 1}, garbage[4] = {1, 1, 1, 1}; memcpy((uint8_t *)pool.contents + 0x200, tint, 16); memcpy((uint8_t *)pool.contents + 0x210, garbage, 16);
         d.primitive = 4; d.index_type = 0; d.count = 3; d.instances = 1;
         d.index = (struct wonder_host_span){(__bridge void *)pool, 0x100, 3};
         d.nattr = 1; d.attr[0].format = !strcmp(mode, "bad_vertex_format") ? 0x31 : 0x2E; d.attr[0].offset = 0; d.attr[0].stream = 0;
@@ -82,10 +84,10 @@ int main(int argc, char **argv) {
         d.tex[1][0].texture.texture.swizzle[0] = 2; d.tex[1][0].texture.texture.swizzle[1] = 3; d.tex[1][0].texture.texture.swizzle[2] = 4; d.tex[1][0].texture.texture.swizzle[3] = 5;
         d.tex[1][0].storage = storage; d.tex[1][0].storage_size = lay.size;
         d.tex[1][0].sampler = (struct wonder_nvn_sampler_state){.min = 0, .mag = 0, .wrap_s = 7, .wrap_t = 7, .wrap_r = 7, .valid = 1, .lod_max = 1000, .anisotropy = 1};
-        d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8}; d.channel_mask.mask = 0xffffffff;
+        d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8}; d.channel_mask.mask = 0;   // never bound: zeroed like the replay's draw state
         d.depth_stencil = (wonder_nvn_depth_stencil_state){.dt = 1, .dw = 1, .df = 2};   // LESS
         d.polygon = (wonder_nvn_polygon_state){.cull = 2, .front = 1, .mode = 2};        // cull BACK, front CCW, FILL
-        d.states_set = 1 | 2 | 4 | 8;
+        d.states_set = 1 | 4 | 8;   // channel mask never bound: all channels written
         float vp[4] = {0, 0, 64, 64}; memcpy(d.viewport, vp, 16); d.viewport_set = 1; d.depth_range[1] = 1;
         d.depth_mode = 0; d.window_origin = 1;
         // Clear colour to blue, depth to 1.0, then draw.
@@ -97,7 +99,13 @@ int main(int argc, char **argv) {
         clear.depthAttachment.texture = depth; clear.depthAttachment.loadAction = MTLLoadActionClear; clear.depthAttachment.clearDepth = 1; clear.depthAttachment.storeAction = MTLStoreActionStore;
         [[(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:clear] endEncoding];
         assert(wonder_host_draw(&d) == 0);
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing")) return 4;   // stop cases must not get here
+        if (!strcmp(mode, "mask")) {
+            // Same shaders and targets, channel mask now bound to 0: must not reuse the write-all pipeline of the unset mask.
+            [[(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:clear] endEncoding];
+            d.states_set |= 2; d.channel_mask.mask = 0;
+            assert(wonder_host_draw(&d) == 0);
+        }
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -110,6 +118,7 @@ int main(int argc, char **argv) {
         printf("centre %u %u %u %u depth %g; corner %u %u %u %u depth %g\n", centre[0], centre[1], centre[2], centre[3], z[32 * 64 + 32], corner[0], corner[1], corner[2], corner[3], z[0]);
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
+        if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);
         for (int i = 0; i < 200 && access(png, F_OK); i++) usleep(10000);   // written by the command buffer's completion handler

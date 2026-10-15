@@ -36,3 +36,4 @@ void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t); //
 // is done (host_graphics.m: Documents/FirstDraw/target-0.png). RGBA8/BGRA8 (+sRGB) only; other formats return non-zero.
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path);
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target);
+int wonder_host_gpu_error(char *out, size_t size);   // 1 = a committed replay command buffer failed (text in out)

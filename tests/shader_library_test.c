@@ -18,6 +18,11 @@ int main(void) {
     assert(r.c1_buffer == 2 && r.c1_len == 3 && r.c1[0] == 0 && r.c1[2] == 0xff && r.support == 0 && (r.drv_read & 4) &&
            r.fout_mask == 2 && r.fout_type[1] == WONDER_SHADER_UINT && r.attr[0].type == WONDER_SHADER_SINT);
     assert(parse("stage vs\nc1 2 -\n", &r, err) == 0 && r.c1_buffer == 2 && r.c1_len == 0);
+    // Vertex depth convention the stage was built for.
+    assert(parse("stage vs\ndepth minus_one\n", &r, err) == 0 && r.depth_minus_one == 1);
+    assert(parse("stage vs\ndepth zero\n", &r, err) == 0 && r.depth_minus_one == 0);
+    assert(parse("stage vs\n", &r, err) == 0 && r.depth_minus_one == -1);
+    assert(parse("stage vs\ndepth sideways\n", &r, err) && strstr(err, "depth"));
     // Rejections name the problem.
     assert(parse("stage gs\n", &r, err) && strstr(err, "stage"));
     assert(parse("cbuf 0 1\n", &r, err) && strstr(err, "stage"));                  // stage line first

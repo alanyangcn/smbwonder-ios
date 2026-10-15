@@ -7,7 +7,7 @@ formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl
 
 Wonder SDK conventions (verified in sdk, not D2R's): uniform buffer r = c[3 + r] (BindUniformBuffer sdk+0x467950 writes
 slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x468840 writes at r * 8 + 0x20).
-.refl lines: stage vs|ps; cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
+.refl lines: stage vs|ps; depth minus_one|zero (vertex); cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
              tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>.
 Usage: wonder_shader_build.py <census dir>... --out <dir>
 """
@@ -62,7 +62,7 @@ def job_for(census, stage_entry, code_path):
     stage_no, stage = stage_entry['stage'], STAGES.get(stage_entry['stage'])
     if not stage: raise ValueError(f"stage {stage_entry['name']} is not built yet")
     job = {'key': stage_entry['key'], 'stage': stage, 'code': str(code_path), 'tex': {}, 'img': {}, 'attr': {}, 'fout': {},
-           'debug': False, 'reduced': False, 'depth_minus_one': census['depth_mode'] == 0}
+           'debug': False, 'reduced': False, 'depth_minus_one': census['depth_mode'] in (0, -1)}   # -1 = never set: NVN default NEAR_IS_MINUS_W
     for t in census['textures']:
         if t['stage'] == stage_no and t['texture']: job['tex'][str(t['index'])] = texture_type(t['texture']['target'])
     if stage == 'vs':
@@ -76,6 +76,7 @@ def job_for(census, stage_entry, code_path):
 def reflect(census, stage_entry, job, res, msl, c1):
     buffers, textures, samplers, attributes = entry_bindings(msl)
     stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set()
+    if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
     for cb in res['cbufs']:
         kind, r = cbuf_kind(cb['slot'])
         if cb['binding'] not in buffers: raise ValueError(f"cbuf c[{cb['slot']}] binding {cb['binding']} missing from the MSL entry")

@@ -23,6 +23,7 @@ class Metal2ShaderLibraryTests(unittest.TestCase):
                               ('tampered','NVN_SHADER_MANIFEST key=cccccccccccccccc'),('wrong_stage','NVN_SHADER_STAGE key=aaaaaaaaaaaaaaaa')):
                 q=subprocess.run([str(exe),str(scratch),case],capture_output=True,text=True)
                 self.assertEqual(q.returncode,3,(case,q.stderr[-500:])); self.assertIn(text,q.stderr)
+                if case=='broken': self.assertIn('error:',q.stderr)   # the compiler's own error line, not just its headline
             self.assertIn('metal2_draw shader library OK',p.stdout)
 
 class Metal2EncodeTests(unittest.TestCase):
@@ -40,5 +41,7 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('draw'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal2 encode draw OK',p.stdout)
     def test_back_facing_triangle_is_culled(self):
         p=self.run_case('back_facing'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('back face culled OK',p.stdout)
+    def test_bound_zero_channel_mask_gets_its_own_pipeline(self):
+        p=self.run_case('mask'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('channel mask OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

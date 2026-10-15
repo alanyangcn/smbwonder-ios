@@ -65,6 +65,8 @@ class CensusBuild(unittest.TestCase):
         vs = next(j for j in jobs if j['key'] == self.keys['vs'])
         self.assertEqual(vs['attr'], {'0': 'float'}); self.assertTrue(vs['depth_minus_one'])
         self.assertIn('attr 0 0 float', self.refl('vs')); self.assertIn('fout 0 float', self.refl('fs'))
+    def test_depth_line_follows_census(self):
+        self.assertIn('depth minus_one', self.refl('vs')); self.assertFalse(any(l.startswith('depth') for l in self.refl('fs')))
     def test_msl_21_flags(self):
         for flag in ('--msl-ios', '--msl-version', '20100', '--msl-decoration-binding'): self.assertIn(flag, self.manifest['spirv_cross_command'])
         self.assertIn('gl_Position.z = fma(', (self.out / f"{self.keys['vs']}.metal").read_text())

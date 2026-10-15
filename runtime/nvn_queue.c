@@ -23,6 +23,9 @@ struct replay_state {
 static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.0f}};
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
+// Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
+static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages; }
+    raster = {.sample_mask = 0xffffffffu, .line_width = 1.0f};
 // The first executed draw's colour target is read back (evidence) after the submit that holds it.
 static struct wonder_nvn_texture_snapshot first_draw_target; static int first_draw_pending, first_draw_captured;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
@@ -97,6 +100,14 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         snprintf(why, sizeof why, "draw needs a vertex+fragment program (stages %#x); %s", draw_state.has_program ? draw_state.program.mask : 0, summary);
         replay_stop(opcode, why);
     }
+    if ((raster.program_stages & 0x11) != 0x11) { snprintf(why, sizeof why, "program stage bits %#x do not bind both vertex and fragment", raster.program_stages); replay_stop(opcode, why); }
+    if (raster.rasterizer_discard) replay_stop(opcode, "rasterizer discard is enabled (not executed yet)");
+    if (raster.depth_clamp) replay_stop(opcode, "depth clamp is enabled (not executed yet)");
+    if (raster.sample_mask != 0xffffffffu) { snprintf(why, sizeof why, "sample mask %#x is not all samples", raster.sample_mask); replay_stop(opcode, why); }
+    if ((call.primitive == 1 || call.primitive == 2 || call.primitive == 3) && raster.line_width != 1.0f) replay_stop(opcode, "line width other than 1 (Metal draws 1-pixel lines)");
+    if ((draw_state.states_set & 8) && draw_state.polygon.offset_en) replay_stop(opcode, "polygon offset (depth bias) is not executed yet");
+    int depth_mode, origin; wonder_nvn_device_modes(&depth_mode, &origin);
+    if (origin != 1) { snprintf(why, sizeof why, "window origin %d (only UPPER_LEFT matches the translated shaders)", origin); replay_stop(opcode, why); }
     static struct wonder_host_draw d; memset(&d, 0, sizeof d);
     wonder_nvn_shader_key(draw_state.program.control[0], d.vs_key); wonder_nvn_shader_key(draw_state.program.control[1], d.fs_key);
     if (!wonder_host_shader_available(d.vs_key) || !wonder_host_shader_available(d.fs_key)) {
@@ -107,6 +118,12 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     }
     d.vr = wonder_host_shader_refl(d.vs_key); d.fr = wonder_host_shader_refl(d.fs_key);
     if (d.vr->stage != 0 || d.fr->stage != 1) replay_stop(opcode, "shader reflection stage does not match the program stage");
+    int want_minus_one = depth_mode != 1;   // NVN default (never set, -1) is NEAR_IS_MINUS_W
+    if (d.vr->depth_minus_one != want_minus_one) {
+        snprintf(why, sizeof why, "depth mode: device %d but vertex shader %s was built %s", depth_mode, d.vs_key,
+                 d.vr->depth_minus_one < 0 ? "without a depth line" : d.vr->depth_minus_one ? "for NEAR_IS_MINUS_W" : "for NEAR_IS_ZERO");
+        replay_stop(opcode, why);
+    }
     d.vs = wonder_host_shader_function(d.vs_key, 0); d.fs = wonder_host_shader_function(d.fs_key, 1);
     const struct wonder_shader_refl *refl[2] = {d.vr, d.fr};
     for (int stage = 0; stage < 2; stage++) {
@@ -122,6 +139,13 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             const struct wonder_nvn_texture_registration *t = h && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)(h & 0xfffff)) : NULL;
             const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
             if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
+            // NVN target (1D 0, 2D 1, 3D 2, 1D_ARRAY 3, 2D_ARRAY 4, 2DMS 5, 2DMS_ARRAY 6, RECTANGLE 7, CUBE 8, CUBE_ARRAY 9, BUFFER 10) -> reflection type.
+            static const int target_type[11] = {WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
+                WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER};
+            int target = t->has_view && t->view.set_target ? t->view.target : t->texture.desc.target;
+            if (target < 0 || target > 10 || target_type[target] != r->tex[i].type) {
+                snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, r->tex[i].type); replay_stop(opcode, why);
+            }
             d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1u << slot;
             if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
                 struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
@@ -134,6 +158,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         int a = d.vr->attr[i].nvn;
         if (a >= draw_state.nattrib || !draw_state.attrib[a].fmt) { snprintf(why, sizeof why, "vertex attribute %d is read but not enabled", a); replay_stop(opcode, why); }
         int s = (int)draw_state.attrib[a].stream;
+        if (s >= 15) { snprintf(why, sizeof why, "vertex stream %d would need [[buffer(%d)]] (Metal has 0..30)", s, 16 + s); replay_stop(opcode, why); }
         d.attr[i].format = draw_state.attrib[a].fmt; d.attr[i].offset = draw_state.attrib[a].offset; d.attr[i].stream = (uint32_t)s;
         if (!(d.stream_mask & (1u << s))) {
             if (s >= draw_state.nstream || !draw_state.vertex_buffer[s].address) { snprintf(why, sizeof why, "unbound vertex buffer stream %d", s); replay_stop(opcode, why); }
@@ -145,7 +170,20 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     d.primitive = call.primitive; d.index_type = call.index_type; d.count = call.count; d.first = call.first;
     d.base_vertex = call.base_vertex; d.instances = call.instances; d.base_instance = call.base_instance;
     if (call.indirect_address) replay_stop(opcode, "indirect draws are not executed yet");
-    if (call.index_type >= 0) d.index = span_of(opcode, call.index_address, (uint64_t)call.count << call.index_type);
+    if (call.index_type >= 0) {
+        d.index = span_of(opcode, call.index_address, (uint64_t)call.count << call.index_type);
+        // Metal restarts strips on the all-ones index and never restarts lists; NVN restarts on its own index when enabled.
+        uint32_t all_ones = call.index_type == 0 ? 0xffu : call.index_type == 1 ? 0xffffu : 0xffffffffu;
+        int strip = call.primitive == 3 || call.primitive == 5;
+        if (strip && !(raster.restart && (uint32_t)raster.restart_index == all_ones)) replay_stop(opcode, "strip draw without NVN primitive restart on the all-ones index (Metal always restarts there)");
+        if (!strip && raster.restart) {
+            struct wonder_nvn_pool_view v; wonder_nvn_address_span(call.index_address, (uint64_t)call.count << call.index_type, &v);
+            for (int i = 0; i < call.count; i++) {
+                uint32_t x = call.index_type == 0 ? v.memory[i] : call.index_type == 1 ? ((const uint16_t *)v.memory)[i] : ((const uint32_t *)v.memory)[i];
+                if (x == (uint32_t)raster.restart_index) { snprintf(why, sizeof why, "primitive restart index %#x appears in a list draw", raster.restart_index); replay_stop(opcode, why); }
+            }
+        }
+    }
     for (int i = 0; i < 9; i++) d.targets[i] = draw_state.targets[i];
     d.color_count = draw_state.has_targets ? draw_state.color_count : 0;
     memcpy(d.blend, draw_state.blend, sizeof d.blend); d.blend_set = draw_state.blend_set;
@@ -154,7 +192,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     memcpy(d.viewport, state.viewport, sizeof d.viewport); d.viewport_set = state.viewport_set;
     memcpy(d.depth_range, state.depth_range, sizeof d.depth_range);
     memcpy(d.scissor, state.scissor, sizeof d.scissor); d.scissor_set = state.scissor_set;
-    wonder_nvn_device_modes(&d.depth_mode, &d.window_origin);
+    d.depth_mode = depth_mode; d.window_origin = origin;
     if (wonder_host_draw(&d)) replay_stop(opcode, "host draw encoding failed");
     if (!first_draw_captured && !first_draw_pending)
         for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
@@ -193,6 +231,11 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_SET_VIEWPORTS:
         if (c->a[0] == 0 && c->a[1] >= 1) { memcpy(state.viewport, blob, 16); state.viewport_set = 1; }
         break;
+    case WONDER_NVN_CMD_SET_RASTERIZER_DISCARD: raster.rasterizer_discard = c->a[0] != 0; break;
+    case WONDER_NVN_CMD_SET_DEPTH_CLAMP: raster.depth_clamp = c->a[0] != 0; break;
+    case WONDER_NVN_CMD_SET_SAMPLE_MASK: raster.sample_mask = (uint32_t)c->a[0]; break;
+    case WONDER_NVN_CMD_SET_LINE_WIDTH: raster.line_width = f32(c->a[0]); break;
+    case WONDER_NVN_CMD_SET_PRIMITIVE_RESTART: raster.restart = c->a[0] != 0; raster.restart_index = (int)(uint32_t)c->a[1]; break;
     case WONDER_NVN_CMD_SET_DEPTH_RANGES:
         if (c->a[0] == 0 && c->a[1] >= 1) memcpy(state.depth_range, blob, 8);
         break;
@@ -264,6 +307,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_RESET_COUNTER: replay_stop(opcode, "counter reset (occlusion/statistics counters not implemented)");
     // Draw state (snapshotted at record time; kept for draws and the census).
     case WONDER_NVN_CMD_BIND_PROGRAM:
+        raster.program_stages = (unsigned)c->a[0];
         draw_state.has_program = c->a[1] != 0;
         memcpy(&draw_state.program, blob, sizeof draw_state.program);
         break;
@@ -291,10 +335,9 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     // Pure state not consumed by the first draw yet.
     case WONDER_NVN_CMD_BIND_STORAGE_BUFFER: case WONDER_NVN_CMD_BIND_IMAGE:
     case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_BLEND_COLOR: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
-    case WONDER_NVN_CMD_SET_DEPTH_BOUNDS: case WONDER_NVN_CMD_SET_DEPTH_CLAMP:
-    case WONDER_NVN_CMD_SET_LINE_WIDTH: case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
-    case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP: case WONDER_NVN_CMD_SET_PRIMITIVE_RESTART: case WONDER_NVN_CMD_SET_RASTERIZER_DISCARD:
-    case WONDER_NVN_CMD_SET_SAMPLE_MASK:
+    case WONDER_NVN_CMD_SET_DEPTH_BOUNDS:
+    case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
+    case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP:
     case WONDER_NVN_CMD_SET_SHADER_SCRATCH: case WONDER_NVN_CMD_SET_STENCIL_MASK: case WONDER_NVN_CMD_SET_STENCIL_REF:
     case WONDER_NVN_CMD_SET_STENCIL_VALUE_MASK:
         break;
@@ -334,6 +377,9 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
     pthread_t *owner = atomic_load(&replay_owner);
     if (owner && !pthread_equal(*owner, pthread_self())) wonder_nvn_stop("NVN_UNSUPPORTED nvnQueueSubmitCommands concurrent submitters");
     replay_owner_storage[0] = pthread_self(); atomic_store(&replay_owner, replay_owner_storage);
+    char gpu_error[256];
+    if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
+        wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);
     state.submits++; replay_queue = "main";
     unsigned before = state.commands, clears = state.clears;
     for (int i = 0; i < count; i++) {

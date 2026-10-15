@@ -17,6 +17,7 @@ struct wonder_shader_refl {
     int nattr; struct { uint8_t location, nvn, type; } attr[16];         // [[attribute(location)]] <- NVN vertex attribute
     uint8_t fout_mask, fout_type[8];                         // colour outputs written
     uint8_t drv_read;                                        // bit n: reads driver constant segment c[n] (0 or 2) at run time
+    int depth_minus_one;                                     // vertex: 1 = built with the NEAR_IS_MINUS_W remap, 0 = without, -1 = not stated
 };
 // 0 = parsed; otherwise non-zero with the reason in err.
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *out, char *err, size_t errlen);

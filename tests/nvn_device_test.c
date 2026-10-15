@@ -53,6 +53,8 @@ int wonder_host_shader_available(const char key[17]) { (void)key; return shaders
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
+static const char *fake_gpu_error;   // set to simulate a failed replay command buffer
+int wonder_host_gpu_error(char *out, size_t size) { if (!fake_gpu_error) return 0; snprintf(out, size, "%s", fake_gpu_error); return 1; }
 static unsigned first_draw_captures; static struct wonder_nvn_texture_snapshot first_draw_target;
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target) { first_draw_target = *target; first_draw_captures++; }
 // Fake replay backend: records operations; CPU callbacks run when pending work is "committed".
@@ -740,7 +742,7 @@ int main(void) {
             for (unsigned i = 0; i < 0x200; i++) cb_memory[0x100 + i] = (unsigned char)(i * 7 + 1);
             stages[0].code = code; stages[0].control = vs_control; stages[1].code = code + 0x100; stages[1].control = fs_control;
             assert(set_shaders(program_memory, 2, stages) == 1);
-            static _Alignas(16) unsigned char dcb[0xa0]; static _Alignas(8) unsigned char dctl[512];
+            static _Alignas(16) unsigned char dcb[0xa0]; static _Alignas(8) unsigned char dctl[0x4000];
             assert(((uint32_t (*)(void *, const void *))slot("nvnCommandBufferInitialize"))(dcb, device) == 1);
             ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(dcb, dctl, sizeof dctl);
             ((void (*)(void *, const void *, ptrdiff_t, size_t))slot("nvnCommandBufferAddCommandMemory"))(dcb, cb_pool, 0xe000, 0x1000);
@@ -785,8 +787,9 @@ int main(void) {
             assert(census_count == files);   // written once per run
 
             // ---- With translated shaders the replay assembles a host draw from the recorded state ----
+            wonder_nvnDeviceSetDepthMode(device, 0);   // NEAR_IS_MINUS_W, as Wonder sets it (round52 log)
             char err[128];
-            const char *vs_refl = "stage vs\nattr 0 0 float\n", *fs_refl = "stage ps\ncbuf 3 1\ntex 0 1 1 2d\nfout 0 float\n";
+            const char *vs_refl = "stage vs\ndepth minus_one\nattr 0 0 float\n", *fs_refl = "stage ps\ncbuf 3 1\ntex 0 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
             struct wonder_shader_refl fs_parsed; assert(!wonder_shader_refl_parse(fs_refl, strlen(fs_refl), &fs_parsed, err, sizeof err));
             fake_refl[1] = fs_parsed; shaders_available = 1;
@@ -822,10 +825,73 @@ int main(void) {
             const char *fs_drv = "stage ps\ndrv 2\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_drv, strlen(fs_drv), &fake_refl[1], err, sizeof err));
             EXPECT_STOP(dsubmit(queue, 1, &draw), "driver constant segment");
-            const char *vs_far = "stage vs\nattr 0 3 float\n";
+            const char *vs_far = "stage vs\ndepth minus_one\nattr 0 3 float\n";
             fake_refl[1] = fs_parsed; assert(!wonder_shader_refl_parse(vs_far, strlen(vs_far), &fake_refl[0], err, sizeof err));
             EXPECT_STOP(dsubmit(queue, 1, &draw), "vertex attribute 3");
             assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
+            // ---- Review fixes: state the Metal path cannot honour stops by name (final review Important 3-7) ----
+            void (*rbegin)(void *) = slot("nvnCommandBufferBeginRecording"); uint64_t (*rend)(void *) = slot("nvnCommandBufferEndRecording");
+            void (*rdraw)(void *, int, int, int, uint64_t) = slot("nvnCommandBufferDrawElements");
+            #define REVIEW_RECORD(setup) (rbegin(dcb), setup, rdraw(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200)), rend(dcb))
+            #define REVIEW_STOP(setup, expect) do { uint64_t h_ = REVIEW_RECORD(setup); EXPECT_STOP(dsubmit(queue, 1, &h_), expect); } while (0)
+            #define REVIEW_OK(setup) do { uint64_t h_ = REVIEW_RECORD(setup); unsigned n_ = host_draws; dsubmit(queue, 1, &h_); assert(host_draws == n_ + 1); } while (0)
+            REVIEW_OK((void)0);   // baseline still executes
+            // Depth mode must match the build (NVN default NEAR_IS_MINUS_W when never set).
+            const char *vs_zero = "stage vs\ndepth zero\nattr 0 0 float\n";
+            assert(!wonder_shader_refl_parse(vs_zero, strlen(vs_zero), &fake_refl[0], err, sizeof err));
+            REVIEW_STOP((void)0, "depth mode");
+            const char *vs_nodepth = "stage vs\nattr 0 0 float\n";
+            assert(!wonder_shader_refl_parse(vs_nodepth, strlen(vs_nodepth), &fake_refl[0], err, sizeof err));
+            REVIEW_STOP((void)0, "depth mode");
+            assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
+            // Window origin other than UPPER_LEFT.
+            wonder_nvnDeviceSetWindowOriginMode(device, 0); REVIEW_STOP((void)0, "window origin"); wonder_nvnDeviceSetWindowOriginMode(device, 1);
+            // Program bound for a subset of stages.
+            REVIEW_STOP(((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x1), "program stage bits");
+            ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
+            ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
+            uint64_t rebind = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb); dsubmit(queue, 1, &rebind);
+            // Rasterizer discard, depth clamp, sample mask, polygon offset: recorded and refused.
+            void (*u32cmd)(void *, uint32_t);
+            u32cmd = slot("nvnCommandBufferSetRasterizerDiscard"); REVIEW_STOP(u32cmd(dcb, 1), "rasterizer discard"); REVIEW_OK(u32cmd(dcb, 0));
+            u32cmd = slot("nvnCommandBufferSetDepthClamp"); REVIEW_STOP(u32cmd(dcb, 1), "depth clamp"); REVIEW_OK(u32cmd(dcb, 0));
+            void (*mask)(void *, int) = slot("nvnCommandBufferSetSampleMask"); REVIEW_STOP(mask(dcb, 1), "sample mask"); REVIEW_OK(mask(dcb, -1));
+            unsigned char poly[4]; ((void (*)(void *))slot("nvnPolygonStateSetDefaults"))(poly);
+            ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 4);
+            REVIEW_STOP(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly), "polygon offset");
+            ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 0);
+            REVIEW_OK(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly));
+            // Primitive restart: an index equal to the restart value (index 5 here) cannot be honoured on a list.
+            uint16_t *idx = (uint16_t *)(cb_memory + 0x9200); uint16_t saved[6]; memcpy(saved, idx, sizeof saved);
+            for (int i = 0; i < 6; i++) idx[i] = (uint16_t)i;
+            void (*restart)(void *, uint32_t, int) = slot("nvnCommandBufferSetPrimitiveRestart");
+            REVIEW_STOP(restart(dcb, 1, 5), "primitive restart"); REVIEW_OK(restart(dcb, 1, 0xffff)); REVIEW_OK(restart(dcb, 0, 0));
+            memcpy(idx, saved, sizeof saved);
+            // Line width other than 1 on line primitives.
+            rbegin(dcb); ((void (*)(void *, float))slot("nvnCommandBufferSetLineWidth"))(dcb, 2.0f); rdraw(dcb, 1, 1, 6, (uintptr_t)(cb_memory + 0x9200));
+            uint64_t lines = rend(dcb); EXPECT_STOP(dsubmit(queue, 1, &lines), "line width");
+            rbegin(dcb); ((void (*)(void *, float))slot("nvnCommandBufferSetLineWidth"))(dcb, 1.0f); uint64_t reset = rend(dcb); dsubmit(queue, 1, &reset);
+            // Vertex stream 15 would land on [[buffer(31)]].
+            unsigned char far_attrib[4]; ((void (*)(void *))slot("nvnVertexAttribStateSetDefaults"))(far_attrib);
+            ((void (*)(void *, int, ptrdiff_t))slot("nvnVertexAttribStateSetFormat"))(far_attrib, 0x2c, 8);
+            ((void (*)(void *, int))slot("nvnVertexAttribStateSetStreamIndex"))(far_attrib, 15);
+            unsigned char streams16[16 * 8]; for (int i = 0; i < 16; i++) { ((void (*)(void *))slot("nvnVertexStreamStateSetDefaults"))(streams16 + 8 * i); ((void (*)(void *, ptrdiff_t))slot("nvnVertexStreamStateSetStride"))(streams16 + 8 * i, 20); }
+            REVIEW_STOP((((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexAttribState"))(dcb, 1, far_attrib),
+                         ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexStreamState"))(dcb, 16, streams16),
+                         ((void (*)(void *, int, uint64_t, size_t))slot("nvnCommandBufferBindVertexBuffer"))(dcb, 15, (uintptr_t)(cb_memory + 0x9000), 0x100)), "vertex stream 15");
+            REVIEW_OK((((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexAttribState"))(dcb, 1, attrib),
+                         ((void (*)(void *, int, const void *))slot("nvnCommandBufferBindVertexStreamState"))(dcb, 1, stream)));
+            // Shader texture type must match the bound texture's target (texture 300 is 2D).
+            const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(fs_array, strlen(fs_array), &fake_refl[1], err, sizeof err));
+            REVIEW_STOP((void)0, "texture type");
+            fake_refl[1] = fs_parsed;
+            // A failed GPU command buffer stops the next submission by name.
+            fake_gpu_error = "Internal Error (0000000e:Internal Error)"; REVIEW_STOP((void)0, "NVN_GPU_ERROR"); fake_gpu_error = NULL;
+            REVIEW_OK((void)0);
+            #undef REVIEW_RECORD
+            #undef REVIEW_STOP
+            #undef REVIEW_OK
             // Index range past the end of the pool.
             ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
             ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + sizeof cb_memory - 4));
