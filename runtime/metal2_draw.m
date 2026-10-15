@@ -307,6 +307,24 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     NSData *ds_key = [NSData dataWithBytes:(uint32_t[]){(uint32_t)dd.depthCompareFunction, dd.depthWriteEnabled} length:8];
     id<MTLDepthStencilState> dss = depth_states[ds_key];
     if (!dss) { dss = [device newDepthStencilStateWithDescriptor:dd]; depth_states[ds_key] = dss; }
+    // Resolve every resource before taking the replay lock: texture lookups and render-target creation take the same
+    // (non-recursive) lock in host_graphics.m (round55 deadlocked at the first draw).
+    const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
+    id<MTLTexture> textures[2][32]; id<MTLSamplerState> sampler_states[2][32]; id<MTLBuffer> c1_buffers[2] = {nil, nil};
+    for (int stage = 0; stage < 2; stage++) {
+        const struct wonder_shader_refl *r = refl[stage];
+        for (int i = 0; i < r->ntex; i++) {
+            int slot = r->tex[i].slot;
+            textures[stage][i] = sampled_texture(d, stage, slot); sampler_states[stage][i] = sampler_state(d, &d->tex[stage][slot].sampler);
+        }
+        if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
+            c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
+        }
+        if (r->support >= 0 && !support_buffer) {   // Ryujinx support buffer (layout per D2R nvn_mtl.m): render_scale[0..72].x = 1, everything else 0
+            support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
+            for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
+        }
+    }
     // Encode.
     wonder_host_replay_lock();
     id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
@@ -330,26 +348,16 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (x1 <= x || y1 <= y) { [e endEncoding]; wonder_host_replay_unlock(); return 0; }   // empty scissor: nothing is drawn
         [e setScissorRect:(MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)(x1 - x), (NSUInteger)(y1 - y)}];
     }
-    const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
     for (int stage = 0; stage < 2; stage++) {
         const struct wonder_shader_refl *r = refl[stage];
         void (^buffer)(id<MTLBuffer>, NSUInteger, NSUInteger) = ^(id<MTLBuffer> b, NSUInteger offset, NSUInteger index) {
             if (stage) [e setFragmentBuffer:b offset:offset atIndex:index]; else [e setVertexBuffer:b offset:offset atIndex:index]; };
         for (int i = 0; i < r->ncbuf; i++) { const struct wonder_host_span *u = &d->ubo[stage][r->cbuf[i].slot]; buffer((__bridge id<MTLBuffer>)u->buffer, u->offset, r->cbuf[i].buffer); }
-        if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
-            id<MTLBuffer> c1 = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1.contents, r->c1, r->c1_len);
-            buffer(c1, 0, (NSUInteger)r->c1_buffer);
-        }
-        if (r->support >= 0) {   // Ryujinx support buffer (layout per D2R nvn_mtl.m): render_scale[0..72].x = 1, everything else 0
-            if (!support_buffer) { support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
-                                   for (int i = 0; i < 73; i++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * i) = 1.0f; }
-            buffer(support_buffer, 0, (NSUInteger)r->support);
-        }
+        if (r->c1_buffer >= 0) buffer(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
+        if (r->support >= 0) buffer(support_buffer, 0, (NSUInteger)r->support);
         for (int i = 0; i < r->ntex; i++) {
-            int slot = r->tex[i].slot;
-            id<MTLTexture> t = sampled_texture(d, stage, slot); id<MTLSamplerState> s = sampler_state(d, &d->tex[stage][slot].sampler);
-            if (stage) { [e setFragmentTexture:t atIndex:r->tex[i].texture]; [e setFragmentSamplerState:s atIndex:r->tex[i].sampler]; }
-            else { [e setVertexTexture:t atIndex:r->tex[i].texture]; [e setVertexSamplerState:s atIndex:r->tex[i].sampler]; }
+            if (stage) { [e setFragmentTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setFragmentSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
+            else { [e setVertexTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setVertexSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
         }
     }
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1)

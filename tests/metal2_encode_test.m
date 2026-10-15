@@ -4,6 +4,7 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #include <unistd.h>
+#include <pthread.h>
 #include "metal2_draw.h"
 #include "host_draw.h"
 #include "nvn_deswizzle.h"
@@ -16,10 +17,14 @@ _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a,
 // Host replay hooks normally supplied by host_graphics.m.
 static id<MTLDevice> device; static id<MTLCommandBuffer> pending; static id<MTLCommandQueue> queue;
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *targets;
-void wonder_host_replay_lock(void) {} void wonder_host_replay_unlock(void) {}
+// Like host_graphics.m: one non-recursive replay mutex, also taken by the render-target lookups; re-entry aborts.
+static pthread_mutex_t replay = PTHREAD_MUTEX_INITIALIZER;
+static void take(const char *who) { if (pthread_mutex_trylock(&replay)) { fprintf(stderr, "replay mutex re-entered by %s (deadlock on device)\n", who); abort(); } }
+void wonder_host_replay_lock(void) { take("wonder_host_replay_lock"); } void wonder_host_replay_unlock(void) { pthread_mutex_unlock(&replay); }
 void *wonder_host_replay_command_buffer(void) { if (!pending) pending = [queue commandBuffer]; return (__bridge void *)pending; }
-void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { return (__bridge void *)targets[@(t->serial)]; }
+void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { take("render_target_existing"); id<MTLTexture> x = targets[@(t->serial)]; pthread_mutex_unlock(&replay); return (__bridge void *)x; }
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format) {
+    take("render_target"); pthread_mutex_unlock(&replay);
     id<MTLTexture> x = targets[@(t->serial)];
     if (!x) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)format width:t->desc.width height:t->desc.height mipmapped:NO];
               d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate; x = [device newTextureWithDescriptor:d]; targets[@(t->serial)] = x; }
