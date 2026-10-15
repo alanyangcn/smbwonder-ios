@@ -137,10 +137,8 @@ HLE_FORCE("_ZN2nn5audio6server6detail26GetAudioDeviceOutputVolumeEPKNS0_15AudioD
     if (i < 0) die("audio GetAudioDeviceOutputVolume unknown device %.32s", name);
     pthread_mutex_lock(&device_lock); float v = device_volume[i]; pthread_mutex_unlock(&device_lock); return v;
 }
-// System settings master volume for the device (stub returned 0.0, i.e. muted): full scale on the host,
-// where the iOS hardware volume applies on top.
-HLE_FORCE("_ZN2nn5audio6server6detail33GetAudioSystemMasterVolumeSettingEPKNS0_15AudioDeviceNameE", "System master volume setting is full scale; iOS volume applies",
-          float, h_master_volume, const char *name) { if (device_index(name) < 0) die("audio master volume unknown device %.32s", name); return 1.0f; }
+// GetAudioSystemMasterVolumeSetting (sdk+0x220be0, stub returns 0.0) is called directly inside the sdk, not
+// through a symbol relocation, so it cannot be taken over here; it must be handled before audio output is routed.
 // Device events: real kernel events (readable handle returned); the host never changes the output device,
 // so they are never signaled.
 static Result device_event(unsigned *handle, const char *what) {
