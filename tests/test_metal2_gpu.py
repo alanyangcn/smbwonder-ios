@@ -43,5 +43,9 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('back_facing'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('back face culled OK',p.stdout)
     def test_bound_zero_channel_mask_gets_its_own_pipeline(self):
         p=self.run_case('mask'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('channel mask OK',p.stdout)
+    def test_full_texture_view_with_swizzle(self):
+        p=self.run_case('view'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('texture view OK',p.stdout)
+    def test_texture_view_reinterpreting_the_format_stops(self):
+        p=self.run_case('bad_view'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('texture view format',p.stderr)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

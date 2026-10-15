@@ -152,9 +152,12 @@ static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutabl
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
     const struct wonder_nvn_texture *t = &d->tex[stage][slot].texture.texture;
     const struct wonder_nvn_texture_registration *reg = &d->tex[stage][slot].texture;
-    if (reg->has_view && (reg->view.set_format || reg->view.set_target || reg->view.set_swizzle || reg->view.set_depth_stencil ||
-                          (reg->view.set_levels && reg->view.base_level) || (reg->view.set_layers && reg->view.min_layer)))
-        unsupported(d, "texture view on sampled texture serial", (long)t->serial);
+    // Texture views (registered with the pool entry): same format and target as the texture, a level/layer sub-range and a
+    // swizzle are executed as a Metal texture view; reinterpreting the format or target stops by name.
+    const struct wonder_nvn_texture_view *v = reg->has_view ? &reg->view : NULL;
+    if (v && v->set_format && v->format != t->desc.format) unsupported(d, "texture view format (reinterpretation) on serial", (long)t->serial);
+    if (v && v->set_target && v->target != t->desc.target) unsupported(d, "texture view target on serial", (long)t->serial);
+    if (v && v->set_depth_stencil && v->depth_stencil_mode && t->desc.format >= 0x31 && t->desc.format <= 0x36) unsupported(d, "stencil texturing view on serial", (long)t->serial);
     id<MTLTexture> gpu = (__bridge id<MTLTexture>)wonder_host_render_target_existing(t);
     id<MTLTexture> tex = gpu;
     if (!tex) {
@@ -191,12 +194,22 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
             sampled[key] = tex; sampled_hash[key] = @(hash);
         }
     }
-    const uint8_t *z = t->swizzle;   // NVN texture swizzle values equal MTLTextureSwizzle (ZERO 0, ONE 1, R 2, G 3, B 4, A 5)
+    NSUInteger levels = tex.mipmapLevelCount, base = 0, count = levels, slices = tex.textureType == MTLTextureType2DArray ? tex.arrayLength : 1, first = 0, layers = slices;
+    if (v && v->set_levels) { base = v->base_level; count = v->levels ? v->levels : levels - base; }
+    if (v && v->set_layers) { first = (NSUInteger)v->min_layer; layers = v->layers > 0 ? (NSUInteger)v->layers : slices - first; }
+    if (base >= levels || count > levels - base) unsupported(d, "texture view levels beyond the texture, serial", (long)t->serial);
+    if (first >= slices || layers > slices - first) unsupported(d, "texture view layers beyond the texture, serial", (long)t->serial);
+    const uint8_t *z = v && v->set_swizzle ? v->swizzle : t->swizzle;   // NVN swizzle values equal MTLTextureSwizzle (ZERO 0, ONE 1, R 2, G 3, B 4, A 5)
     int identity = z[0] == 2 && z[1] == 3 && z[2] == 4 && z[3] == 5, unset = !(z[0] | z[1] | z[2] | z[3]);
-    if (identity || unset) return tex;
-    if (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
-    return [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:tex.textureType levels:NSMakeRange(0, tex.mipmapLevelCount) slices:NSMakeRange(0, 1)
+    if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
+    int whole = base == 0 && count == levels && first == 0 && layers == slices;
+    if (whole && (identity || unset)) return tex;
+    id<MTLTexture> view = identity || unset   // the swizzle-taking call fails outright on GPUs without texture swizzle
+        ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:tex.textureType levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]
+        : [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:tex.textureType levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)
                                      swizzle:MTLTextureSwizzleChannelsMake(z[0], z[1], z[2], z[3])];
+    if (!view) unsupported(d, "texture view creation on serial", (long)t->serial);
+    return view;
 }
 static NSMutableDictionary<NSData *, id<MTLSamplerState>> *samplers;
 static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const struct wonder_nvn_sampler_state *m) {

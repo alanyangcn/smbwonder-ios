@@ -83,6 +83,19 @@ int main(int argc, char **argv) {
         d.tex_mask[1] = 1; d.tex[1][0].texture.valid = 1; d.tex[1][0].texture.texture.serial = 77; d.tex[1][0].texture.texture.desc = td;
         d.tex[1][0].texture.texture.swizzle[0] = 2; d.tex[1][0].texture.texture.swizzle[1] = 3; d.tex[1][0].texture.texture.swizzle[2] = 4; d.tex[1][0].texture.texture.swizzle[3] = 5;
         d.tex[1][0].storage = storage; d.tex[1][0].storage_size = lay.size;
+        int swizzle_views = [device supportsFamily:MTLGPUFamilyApple1] || [device supportsFamily:MTLGPUFamilyMac2];   // A11 yes; old Intel Macs no
+        if (!strcmp(mode, "view") || !strcmp(mode, "bad_view")) {
+            // Every view field set, as round56's second draw registers it. Level 1 (1x1 red) is selected; where the GPU has
+            // texture swizzle, blue is taken from red, so the red texel samples magenta.
+            td.levels = 2; nvn_tex_layout(&td, &lay);
+            uint8_t *mips = calloc(1, lay.size); assert(!nvn_swizzle(&td, 0, 0, linear, 8, mips));
+            uint8_t red[4] = {255, 0, 0, 255}; assert(!nvn_swizzle(&td, 1, 0, red, 4, mips));
+            d.tex[1][0].texture.texture.desc = td; d.tex[1][0].storage = mips; d.tex[1][0].storage_size = lay.size; d.tex[1][0].texture.texture.serial = 78;
+            struct wonder_nvn_texture_view *v = &d.tex[1][0].texture.view; d.tex[1][0].texture.has_view = 1;
+            v->target = 1; v->format = !strcmp(mode, "bad_view") ? 0x34 : 0x25; v->base_level = 1; v->levels = 1; v->min_layer = 0; v->layers = 1;
+            v->set_levels = v->set_layers = v->set_format = v->set_swizzle = v->set_depth_stencil = v->set_target = 1;
+            v->swizzle[0] = 2; v->swizzle[1] = 3; v->swizzle[2] = swizzle_views ? 2 : 4; v->swizzle[3] = 5;
+        }
         d.tex[1][0].sampler = (struct wonder_nvn_sampler_state){.min = 0, .mag = 0, .wrap_s = 7, .wrap_t = 7, .wrap_r = 7, .valid = 1, .lod_max = 1000, .anisotropy = 1};
         d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8}; d.channel_mask.mask = 0;   // never bound: zeroed like the replay's draw state
         d.depth_stencil = (wonder_nvn_depth_stencil_state){.dt = 1, .dw = 1, .df = 2};   // LESS
@@ -105,7 +118,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -119,6 +132,7 @@ int main(int argc, char **argv) {
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == (swizzle_views ? 255 : 0)); printf("swizzle views %d\n", swizzle_views); puts("metal2 encode texture view OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);
         for (int i = 0; i < 200 && access(png, F_OK); i++) usleep(10000);   // written by the command buffer's completion handler
