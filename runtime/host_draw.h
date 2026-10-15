@@ -16,7 +16,7 @@ struct wonder_host_draw {
     struct wonder_host_span ubo[2][14];                                               // [stage][NVN uniform slot], read slots only
     struct { struct wonder_nvn_texture_registration texture; struct wonder_nvn_sampler_state sampler;
              const uint8_t *storage; uint64_t storage_size; } tex[2][32]; uint32_t tex_mask[2];   // storage: the texture's pool bytes (TX1 layout)
-    wonder_nvn_blend_state blend[8]; uint8_t blend_set;
+    wonder_nvn_blend_state blend[8]; uint8_t blend_set; float blend_color[4];   // SetBlendColor (constant blend factors)
     wonder_nvn_color_state color; wonder_nvn_channel_mask_state channel_mask; wonder_nvn_depth_stencil_state depth_stencil;
     wonder_nvn_polygon_state polygon; wonder_nvn_multisample_state multisample; uint8_t states_set;   // bits as wonder_nvn_draw_state
     float viewport[4]; int viewport_set; float depth_range[2]; int scissor[4]; int scissor_set;

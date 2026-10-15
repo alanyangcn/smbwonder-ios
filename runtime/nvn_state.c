@@ -14,9 +14,11 @@ static int range(int v, int lo, int hi, const char *who) { if (v < lo || v > hi)
 // Blend: funcs 1..0x13, equations 1..5, target 0..7
 void wonder_nvnBlendStateSetDefaults(void *s) { need(s, "nvnBlendStateSetDefaults"); *(blend_st *)s = (blend_st){0, 2, 1, 2, 1, 1, 1}; }
 void wonder_nvnBlendStateSetBlendTarget(void *s, int t) { need(s, __func__); ((blend_st *)s)->target = (unsigned)range(t, 0, 7, "nvnBlendStateSetBlendTarget"); }
+static int blend_func(int v, const char *who) { return v >= 0x61 && v <= 0x64 ? v : range(v, 1, 0x13, who); }
 void wonder_nvnBlendStateSetBlendFunc(void *s, int sr, int dr, int sa, int da) {
     need(s, __func__); blend_st *o = s; const char *w = "nvnBlendStateSetBlendFunc";
-    o->src_rgb = (unsigned)range(sr, 1, 0x13, w); o->dst_rgb = (unsigned)range(dr, 1, 0x13, w); o->src_a = (unsigned)range(sa, 1, 0x13, w); o->dst_a = (unsigned)range(da, 1, 0x13, w);
+    // NVNblendFunc: ZERO..ONE_MINUS_SRC1_ALPHA (1..0x13) and CONSTANT_COLOR..ONE_MINUS_CONSTANT_ALPHA (0x61..0x64).
+    o->src_rgb = (unsigned)blend_func(sr, w); o->dst_rgb = (unsigned)blend_func(dr, w); o->src_a = (unsigned)blend_func(sa, w); o->dst_a = (unsigned)blend_func(da, w);
 }
 void wonder_nvnBlendStateSetBlendEquation(void *s, int er, int ea) {
     need(s, __func__); ((blend_st *)s)->eq_rgb = (unsigned)range(er, 1, 5, "nvnBlendStateSetBlendEquation"); ((blend_st *)s)->eq_a = (unsigned)range(ea, 1, 5, "nvnBlendStateSetBlendEquation");

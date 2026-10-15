@@ -85,6 +85,15 @@ int main(int argc, char **argv) {
         d.tex[1][0].texture.texture.swizzle[0] = 2; d.tex[1][0].texture.texture.swizzle[1] = 3; d.tex[1][0].texture.texture.swizzle[2] = 4; d.tex[1][0].texture.texture.swizzle[3] = 5;
         d.tex[1][0].storage = storage; d.tex[1][0].storage_size = lay.size;
         int swizzle_views = [device supportsFamily:MTLGPUFamilyApple1] || [device supportsFamily:MTLGPUFamilyMac2];   // A11 yes; old Intel Macs no
+        if (!strcmp(mode, "blend_color")) {
+            // Target 0 blends with CONSTANT_COLOR / ZERO: result = source x blend colour (0.5, 1, 1, 1) -> red channel halves.
+            d.color.blend_en = 1; d.blend_set = 1;
+            d.blend[0] = (wonder_nvn_blend_state){.target = 0, .src_rgb = 0x61, .dst_rgb = 1, .src_a = 2, .dst_a = 1, .eq_rgb = 1, .eq_a = 1};
+            d.blend_color[0] = 0.5f; d.blend_color[1] = d.blend_color[2] = d.blend_color[3] = 1.0f;
+            float tint2[4] = {1, 1, 1, 1}; memcpy((uint8_t *)pool.contents + 0x200, tint2, 16);
+            uint8_t white[2][2][4] = {{{255, 255, 255, 255}, {255, 255, 255, 255}}, {{255, 255, 255, 255}, {255, 255, 255, 255}}};
+            assert(!nvn_swizzle(&td, 0, 0, white, 8, storage)); d.tex[1][0].texture.texture.serial = 80;
+        }
         if (!strcmp(mode, "bc")) {
             // 4x4 BC1 texture, one solid green block (565 0x07e0), decoded on the CPU as on the A11 (no BC sampling there).
             setenv("WONDER_TEST_NO_BC", "1", 1);
@@ -106,7 +115,8 @@ int main(int argc, char **argv) {
             v->swizzle[0] = 2; v->swizzle[1] = 3; v->swizzle[2] = swizzle_views ? 2 : 4; v->swizzle[3] = 5;
         }
         d.tex[1][0].sampler = (struct wonder_nvn_sampler_state){.min = 0, .mag = 0, .wrap_s = 7, .wrap_t = 7, .wrap_r = 7, .valid = 1, .lod_max = 1000, .anisotropy = 1};
-        d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8}; d.channel_mask.mask = 0;   // never bound: zeroed like the replay's draw state
+        d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8};
+        if (!strcmp(mode, "blend_color")) d.color.blend_en = 1; d.channel_mask.mask = 0;   // never bound: zeroed like the replay's draw state
         d.depth_stencil = (wonder_nvn_depth_stencil_state){.dt = 1, .dw = 1, .df = 2};   // LESS
         d.polygon = (wonder_nvn_polygon_state){.cull = 2, .front = 1, .mode = 2};        // cull BACK, front CCW, FILL
         d.states_set = 1 | 4 | 8;   // channel mask never bound: all channels written
@@ -127,7 +137,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -141,6 +151,7 @@ int main(int argc, char **argv) {
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal2 encode blend colour OK"); return 0; }
         if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode BC decode OK"); return 0; }
         if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == (swizzle_views ? 255 : 0)); printf("swizzle views %d\n", swizzle_views); puts("metal2 encode texture view OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint

@@ -50,5 +50,7 @@ class Metal2EncodeTests(unittest.TestCase):
     def test_bc_texture_decoded_when_the_gpu_lacks_bc(self):
         p=self.run_case('bc'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('BC decode OK',p.stdout)
         self.assertIn('HOST_TEXTURE_BC_DECODE serial=79',p.stderr)
+    def test_constant_blend_colour(self):
+        p=self.run_case('blend_color'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('blend colour OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

@@ -533,6 +533,11 @@ int main(void) {
     uint64_t blend = 0, ds = 0, vstream = 0; uint32_t color = 0, mask = 0, poly = 0, vattr = 0; unsigned char ms[0x18];
     ((void (*)(void *))slot("nvnBlendStateSetDefaults"))(&blend); ((void (*)(void *, int, int, int, int))slot("nvnBlendStateSetBlendFunc"))(&blend, 5, 6, 2, 1);
     EXPECT_STOP(wonder_nvnBlendStateSetBlendFunc(&blend, 0, 1, 1, 1), "NVN_INVALID_ARGUMENT");
+    // CONSTANT_COLOR .. ONE_MINUS_CONSTANT_ALPHA (0x61..0x64), round74; values between 0x13 and 0x61 stay invalid.
+    wonder_nvnBlendStateSetBlendFunc(&blend, 0x61, 0x62, 0x63, 0x64);
+    EXPECT_STOP(wonder_nvnBlendStateSetBlendFunc(&blend, 0x20, 1, 1, 1), "NVN_INVALID_ARGUMENT");
+    EXPECT_STOP(wonder_nvnBlendStateSetBlendFunc(&blend, 0x65, 1, 1, 1), "NVN_INVALID_ARGUMENT");
+    wonder_nvnBlendStateSetBlendFunc(&blend, 5, 6, 2, 1);
     ((void (*)(void *))slot("nvnColorStateSetDefaults"))(&color); ((void (*)(void *, int, unsigned))slot("nvnColorStateSetBlendEnable"))(&color, 2, 0xffffff01u);
     assert((color & 0xff) == 4);
     ((void (*)(void *))slot("nvnChannelMaskStateSetDefaults"))(&mask); ((void (*)(void *, int, unsigned, unsigned, unsigned, unsigned))slot("nvnChannelMaskStateSetChannelMask"))(&mask, 1, 1, 0, 1, 0);

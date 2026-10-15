@@ -17,7 +17,7 @@
 
 struct replay_state {
     struct wonder_nvn_texture_snapshot targets[9]; int color_count; int has_targets;
-    int scissor[4]; int scissor_set; float viewport[4]; int viewport_set; float depth_range[2];
+    int scissor[4]; int scissor_set; float viewport[4]; int viewport_set; float depth_range[2]; float blend_color[4];
     int render_enable;
     unsigned submits, commands, clears;
 };
@@ -227,7 +227,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     }
     for (int i = 0; i < 9; i++) d.targets[i] = draw_state.targets[i];
     d.color_count = draw_state.has_targets ? draw_state.color_count : 0;
-    memcpy(d.blend, draw_state.blend, sizeof d.blend); d.blend_set = draw_state.blend_set;
+    memcpy(d.blend, draw_state.blend, sizeof d.blend); d.blend_set = draw_state.blend_set; memcpy(d.blend_color, state.blend_color, sizeof d.blend_color);
     d.color = draw_state.color; d.channel_mask = draw_state.channel_mask; d.depth_stencil = draw_state.depth_stencil;
     d.polygon = draw_state.polygon; d.multisample = draw_state.multisample; d.states_set = draw_state.states_set;
     memcpy(d.viewport, state.viewport, sizeof d.viewport); d.viewport_set = state.viewport_set;
@@ -288,6 +288,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_SET_SAMPLE_MASK: raster.sample_mask = (uint32_t)c->a[0]; break;
     case WONDER_NVN_CMD_SET_LINE_WIDTH: raster.line_width = f32(c->a[0]); break;
     case WONDER_NVN_CMD_SET_PRIMITIVE_RESTART: raster.restart = c->a[0] != 0; raster.restart_index = (int)(uint32_t)c->a[1]; break;
+    case WONDER_NVN_CMD_SET_BLEND_COLOR: memcpy(state.blend_color, blob, 16); break;
     case WONDER_NVN_CMD_SET_DEPTH_RANGES:
         if (c->a[0] == 0 && c->a[1] >= 1) memcpy(state.depth_range, blob, 8);
         break;
@@ -386,7 +387,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_BIND_MULTISAMPLE: memcpy(&draw_state.multisample, blob, sizeof draw_state.multisample); draw_state.states_set |= 16; break;
     // Pure state not consumed by the first draw yet.
     case WONDER_NVN_CMD_BIND_STORAGE_BUFFER: case WONDER_NVN_CMD_BIND_IMAGE:
-    case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_BLEND_COLOR: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
+    case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
     case WONDER_NVN_CMD_SET_DEPTH_BOUNDS:
     case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
     case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP:

@@ -126,7 +126,9 @@ static MTLBlendFactor blend_factor(const struct wonder_host_draw *d, unsigned f)
     case 8: return MTLBlendFactorOneMinusDestinationAlpha; case 9: return MTLBlendFactorDestinationColor; case 10: return MTLBlendFactorOneMinusDestinationColor;
     case 11: return MTLBlendFactorSourceAlphaSaturated; case 0x10: return MTLBlendFactorSource1Color; case 0x11: return MTLBlendFactorOneMinusSource1Color;
     case 0x12: return MTLBlendFactorSource1Alpha; case 0x13: return MTLBlendFactorOneMinusSource1Alpha;
-    default: unsupported(d, "blend factor (constant blend colour is not tracked yet)", (long)f);
+    case 0x61: return MTLBlendFactorBlendColor; case 0x62: return MTLBlendFactorOneMinusBlendColor;
+    case 0x63: return MTLBlendFactorBlendAlpha; case 0x64: return MTLBlendFactorOneMinusBlendAlpha;
+    default: unsupported(d, "blend factor", (long)f);
     }
 }
 static MTLBlendOperation blend_op(const struct wonder_host_draw *d, unsigned e) {
@@ -445,6 +447,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     if (!e) { wonder_host_replay_unlock(); unsupported(d, "render encoder creation", 0); }
     e.label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
     [e setRenderPipelineState:pso]; [e setDepthStencilState:dss];
+    [e setBlendColorRed:d->blend_color[0] green:d->blend_color[1] blue:d->blend_color[2] alpha:d->blend_color[3]];
     MTLCullMode cull = MTLCullModeNone;
     if (d->states_set & 8) { if (d->polygon.cull == 3) { wonder_host_replay_unlock(); unsupported(d, "cull FRONT_AND_BACK", 3); }
                              cull = d->polygon.cull == 1 ? MTLCullModeFront : d->polygon.cull == 2 ? MTLCullModeBack : MTLCullModeNone; }
