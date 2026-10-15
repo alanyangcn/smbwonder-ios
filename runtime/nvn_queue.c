@@ -225,11 +225,14 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             uint32_t stride = d.stream[s].stride, divisor = d.stream[s].divisor;
             int64_t element = !stride ? 0 : divisor ? max_instance / divisor : max_vertex;
             uint64_t end = (uint64_t)element * stride + d.attr[i].offset + (uint64_t)(bytes > 0 ? bytes : 1);
-            if (max_vertex < 0 || end > d.stream[s].span.size) {
-                snprintf(why, sizeof why, "vertex fetch past the bound vertex buffer: stream %d element %lld stride %u attribute offset %u ends at %#llx, bound %#zx",
+            // Past the bound size Maxwell returns zeros (round82: a 6-index draw over 3 bound vertices); the host zero-pads
+            // the stream to the fetched size. Negative vertex indices and absurd sizes stop.
+            if (max_vertex < 0 || end > (64u << 20)) {
+                snprintf(why, sizeof why, "vertex fetch out of range: stream %d element %lld stride %u attribute offset %u ends at %#llx, bound %#zx",
                          s, (long long)element, stride, d.attr[i].offset, (unsigned long long)end, d.stream[s].span.size);
                 replay_stop(opcode, why);
             }
+            if (end > d.stream[s].fetch_size) d.stream[s].fetch_size = end;
         }
     }
     for (int i = 0; i < 9; i++) d.targets[i] = draw_state.targets[i];

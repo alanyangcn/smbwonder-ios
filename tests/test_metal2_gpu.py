@@ -56,5 +56,7 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('clear_rect'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('clear rect OK',p.stdout)
     def test_scissored_depth_clear(self):
         p=self.run_case('clear_depth_rect'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('clear depth rect OK',p.stdout)
+    def test_vertex_fetch_past_bound_reads_zeros(self):
+        p=self.run_case('fetch_pad'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('fetch padding OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

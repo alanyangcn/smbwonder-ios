@@ -12,7 +12,8 @@ struct wonder_host_draw {
     int primitive, index_type, count, first, base_vertex, instances, base_instance;   // index_type -1 = DrawArrays
     struct wonder_host_span index;
     int nattr; struct { uint32_t format, offset, stream; } attr[16];                 // indexed like vr->attr
-    struct { struct wonder_host_span span; uint32_t stride, divisor; } stream[16]; uint16_t stream_mask;
+    // fetch_size: bytes the draw reads from the stream start; beyond span.size Maxwell returns zeros (the host pads).
+    struct { struct wonder_host_span span; uint32_t stride, divisor; uint64_t fetch_size; } stream[16]; uint16_t stream_mask;
     struct wonder_host_span ubo[2][14];                                               // [stage][NVN uniform slot], read slots only
     struct { struct wonder_nvn_texture_registration texture; struct wonder_nvn_sampler_state sampler;
              const uint8_t *storage; uint64_t storage_size; } tex[2][32]; uint32_t tex_mask[2];   // storage: the texture's pool bytes (TX1 layout)

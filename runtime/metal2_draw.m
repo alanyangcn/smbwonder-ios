@@ -444,6 +444,18 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (n) [ubo_blit copyFromBuffer:src sourceOffset:u->offset toBuffer:copy destinationOffset:0 size:n];
         ubo_copies[stage][slot] = copy;
     }
+    // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
+    id<MTLBuffer> stream_copies[16] = {nil};
+    for (int s = 0; s < 16; s++) if ((d->stream_mask >> s & 1) && d->stream[s].fetch_size > d->stream[s].span.size) {
+        id<MTLBuffer> src = (__bridge id<MTLBuffer>)d->stream[s].span.buffer;
+        if (!src || d->stream[s].span.offset + d->stream[s].span.size > src.length) { wonder_host_replay_unlock(); unsupported(d, "vertex stream span outside its pool buffer, stream", s); }
+        if (!ubo_blit) ubo_blit = [cb blitCommandEncoder];
+        NSUInteger n = (NSUInteger)((d->stream[s].fetch_size + 15) & ~15ull);
+        id<MTLBuffer> copy = [device newBufferWithLength:n options:MTLResourceStorageModePrivate];
+        [ubo_blit fillBuffer:copy range:NSMakeRange(0, n) value:0];
+        if (d->stream[s].span.size) [ubo_blit copyFromBuffer:src sourceOffset:d->stream[s].span.offset toBuffer:copy destinationOffset:0 size:d->stream[s].span.size];
+        stream_copies[s] = copy;
+    }
     [ubo_blit endEncoding];
     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
     if (!e) { wonder_host_replay_unlock(); unsupported(d, "render encoder creation", 0); }
@@ -478,8 +490,10 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
             else { [e setVertexTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setVertexSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
         }
     }
-    for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1)
-        [e setVertexBuffer:(__bridge id<MTLBuffer>)d->stream[s].span.buffer offset:d->stream[s].span.offset atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];
+    for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
+        if (stream_copies[s]) [e setVertexBuffer:stream_copies[s] offset:0 atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];
+        else [e setVertexBuffer:(__bridge id<MTLBuffer>)d->stream[s].span.buffer offset:d->stream[s].span.offset atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];
+    }
     if (d->index_type < 0) {
         [e drawPrimitives:primitive vertexStart:(NSUInteger)d->first vertexCount:(NSUInteger)d->count instanceCount:(NSUInteger)d->instances baseInstance:(NSUInteger)d->base_instance];
     } else {

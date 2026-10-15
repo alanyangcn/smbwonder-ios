@@ -966,7 +966,8 @@ int main(void) {
             // index 12 reads bytes 248..255 (in range), index 13 reads 268..275 (past the end) -> stop instead of a GPU fault.
             { uint16_t *ix = (uint16_t *)(cb_memory + 0x9200); uint16_t keep[6]; memcpy(keep, ix, sizeof keep);
               for (int i = 0; i < 6; i++) ix[i] = 12; REVIEW_OK((void)0);
-              ix[3] = 13; REVIEW_STOP((void)0, "vertex fetch");
+              ix[3] = 13; REVIEW_OK((void)0);   // past the bound size: Maxwell reads zeros -> the stream is zero-padded (round82)
+              assert(last_draw.stream[0].span.size == 0x100 && last_draw.stream[0].fetch_size == 13 * 20 + 8 + 8);
               memcpy(ix, keep, sizeof keep); }
             // Shader texture type must match the bound texture's target (texture 300 is 2D).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";

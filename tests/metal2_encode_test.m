@@ -125,6 +125,14 @@ int main(int argc, char **argv) {
         d.index = (struct wonder_host_span){(__bridge void *)pool, 0x100, 3};
         d.nattr = 1; d.attr[0].format = !strcmp(mode, "bad_vertex_format") ? 0x31 : 0x2E; d.attr[0].offset = 0; d.attr[0].stream = 0;
         d.stream[0].span = (struct wonder_host_span){(__bridge void *)pool, 0, sizeof vertices}; d.stream[0].stride = 16; d.stream_mask = 1;
+        d.stream[0].fetch_size = sizeof vertices;
+        if (!strcmp(mode, "fetch_pad")) {
+            // Index 3 is past the 3 bound vertices: Maxwell reads zeros. The pool holds a far-away vertex there; the zero
+            // vertex (0,0,0,0) makes a degenerate triangle with the others -> centre still drawn by the first triangle only.
+            float far[4] = {5, 5, 0.25f, 1}; memcpy((uint8_t *)pool.contents + sizeof vertices, far, 16);
+            uint8_t six[6] = {0, 1, 2, 0, 1, 3}; memcpy((uint8_t *)pool.contents + 0x100, six, 6); d.count = 6; d.index.size = 6;
+            d.stream[0].fetch_size = 4 * 16;
+        }
         d.ubo[1][0] = (struct wonder_host_span){(__bridge void *)pool, 0x200, 16};
         // 2x2 RGBA8 texture in TX1 block-linear storage: texel (0,1) (sampled at uv 0.25,0.75) is green.
         nvn_texdesc td = {.target = 1, .format = 0x25, .samples = 0, .width = 2, .height = 2, .depth = 1, .levels = 1};
@@ -187,7 +195,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -201,6 +209,8 @@ int main(int argc, char **argv) {
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "fetch_pad")) {   // the corner would be covered if vertex 3 came from the pool bytes (5,5)
+            const uint8_t *far_px = px + (2 * 64 + 62) * 4; assert(far_px[2] == 255 && far_px[1] == 0); puts("metal2 encode fetch padding OK"); return 0; }
         if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal2 encode blend colour OK"); return 0; }
         if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode BC decode OK"); return 0; }
         if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == (swizzle_views ? 255 : 0)); printf("swizzle views %d\n", swizzle_views); puts("metal2 encode texture view OK"); return 0; }
