@@ -4,6 +4,7 @@
 #include "nvn_names.h"
 #include "nvn_texture.h"
 #include "nvn_commands.h"
+#include "host_draw.h"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -46,6 +47,12 @@ static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders) { (void)program; (void)shaders; captured_programs++; }
+// Fake translated-shader library and draw backend: the vertex key gets fake_refl[0], every other key fake_refl[1].
+static struct wonder_shader_refl fake_refl[2]; static char fake_vs_key[17]; static int shaders_available; static unsigned host_draws; static struct wonder_host_draw last_draw;
+int wonder_host_shader_available(const char key[17]) { (void)key; return shaders_available; }
+void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
+const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
+int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
 // Fake replay backend: records operations; CPU callbacks run when pending work is "committed".
 static unsigned host_clears, host_depth_clears, host_fills, host_writes, host_presents, host_targets;
 static float host_last_clear[4]; static void *pending_fn[64]; static void *pending_arg[64]; static unsigned pending_count;
@@ -754,7 +761,7 @@ int main(void) {
             uint64_t draw = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb);
             void (*dsubmit)(void *, int, const uint64_t *) = slot("nvnQueueSubmitCommands");
             EXPECT_STOP(dsubmit(queue, 1, &draw), "census=DrawCensus");
-            assert(strstr(last_stop, "draw execution needs translated shaders"));
+            assert(strstr(last_stop, "NVN_SHADER_MISSING"));
             unsigned char digest[CC_SHA256_DIGEST_LENGTH]; char key[17];
             CC_SHA256(vs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key + 2 * i, "%02x", digest[i]);
             assert(strstr(last_stop, key));
@@ -772,8 +779,51 @@ int main(void) {
             assert(strstr(json, "\"width\":128"));
             free(json);
             unsigned files = census_count;
-            EXPECT_STOP(dsubmit(queue, 1, &draw), "draw execution needs translated shaders");
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "NVN_SHADER_MISSING");
             assert(census_count == files);   // written once per run
+
+            // ---- With translated shaders the replay assembles a host draw from the recorded state ----
+            char err[128];
+            const char *vs_refl = "stage vs\nattr 0 0 float\n", *fs_refl = "stage ps\ncbuf 3 1\ntex 0 1 1 2d\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
+            struct wonder_shader_refl fs_parsed; assert(!wonder_shader_refl_parse(fs_refl, strlen(fs_refl), &fs_parsed, err, sizeof err));
+            fake_refl[1] = fs_parsed; shaders_available = 1;
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "reflection stage");   // fake_vs_key unset: the vertex key gets a fragment reflection
+            memcpy(fake_vs_key, key, sizeof fake_vs_key);
+            unsigned draws = host_draws;
+            dsubmit(queue, 1, &draw);
+            assert(host_draws == draws + 1);
+            const struct wonder_host_draw *d = &last_draw;
+            assert(d->vs == (void *)0xf000 && d->fs == (void *)0xf001 && d->vr->stage == 0 && d->fr->stage == 1);
+            assert(d->primitive == 4 && d->index_type == 1 && d->count == 6 && d->index.size == 12 && d->index.buffer);
+            struct wonder_nvn_pool_view iv; wonder_nvn_address_span((uintptr_t)(cb_memory + 0x9200), 12, &iv);
+            assert(d->index.offset == iv.host_offset);
+            assert(d->nattr == 1 && d->attr[0].format == 0x2c && d->attr[0].offset == 8 && d->attr[0].stream == 0);
+            assert((d->stream_mask & 1) && d->stream[0].stride == 20 && d->stream[0].span.size == 0x100);
+            assert(d->ubo[1][3].size == 0x100 && d->ubo[1][3].buffer);
+            assert((d->tex_mask[1] & 1) && d->tex[1][0].texture.texture.desc.width == 128 && d->tex[1][0].sampler.valid);
+            assert(d->color_count == 0 || d->targets[0].valid || !d->targets[0].valid);   // targets copied from replay state
+            int depth_mode, origin; wonder_nvn_device_modes(&depth_mode, &origin); assert(d->depth_mode == depth_mode);
+            // Missing bindings stop by name.
+            const char *fs_bad = "stage ps\ncbuf 5 1\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(fs_bad, strlen(fs_bad), &fake_refl[1], err, sizeof err));
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "unbound uniform buffer stage 1 slot 5");
+            const char *fs_tex = "stage ps\ntex 7 1 1 2d\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(fs_tex, strlen(fs_tex), &fake_refl[1], err, sizeof err));
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "unbound texture stage 1 slot 7");
+            const char *fs_drv = "stage ps\ndrv 2\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(fs_drv, strlen(fs_drv), &fake_refl[1], err, sizeof err));
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "driver constant segment");
+            const char *vs_far = "stage vs\nattr 0 3 float\n";
+            fake_refl[1] = fs_parsed; assert(!wonder_shader_refl_parse(vs_far, strlen(vs_far), &fake_refl[0], err, sizeof err));
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "vertex attribute 3");
+            assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
+            // Index range past the end of the pool.
+            ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
+            ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + sizeof cb_memory - 4));
+            uint64_t overrun = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb);
+            EXPECT_STOP(dsubmit(queue, 1, &overrun), "NVN_INVALID_ARGUMENT");
+            shaders_available = 0;
         }
         ((void (*)(void *))slot("nvnProgramFinalize"))(program_memory);
         EXPECT_STOP(wonder_nvn_program_snapshot(program_memory, &shaders), "NVN_INVALID_OBJECT");

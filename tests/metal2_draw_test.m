@@ -3,6 +3,7 @@
 // fork-safe); argv[3] (optional, with "ok") = work/build/wonder-shaders to compile the real translated stages.
 #import <Metal/Metal.h>
 #include "metal2_draw.h"
+#include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <assert.h>
 #include <stdarg.h>
@@ -21,6 +22,7 @@ static void broken(void) { wonder_host_shader_function("bbbbbbbbbbbbbbbb", 1); }
 static void tampered(void) { wonder_host_shader_function("cccccccccccccccc", 0); }
 static void wrong_stage(void) { wonder_host_shader_function("aaaaaaaaaaaaaaaa", 1); }
 static void positive(int argc, char **argv) {
+    assert(wonder_host_shader_available("aaaaaaaaaaaaaaaa") == 1 && wonder_host_shader_available("0000000000000000") == 0);
     void *f = wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0);
     assert(f && ((__bridge id<MTLFunction>)f).functionType == MTLFunctionTypeVertex);
     assert(wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0) == f);                     // cached by key

@@ -1,5 +1,6 @@
 #import <Metal/Metal.h>
 #include "metal2_draw.h"
+#include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -73,4 +74,18 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         wonder_nvn_stop("NVN_SHADER_STAGE key=%s bound as stage %d", key_c, stage);
     pthread_mutex_unlock(&lock);
     return (__bridge void *)f;
+}
+int wonder_host_shader_available(const char key_c[17]) {
+    pthread_mutex_lock(&lock);
+    if (!manifest && directory) {
+        NSData *raw = [NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"manifest.json"]];
+        manifest = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
+    }
+    int available = [manifest[@"keys"] isKindOfClass:NSDictionary.class] && manifest[@"keys"][[NSString stringWithUTF8String:key_c]] != nil;
+    pthread_mutex_unlock(&lock);
+    return available;
+}
+// Metal encoding of resolved draws lands with the PSO/texture work; until then a resolved draw stops by name.
+int wonder_host_draw(const struct wonder_host_draw *d) {
+    wonder_nvn_stop("NVN_HOST_DRAW_PENDING vs=%s fs=%s: Metal draw encoding not implemented yet", d->vs_key, d->fs_key);
 }
