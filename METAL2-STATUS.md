@@ -23,6 +23,8 @@
   - 回放遇到 draw、dispatch、贴图复制/降采样/清除、非时间戳计数器、条件渲染、部分掩码或带裁剪的清屏时按名停止，不跳过、不伪造。
   - 唯一保留的停止跳板是 `nvnTextureBuilderGetZCullStorageSize`：它依赖 TX1 硬件 ZCull 参数，唯一调用点在 main+0x1e1f918 的调试工具路径，游戏不使用 ZCull 保存/恢复。
   - 265 个入口；NVN 宿主测试（Linux gcc -Werror）通过，新增录制、分段、回放、栅栏、显示测试。
+- round36 run `059CAB3C-DBDF-4D16-9DEB-841822C8B6FA`（debugger=1，51 项测试、xcodebuild、签名、安装通过）：265 个 NVN 入口全部生效，Metal 回放代码在设备上编译运行；游戏完成图形初始化，3570 次 ProgramSetShadersExt（首个程序 2 阶段已完整捕获到 Documents/ShaderCapture），VFX 内存池、两个工作线程、声音配置读取均通过。尚未发生 QueueSubmit/Present。
+- 新停点不在 NVN：`nn::audio::GetAudioRendererWorkBufferSize`（sdk+0x1e0a54）经 `CreateAudioRendererManagerByHipc` 走真实 `sm:` 端口（SVC 0x1F ConnectToNamedPort）。Wonder 导入 197 个 nn::audio 函数，使用完整 AudioRenderer（不是 D2R 的 AudioOut），需要新的音频子系统。
 - 仍需：实际着色器对应及完整身份验证、Metal 资源绑定与 PSO、命令提交/同步/展示和真正的游戏首帧。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
