@@ -1,5 +1,6 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
+#include <mach/mach.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <stdatomic.h>
@@ -255,14 +256,28 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
 }
 // Diagnostic mode (WONDER_DRAW_SYNC=1): commit and wait after every draw; a GPU error stops naming this draw and every
 // buffer span it read (round62-64: a page fault inside one 11-draw submit).
+static void page_protections(id<MTLBuffer> b, char *out, size_t n) {
+    size_t at = 0; out[0] = 0;
+    if (!b || b.storageMode != MTLStorageModeShared) { snprintf(out, n, "private"); return; }
+    uintptr_t base = (uintptr_t)b.contents;
+    for (NSUInteger o = 0; o < b.length && at + 2 < n; o += 0x4000) {
+        vm_address_t address = base + o; vm_size_t size = 0; vm_region_basic_info_data_64_t info; mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t object;
+        kern_return_t kr = vm_region_64(mach_task_self(), &address, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_64_t)&info, &count, &object);
+        char c = kr != KERN_SUCCESS || address > base + o ? '?' : (info.protection & VM_PROT_WRITE) ? 'w' : (info.protection & VM_PROT_READ) ? 'r' : '-';
+        out[at++] = c; out[at] = 0;
+    }
+}
 static void sync_check(const struct wonder_host_draw *d) {
     wonder_host_finish();
     char error[256];
     for (int i = 0; i < 100 && !wonder_host_gpu_error(error, sizeof error); i++) usleep(1000);   // completion handlers run asynchronously
     if (!wonder_host_gpu_error(error, sizeof error)) return;
     char spans[1400]; size_t at = 0;
-    #define SPAN(name, sp) do { id<MTLBuffer> b_ = (__bridge id<MTLBuffer>)(sp).buffer; at += (size_t)snprintf(spans + at, sizeof spans - at, " %s=%p+%#zx/%#zx(len %#lx)", name, \
-        (sp).buffer, (sp).offset, (sp).size, b_ ? (unsigned long)b_.length : 0ul); } while (0)
+    // For each buffer: its guest address range and the protection of every 16 KiB host page under it right now
+    // (r/w/- per page, '?' = no VM region): a zero-copy buffer whose pages were remapped faults on the GPU.
+    #define SPAN(name, sp) do { id<MTLBuffer> b_ = (__bridge id<MTLBuffer>)(sp).buffer; char prot_[40]; page_protections(b_, prot_, sizeof prot_); \
+        at += (size_t)snprintf(spans + at, sizeof spans - at, " %s=%p+%#zx/%#zx(len %#lx contents %p pages %s)", name, \
+        (sp).buffer, (sp).offset, (sp).size, b_ ? (unsigned long)b_.length : 0ul, b_ ? b_.contents : NULL, prot_); } while (0)
     if (d->index_type >= 0) SPAN("index", d->index);
     for (int s = 0; s < 16 && at < sizeof spans - 100; s++) if (d->stream_mask >> s & 1) { char n[16]; snprintf(n, sizeof n, "stream%d", s); SPAN(n, d->stream[s].span); }
     const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
