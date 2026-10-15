@@ -637,6 +637,7 @@ int main(void) {
         float blue[4] = {0, 0, 1, 1};
         uint32_t *report = (uint32_t *)(cb_memory + 0x8010); uint64_t *stamp = (uint64_t *)(cb_memory + 0x8020);
         report[0] = 0; stamp[0] = stamp[1] = 7;
+        uint64_t *stamp_top = (uint64_t *)(cb_memory + 0x8030); stamp_top[0] = stamp_top[1] = 7;
         begin(qcb);
         set_targets(qcb, 1, target, NULL, NULL, NULL);
         scissor(qcb, 0, 0, 1920, 1080);
@@ -645,6 +646,7 @@ int main(void) {
         ((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(qcb, (uintptr_t)(cb_memory + 0x8000), 0x10, 0, 8, ubo);
         ((void (*)(void *, uint32_t, uint64_t))slot("nvnCommandBufferReportValue"))(qcb, 0xabcd, (uintptr_t)report);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0, (uintptr_t)stamp);
+        ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0x10, (uintptr_t)stamp_top);   // TIMESTAMP_TOP
         ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x10);
         ((void (*)(void *, int))slot("nvnCommandBufferSetTiledCacheAction"))(qcb, 1);
         uint64_t frame = end(qcb);
@@ -656,6 +658,7 @@ int main(void) {
         EXPECT_STOP(sync_wait(fence_sync, 0), "never fenced");
         ((void (*)(void *, void *, int, int))slot("nvnQueueFenceSync"))(queue, fence_sync, 0, 0);
         assert(sync_wait(fence_sync, UINT64_MAX) == 0 && report[0] == 0xabcd && stamp[0] == 0 && stamp[1] != 7);
+        assert(stamp_top[0] == 0 && stamp_top[1] != 7 && stamp_top[1] >= stamp[1]);
         ((void (*)(void *))slot("nvnQueueFlush"))(queue); ((void (*)(void *))slot("nvnQueueFinish"))(queue);
         // Present returns the texture to the window; the next acquire can reuse it.
         void (*present)(void *, void *, int) = slot("nvnQueuePresentTexture");
@@ -683,7 +686,7 @@ int main(void) {
         ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetRenderEnable"))(qcb, 1);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 1, (uintptr_t)stamp);
         uint64_t samples = end(qcb);
-        EXPECT_STOP(submit(queue, 1, &samples), "only NVN_COUNTER_TYPE_TIMESTAMP");
+        EXPECT_STOP(submit(queue, 1, &samples), "counter type 0x1 (SAMPLES_PASSED)");
         uint64_t bogus = 0x999; EXPECT_STOP(submit(queue, 1, &bogus), "NVN_INVALID_HANDLE");
         submit(queue, 1, &frame);                                                                        // replay state survives stops
         assert(host_clears == 2);

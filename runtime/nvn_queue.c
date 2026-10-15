@@ -1,12 +1,13 @@
 // NVN queue submission for Wonder: replays recorded command handles onto the host Metal queue.
 // Executed here: render-target clears, buffer fills, uniform updates, timestamp/value reports, barriers and
 // all state tracking (persistent per queue, as GPU state is). Not executed yet: draws, dispatches, texture
-// copies/downsamples/clears, non-timestamp counters, conditional rendering: replay stops by name before any
+// copies/downsamples/clears, non-timestamp counters (TIMESTAMP and TIMESTAMP_TOP run), conditional rendering: replay stops by name before any
 // of them is skipped or faked. Host backend: host_graphics.m (device) or the test harness.
 #include "nvn_commands.h"
 #include "nvn_fmt_mtl.h"
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -143,7 +144,18 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
     case WONDER_NVN_CMD_REPORT_COUNTER: case WONDER_NVN_CMD_REPORT_VALUE: {
         int timestamp = opcode == WONDER_NVN_CMD_REPORT_COUNTER;
-        if (timestamp && c->a[0] != 0) replay_stop(opcode, "only NVN_COUNTER_TYPE_TIMESTAMP is implemented");
+        // TIMESTAMP (bottom of pipe) and TIMESTAMP_TOP (top of pipe) both read the host clock once preceding work is
+        // done; occlusion/statistics/ZCull counters have no host source yet.
+        if (timestamp && c->a[0] != 0 && c->a[0] != 0x10) {
+            static const char *const names[] = {"TIMESTAMP", "SAMPLES_PASSED", "INPUT_VERTICES", "INPUT_PRIMITIVES",
+                "VERTEX_SHADER_INVOCATIONS", "TESS_CONTROL_SHADER_INVOCATIONS", "TESS_EVALUATION_SHADER_INVOCATIONS",
+                "GEOMETRY_SHADER_INVOCATIONS", "FRAGMENT_SHADER_INVOCATIONS", "TESS_EVALUATION_SHADER_PRIMITIVES",
+                "GEOMETRY_SHADER_PRIMITIVES", "CLIPPER_INPUT_PRIMITIVES", "CLIPPER_OUTPUT_PRIMITIVES",
+                "PRIMITIVES_GENERATED", "TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN", "ZCULL_STATS"};
+            char why[96]; snprintf(why, sizeof why, "counter type %#llx (%s) is not implemented (timestamps only)",
+                                   (unsigned long long)c->a[0], c->a[0] < 16 ? names[c->a[0]] : "?");
+            replay_stop(opcode, why);
+        }
         struct report *r = malloc(sizeof *r);
         if (!r) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY report");
         *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp};
