@@ -53,6 +53,9 @@ int wonder_host_shader_available(const char key[17]) { (void)key; return shaders
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
+static unsigned host_depth_clear_rects;
+int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, int clear_depth, float depth, int clear_stencil, uint32_t stencil, uint32_t stencil_mask, const int rect[4]) {
+    (void)texture; (void)level; (void)slice; (void)clear_depth; (void)depth; (void)clear_stencil; (void)stencil; (void)stencil_mask; (void)rect; host_depth_clear_rects++; return 0; }
 static unsigned host_clear_rects; static int last_clear_rect[4]; static unsigned last_clear_mask;
 int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]) {
     (void)texture; (void)level; (void)slice; (void)rgba; memcpy(last_clear_rect, rect, 16); last_clear_mask = mask; host_clear_rects++; return 0; }

@@ -335,11 +335,17 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (!t || !t->valid) replay_stop(opcode, "no depth target bound");
         int clear_depth = (int)c->a[1] != 0; unsigned stencil_mask = (unsigned)c->a[3] & 0xff;
         int has_stencil = t->texture.desc.format == 0x31 || t->texture.desc.format == 0x35 || t->texture.desc.format == 0x36;
-        if (has_stencil && stencil_mask && stencil_mask != 0xff) replay_stop(opcode, "partial stencil-mask clear needs a shader clear");
-        if (!scissor_covers(&t->texture)) replay_stop(opcode, "scissored clear needs a shader clear");
+        int level, slice; view_level_slice(t, &level, &slice);
+        if ((has_stencil && stencil_mask && stencil_mask != 0xff) || !scissor_covers(&t->texture)) {   // drawn over the scissor rect
+            int full[4] = {0, 0, (int)t->texture.desc.width, (int)t->texture.desc.height};
+            if (wonder_host_clear_depth_stencil_rect(target_texture(t, opcode), level, slice, clear_depth, f32(c->a[0]), has_stencil && stencil_mask,
+                                                     (uint32_t)c->a[2] & 0xff, stencil_mask, state.scissor_set ? state.scissor : full))
+                replay_stop(opcode, "scissored/masked depth-stencil clear failed");
+            state.clears++;
+            break;
+        }
         int clear_stencil = has_stencil && stencil_mask == 0xff;
         if (!clear_depth && !clear_stencil) break;
-        int level, slice; view_level_slice(t, &level, &slice);
         if (wonder_host_clear_depth_stencil(target_texture(t, opcode), level, slice, clear_depth, f32(c->a[0]), clear_stencil, (uint32_t)c->a[2] & 0xff))
             replay_stop(opcode, "host clear failed");
         state.clears++;

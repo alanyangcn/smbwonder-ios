@@ -553,6 +553,57 @@ int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba
     return 0;
 }
 
+static NSString *const clear_depth_source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+    "struct V { float4 p [[position]]; };\n"
+    "vertex V clear_depth_vs(uint id [[vertex_id]], constant float &z [[buffer(0)]]) { V o; o.p = float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, z, 1.0); return o; }\n"
+    "fragment void clear_depth_fs() {}\n";
+int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, int clear_depth, float depth, int clear_stencil,
+                                         uint32_t stencil, uint32_t stencil_mask, const int rect[4]) {
+    id<MTLTexture> t = (__bridge id<MTLTexture>)texture; if (!t || !device) return 1;
+    MTLPixelFormat f = t.pixelFormat;
+    int has_depth = f != MTLPixelFormatStencil8, has_stencil = f == MTLPixelFormatStencil8 || f == MTLPixelFormatDepth32Float_Stencil8;
+    clear_depth = clear_depth && has_depth; clear_stencil = clear_stencil && has_stencil && (stencil_mask & 0xff);
+    if (!clear_depth && !clear_stencil) return 0;
+    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines_by_format; static id<MTLLibrary> library;
+    if (!library) { NSError *e = nil; library = [device newLibraryWithSource:clear_depth_source options:nil error:&e]; if (!library) return 2; }
+    if (!pipelines_by_format) pipelines_by_format = [NSMutableDictionary dictionary];
+    id<MTLRenderPipelineState> pso = pipelines_by_format[@(f)];
+    if (!pso) {
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new]; pd.vertexFunction = [library newFunctionWithName:@"clear_depth_vs"];
+        pd.fragmentFunction = [library newFunctionWithName:@"clear_depth_fs"];
+        if (has_depth) pd.depthAttachmentPixelFormat = f;
+        if (has_stencil) pd.stencilAttachmentPixelFormat = f;
+        NSError *e = nil; pso = [device newRenderPipelineStateWithDescriptor:pd error:&e]; if (!pso) return 3;
+        pipelines_by_format[@(f)] = pso;
+    }
+    MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
+    dd.depthCompareFunction = MTLCompareFunctionAlways; dd.depthWriteEnabled = clear_depth;
+    if (clear_stencil) {
+        MTLStencilDescriptor *sd = [MTLStencilDescriptor new]; sd.stencilCompareFunction = MTLCompareFunctionAlways;
+        sd.depthStencilPassOperation = MTLStencilOperationReplace; sd.writeMask = stencil_mask & 0xff; sd.readMask = 0xff;
+        dd.frontFaceStencil = sd; dd.backFaceStencil = sd;
+    }
+    id<MTLDepthStencilState> dss = [device newDepthStencilStateWithDescriptor:dd];
+    NSUInteger w = MAX((NSUInteger)1, t.width >> level), h = MAX((NSUInteger)1, t.height >> level);
+    long x0 = MAX(0, rect[0]), y0 = MAX(0, rect[1]), x1 = MIN((long)w, (long)rect[0] + rect[2]), y1 = MIN((long)h, (long)rect[1] + rect[3]);
+    if (x1 <= x0 || y1 <= y0) return 0;
+    MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+    if (has_depth) { p.depthAttachment.texture = t; p.depthAttachment.level = level; p.depthAttachment.slice = slice;
+                     p.depthAttachment.loadAction = MTLLoadActionLoad; p.depthAttachment.storeAction = MTLStoreActionStore; }
+    if (has_stencil) { p.stencilAttachment.texture = t; p.stencilAttachment.level = level; p.stencilAttachment.slice = slice;
+                       p.stencilAttachment.loadAction = MTLLoadActionLoad; p.stencilAttachment.storeAction = MTLStoreActionStore; }
+    wonder_host_replay_lock();
+    id<MTLRenderCommandEncoder> e = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:p];
+    [e setRenderPipelineState:pso]; [e setDepthStencilState:dss]; [e setStencilReferenceValue:stencil & 0xff];
+    [e setViewport:(MTLViewport){0, 0, (double)w, (double)h, 0, 1}];
+    [e setScissorRect:(MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)}];
+    [e setVertexBytes:&depth length:4 atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+    wonder_host_replay_unlock();
+    return 0;
+}
+
 // ---------- Render target readback (evidence) ----------
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture;

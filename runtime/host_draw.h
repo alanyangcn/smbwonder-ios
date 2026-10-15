@@ -29,7 +29,11 @@ int wonder_host_draw(const struct wonder_host_draw *d);                     // 0
 uint32_t wonder_host_vertex_format(int nvn_format);
 // Colour clear limited to rect {x, y, w, h} and channel mask (NVN R1 G2 B4 A8), drawn as a triangle (Metal load-clears
 // cover the whole attachment). Float/normalized formats only; 0 = encoded.
-int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]);                          // MTLVertexFormat, 0 = none
+int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]);
+// Depth / stencil clear limited to rect, drawn as a triangle at the clear depth (compare always; stencil replaced under
+// stencil_mask). 0 = encoded.
+int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, int clear_depth, float depth, int clear_stencil,
+                                         uint32_t stencil, uint32_t stencil_mask, const int rect[4]);                          // MTLVertexFormat, 0 = none
 // Replay command buffer shared with host_graphics.m (clears, fills, present): the draw encoder appends to it under the lock.
 void wonder_host_replay_lock(void);
 void wonder_host_replay_unlock(void);

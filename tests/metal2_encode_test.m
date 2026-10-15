@@ -67,6 +67,22 @@ int main(int argc, char **argv) {
             id<MTLTexture> cube = [device newTextureWithDescriptor:wonder_host_render_target_descriptor(&(nvn_texdesc){.target = 8, .format = 0x25, .width = 4, .height = 4, .depth = 6, .levels = 1}, MTLPixelFormatRGBA8Unorm)];
             assert(cube && cube.textureType == MTLTextureTypeCube);
         }
+        // Scissored depth clear drawn as a triangle: D32F cleared to 1.0, rect (16,16,32,32) cleared to 0.25.
+        if (!strcmp(mode, "clear_depth_rect")) {
+            struct wonder_nvn_texture zt = target_texture(10, 0x34); id<MTLTexture> z = (__bridge id<MTLTexture>)wonder_host_render_target(&zt, MTLPixelFormatDepth32Float);
+            MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor]; p.depthAttachment.texture = z;
+            p.depthAttachment.loadAction = MTLLoadActionClear; p.depthAttachment.clearDepth = 1.0; p.depthAttachment.storeAction = MTLStoreActionStore;
+            [[(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:p] endEncoding];
+            int rect[4] = {16, 16, 32, 32};
+            assert(wonder_host_clear_depth_stencil_rect((__bridge void *)z, 0, 0, 1, 0.25f, 0, 0, 0xff, rect) == 0);
+            id<MTLBuffer> zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
+            id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
+            [b copyFromTexture:z sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:zb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
+            [b endEncoding]; [pending commit]; [pending waitUntilCompleted];
+            const float *zz = zb.contents; printf("depth in %g outside %g edge %g\n", zz[32 * 64 + 32], zz[8 * 64 + 8], zz[48 * 64 + 48]);
+            assert(zz[32 * 64 + 32] == 0.25f && zz[8 * 64 + 8] == 1.0f && zz[48 * 64 + 48] == 1.0f);
+            puts("metal2 clear depth rect OK"); return 0;
+        }
         // Scissored / channel-masked colour clear drawn as a triangle: rect (16,16,32,32), red+alpha only, over blue.
         if (!strcmp(mode, "clear_rect")) {
             struct wonder_nvn_texture ct = target_texture(9, 0x25); id<MTLTexture> c = (__bridge id<MTLTexture>)wonder_host_render_target(&ct, MTLPixelFormatRGBA8Unorm);

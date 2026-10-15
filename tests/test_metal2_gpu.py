@@ -54,5 +54,7 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('blend_color'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('blend colour OK',p.stdout)
     def test_scissored_masked_colour_clear(self):
         p=self.run_case('clear_rect'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('clear rect OK',p.stdout)
+    def test_scissored_depth_clear(self):
+        p=self.run_case('clear_depth_rect'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('clear depth rect OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)
