@@ -136,6 +136,11 @@ void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t){
  pthread_mutex_lock(&replay_mutex); id<MTLTexture> tex=render_targets[@(t->serial)]; pthread_mutex_unlock(&replay_mutex);
  return (__bridge void*)tex;
 }
+// nvnTextureFinalize: Metal keeps objects alive for command buffers already encoded, so dropping the map entries is safe.
+void wonder_host_texture_forget(uint64_t serial){
+ pthread_mutex_lock(&replay_mutex); [render_targets removeObjectForKey:@(serial)]; pthread_mutex_unlock(&replay_mutex);
+ wonder_host_draw_forget_sampled(serial);
+}
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format){
  if(t->host) return t->host;   // display textures own their render target
  if(!device||!format) return NULL;
@@ -218,6 +223,11 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  (void)interval;
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t||!device||!surface) return EINVAL;
  capture_present(t);
+ static unsigned presents; if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
+  task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; uint64_t footprint=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0;
+  pthread_mutex_lock(&replay_mutex); unsigned targets=(unsigned)render_targets.count; pthread_mutex_unlock(&replay_mutex);
+  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count());
+ }
  if(present_setup()) return EIO;
  if(t.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
  else if(t.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatBGRA8Unorm];

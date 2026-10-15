@@ -52,6 +52,8 @@ static void apply_pending_writes(void) {
 #define EXPECTED_IMPLEMENTED 267
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
+static uint64_t forgotten_serial; static unsigned forgotten_textures;
+void wonder_host_texture_forget(uint64_t serial) { forgotten_serial = serial; forgotten_textures++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders) { (void)program; (void)shaders; captured_programs++; }
 // Fake translated-shader library and draw backend: the vertex key gets fake_refl[0], every other key fake_refl[1].
@@ -545,8 +547,10 @@ int main(void) {
     const struct wonder_nvn_texture_registration *reg = wonder_nvn_texture_lookup(texture_pool, 300);
     assert(reg && reg->serial == ((struct wonder_nvn_texture *)gtex)->serial && reg->has_view && reg->view.base_level == 1 && reg->texture.swizzle[3] == 1);
     assert(!wonder_nvn_texture_lookup(texture_pool, 301));
+    uint64_t gserial = ((struct wonder_nvn_texture *)gtex)->serial; unsigned forgets = forgotten_textures;
     ((void (*)(void *))slot("nvnTextureFinalize"))(gtex);
     EXPECT_STOP(wonder_nvnTextureGetWidth(gtex), "NVN_INVALID_OBJECT");
+    assert(forgotten_textures == forgets + 1 && forgotten_serial == gserial);   // host GPU copies of the serial are released
     assert(wonder_nvn_texture_lookup(texture_pool, 300)->texture.desc.width == 128);  // registration keeps its snapshot
     // State objects: defaults + setters, validated ranges.
     uint64_t blend = 0, ds = 0, vstream = 0; uint32_t color = 0, mask = 0, poly = 0, vattr = 0; unsigned char ms[0x18];

@@ -179,7 +179,13 @@ static int device_samples_bc(void) {
 #endif
 }
 static uint64_t fnv64(const uint8_t *p, uint64_t n) { uint64_t h = 1469598103934665603ull; for (uint64_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull; return h; }
+// CPU-uploaded copies of sampled textures by serial; nvnTextureFinalize drops them (guest threads, hence the lock).
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutableDictionary<NSNumber *, NSNumber *> *sampled_hash;
+static pthread_mutex_t sampled_lock = PTHREAD_MUTEX_INITIALIZER;
+void wonder_host_draw_forget_sampled(uint64_t serial) {
+    pthread_mutex_lock(&sampled_lock); [sampled removeObjectForKey:@(serial)]; [sampled_hash removeObjectForKey:@(serial)]; pthread_mutex_unlock(&sampled_lock);
+}
+unsigned wonder_host_draw_sampled_count(void) { pthread_mutex_lock(&sampled_lock); unsigned n = (unsigned)sampled.count; pthread_mutex_unlock(&sampled_lock); return n; }
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
     const struct wonder_nvn_texture *t = &d->tex[stage][slot].texture.texture;
     const struct wonder_nvn_texture_registration *reg = &d->tex[stage][slot].texture;
@@ -204,9 +210,11 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         if (bc) { static _Atomic int logged; if (atomic_fetch_add(&logged, 1) < 8) fprintf(stderr, "HOST_TEXTURE_BC_DECODE serial=%llu format=%#x %ux%u\n", (unsigned long long)t->serial, t->desc.format, t->desc.width, t->desc.height); }
         uint64_t hash = fnv64(d->tex[stage][slot].storage, d->tex[stage][slot].storage_size);
         NSNumber *key = @(t->serial);
+        pthread_mutex_lock(&sampled_lock);
         if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; }
-        tex = sampled[key];
-        if (!tex || sampled_hash[key].unsignedLongLongValue != hash) {
+        tex = sampled[key]; int stale = !tex || sampled_hash[key].unsignedLongLongValue != hash;
+        pthread_mutex_unlock(&sampled_lock);
+        if (stale) {
             MTLPixelFormat pf = (MTLPixelFormat)(bc ? bc_pf : mtl);
             NSUInteger layers = target == 4 ? (t->desc.depth ? t->desc.depth : 1) : 1;
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:t->desc.width height:t->desc.height mipmapped:t->desc.levels > 1];
@@ -238,7 +246,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
                 } else [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
             }
             tex.label = [NSString stringWithFormat:@"NVN sampled %llu %ux%u fmt %#x", (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.format];
-            sampled[key] = tex; sampled_hash[key] = @(hash);
+            pthread_mutex_lock(&sampled_lock); sampled[key] = tex; sampled_hash[key] = @(hash); pthread_mutex_unlock(&sampled_lock);
         }
     }
     NSUInteger levels = tex.mipmapLevelCount, base = 0, count = levels;

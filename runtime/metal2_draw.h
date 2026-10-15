@@ -7,6 +7,8 @@ _Noreturn void wonder_nvn_stop(const char *format, ...);
 void wonder_host_draw_set_device(void *mtl_device);                  // id<MTLDevice> (unretained by the caller)
 void wonder_host_shader_set_directory(const char *directory);        // directory holding manifest.json
 void *wonder_host_shader_function(const char key[17], int stage);    // id<MTLFunction>, cached for the process
+void wonder_host_draw_forget_sampled(uint64_t serial);              // drops the CPU-uploaded copy of a finalized texture
+unsigned wonder_host_draw_sampled_count(void);
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 #ifdef __OBJC__
 #import <Metal/Metal.h>

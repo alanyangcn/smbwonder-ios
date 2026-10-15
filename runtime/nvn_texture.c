@@ -180,6 +180,7 @@ void wonder_nvnTextureFinalize(void *texture) {
     struct wonder_nvn_texture *t = (struct wonder_nvn_texture *)wonder_nvn_texture_of(texture, "nvnTextureFinalize");
     if (t->host) wonder_nvn_stop("NVN_UNSUPPORTED nvnTextureFinalize on a display texture (window teardown not implemented)");
     t->magic = 0;   // registrations keep their own snapshot; the render layer releases host objects by serial
+    wonder_host_texture_forget(t->serial);
 }
 void wonder_nvnTextureSetDebugLabel(void *texture, const char *label) {
     const struct wonder_nvn_texture *t=wonder_nvn_texture_of(texture,"nvnTextureSetDebugLabel");
