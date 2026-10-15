@@ -684,6 +684,8 @@ int main(void) {
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0, (uintptr_t)stamp);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0x10, (uintptr_t)stamp_top);   // TIMESTAMP_TOP
         ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x10);
+        ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x101);   // bit 8 exists in SDK 55 (sdk+0x478fc8); round73 uses it
+        EXPECT_STOP(((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x200), "NVN_INVALID_ARGUMENT");
         ((void (*)(void *, int))slot("nvnCommandBufferSetTiledCacheAction"))(qcb, 1);
         uint64_t frame = end(qcb);
         submit(queue, 1, &frame);

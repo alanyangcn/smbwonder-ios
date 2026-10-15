@@ -536,7 +536,8 @@ void wonder_nvnCommandBufferUpdateUniformBuffer(void *cb, uint64_t address, size
     const uint64_t a[] = {address, buffer_size, (uint64_t)offset}; rec(cb, WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER, a, 3, data, size);
 }
 void wonder_nvnCommandBufferBarrier(void *cb, int bits) {
-    if ((unsigned)bits & ~0xffu) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferBarrier bits=%#x", bits);
+    // Bits 0..8: the vendored nvn.h stops at INVALIDATE_ZCULL (0x80); SDK 55 also handles bit 8 (sdk+0x478fc8).
+    if ((unsigned)bits & ~0x1ffu) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferBarrier bits=%#x", bits);
     REC(cb, WONDER_NVN_CMD_BARRIER, (uint64_t)(unsigned)bits);
 }
 
