@@ -269,7 +269,14 @@ static int kernel_call_locked(int number, uint64_t *r) {
         case 16:v=WONDER_SYSTEM_RESOURCE_SIZE;break;
         case 17:v=0;break; // nothing charged yet: page tables live in host memory
         case 18:v=0x010015100b514000ull;break;
-        case 20:r[0]=0xf001;return 1; // User-exception context not implemented.
+        // UserExceptionContextAddress: the process-local region, a zeroed 0x200-byte TLS slot allocated with the
+        // process (subtype must be 0). os::SetUserExceptionHandler (sdk+0x1321b0) stores its handler/stack at +0x1c0.
+        // Guest faults are not delivered to that handler; the host still stops on them.
+        case 20: {
+            static _Alignas(0x200) uint8_t process_local_region[0x200];
+            if(r[3]||r[2]!=0xffff8001u){r[0]=0xf001;return 1;}
+            v=(uint64_t)process_local_region;break;
+        }
         case 23:v=1;break;
         default:r[0]=0xf001;return 1;
         }

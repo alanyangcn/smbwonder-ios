@@ -23,9 +23,11 @@ uint64_t svc_dispatch(int number,uint64_t *regs,uint64_t original) {
     if(wonder_game_stopped()){LOG("GUEST_PARKED svc=%#x pc=%#llx (guest already stopped)",number,original);wonder_game_thread_park();}
     unsigned seen=svc_seen[number&0xff]++;
     if(seen<16)LOG("SDK_SVC phase=%s nr=%#x pc=%#llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx%s",phase,number,original,regs[0],regs[1],regs[2],regs[3],seen==15?" (further calls not logged)":"");
+    uint64_t arg1=regs[1],arg2=regs[2],arg3=regs[3];
     if(wonder_kernel_call(number,regs)){
         static _Atomic unsigned failures;
-        if(regs[0]&&atomic_fetch_add(&failures,1)<64)LOG("SDK_SVC_ERROR nr=%#x result=%#llx",number,(unsigned long long)regs[0]);
+        if(regs[0]&&atomic_fetch_add(&failures,1)<64)LOG("SDK_SVC_ERROR nr=%#x result=%#llx x1=%#llx x2=%#llx x3=%#llx pc=%#llx",number,(unsigned long long)regs[0],
+            (unsigned long long)arg1,(unsigned long long)arg2,(unsigned long long)arg3,(unsigned long long)original);
         return regs[0];
     }
     uint64_t in1=regs[1],in2=regs[2],in29=regs[29],in30=regs[30];

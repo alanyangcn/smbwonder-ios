@@ -16,6 +16,14 @@ int main(void) {
     r[1]=18; r[2]=0xffff8001u;
     assert(wonder_kernel_call(0x29,r)); assert(!r[0]); assert(r[1]==0x010015100b514000ull);
     r[1]=999; assert(wonder_kernel_call(0x29,r)); assert(r[0]!=0);
+    // UserExceptionContextAddress: the process-local region, one zeroed 0x200-byte TLS slot, stable per process.
+    r[1]=20; r[2]=0xffff8001u; r[3]=0; assert(wonder_kernel_call(0x29,r)); assert(!r[0]);
+    uint64_t plr=r[1]; assert(plr && !(plr&0x1ff));
+    for(unsigned i=0;i<0x200;i++) assert(((volatile uint8_t *)plr)[i]==0);
+    ((volatile uint64_t *)plr)[0x1c0/8]=0x1234;   // os::SetUserExceptionHandler stores the handler at +0x1c0 (sdk+0x1321d8)
+    r[1]=20; r[3]=0; assert(wonder_kernel_call(0x29,r)); assert(!r[0]&&r[1]==plr);
+    r[1]=20; r[3]=1; assert(wonder_kernel_call(0x29,r)); assert(r[0]==0xf001);   // InvalidCombination
+    r[3]=0;
     r[1]=0x200000; assert(wonder_kernel_call(1,r)); assert(r[0]==0); uint64_t heap=r[1];
     *(volatile uint64_t *)heap=0x123456789abcull;
     uint64_t info[5]={0}; r[0]=(uint64_t)info; r[2]=heap;
