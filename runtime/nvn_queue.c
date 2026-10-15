@@ -23,6 +23,8 @@ struct replay_state {
 static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.0f}};
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
+// The first executed draw's colour target is read back (evidence) after the submit that holds it.
+static struct wonder_nvn_texture_snapshot first_draw_target; static int first_draw_pending, first_draw_captured;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
 static _Atomic(pthread_t *) replay_owner;
@@ -154,6 +156,8 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     memcpy(d.scissor, state.scissor, sizeof d.scissor); d.scissor_set = state.scissor_set;
     wonder_nvn_device_modes(&d.depth_mode, &d.window_origin);
     if (wonder_host_draw(&d)) replay_stop(opcode, "host draw encoding failed");
+    if (!first_draw_captured && !first_draw_pending)
+        for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
     static _Atomic unsigned logged;
     if (atomic_fetch_add(&logged, 1) < 16)
         wonder_nvn_report("NVN_DRAW_EXECUTED %s vs=%s fs=%s count=%d instances=%d (submit %u command %u)", call.name, d.vs_key, d.fs_key, call.count, call.instances, state.submits, state.commands);
@@ -337,6 +341,7 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
             wonder_nvn_stop("NVN_INVALID_HANDLE nvnQueueSubmitCommands handle[%d]=%#llx", i, (unsigned long long)handles[i]);
         replay_handle(handles[i], 0);
     }
+    if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
     if (submits <= 8 || submits % 600 == 0)

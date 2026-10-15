@@ -32,3 +32,7 @@ void wonder_host_replay_lock(void);
 void wonder_host_replay_unlock(void);
 void *wonder_host_replay_command_buffer(void);                               // pending id<MTLCommandBuffer>, call under the lock
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t); // GPU-written texture for this serial, or NULL
+// Evidence: after the submit holding the first executed draw, its first colour target is written as a PNG once the GPU
+// is done (host_graphics.m: Documents/FirstDraw/target-0.png). RGBA8/BGRA8 (+sRGB) only; other formats return non-zero.
+int wonder_host_readback_png(void *texture, int level, int slice, const char *path);
+void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target);

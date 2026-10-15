@@ -53,6 +53,8 @@ int wonder_host_shader_available(const char key[17]) { (void)key; return shaders
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
+static unsigned first_draw_captures; static struct wonder_nvn_texture_snapshot first_draw_target;
+void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target) { first_draw_target = *target; first_draw_captures++; }
 // Fake replay backend: records operations; CPU callbacks run when pending work is "committed".
 static unsigned host_clears, host_depth_clears, host_fills, host_writes, host_presents, host_targets;
 static float host_last_clear[4]; static void *pending_fn[64]; static void *pending_arg[64]; static unsigned pending_count;
@@ -791,8 +793,11 @@ int main(void) {
             EXPECT_STOP(dsubmit(queue, 1, &draw), "reflection stage");   // fake_vs_key unset: the vertex key gets a fragment reflection
             memcpy(fake_vs_key, key, sizeof fake_vs_key);
             unsigned draws = host_draws;
+            assert(first_draw_captures == 0);
             dsubmit(queue, 1, &draw);
             assert(host_draws == draws + 1);
+            assert(first_draw_captures == 1 && first_draw_target.valid);   // read back once, after the submit holding the first draw
+            dsubmit(queue, 1, &draw); assert(host_draws == draws + 2 && first_draw_captures == 1);
             const struct wonder_host_draw *d = &last_draw;
             assert(d->vs == (void *)0xf000 && d->fs == (void *)0xf001 && d->vr->stage == 0 && d->fr->stage == 1);
             assert(d->primitive == 4 && d->index_type == 1 && d->count == 6 && d->index.size == 12 && d->index.buffer);

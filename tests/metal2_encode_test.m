@@ -2,6 +2,8 @@
 // u8 indices, back-face culling (NVN CCW front) and a LESS depth test; colour and depth are read back.
 // argv[1] = "draw" | "bad_vertex_format" | "back_facing" (each run in its own process: Metal is not fork-safe).
 #import <Metal/Metal.h>
+#import <ImageIO/ImageIO.h>
+#include <unistd.h>
 #include "metal2_draw.h"
 #include "host_draw.h"
 #include "nvn_deswizzle.h"
@@ -91,6 +93,8 @@ int main(int argc, char **argv) {
         [[(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() renderCommandEncoderWithDescriptor:clear] endEncoding];
         assert(wonder_host_draw(&d) == 0);
         if (strcmp(mode, "draw") && strcmp(mode, "back_facing")) return 4;   // stop cases must not get here
+        char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
+        if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
         id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
         [b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
@@ -103,6 +107,14 @@ int main(int argc, char **argv) {
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);
+        for (int i = 0; i < 200 && access(png, F_OK); i++) usleep(10000);   // written by the command buffer's completion handler
+        NSData *file = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:png]];
+        assert(file.length > 8 && !memcmp(file.bytes, "\x89PNG", 4));
+        CGImageSourceRef src = CGImageSourceCreateWithData((__bridge CFDataRef)file, NULL); CGImageRef image = CGImageSourceCreateImageAtIndex(src, 0, NULL);
+        assert(CGImageGetWidth(image) == 64 && CGImageGetHeight(image) == 64);
+        CFDataRef pixels = CGDataProviderCopyData(CGImageGetDataProvider(image)); const uint8_t *p = CFDataGetBytePtr(pixels) + 32 * CGImageGetBytesPerRow(image) + 32 * 4;
+        assert(p[0] == centre[0] && p[1] == centre[1] && p[2] == centre[2]);
+        CFRelease(pixels); CGImageRelease(image); CFRelease(src);
         puts("metal2 encode draw OK");
     }
     return 0;

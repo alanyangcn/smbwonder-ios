@@ -31,6 +31,9 @@ fetch(){
       "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/DrawCensus/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
     done
   fi
+  if grep -q 'HOST_FIRST_DRAW_CAPTURE' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
+    "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/FirstDraw/target-0.png" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+  fi
   # Crash reports for this app (the guest stops cleanly; a crash here is a host defect).
   mkdir -p "$OUT/crashes"
   if command -v idevicecrashreport >/dev/null; then idevicecrashreport -u "$DEVICE" -k -f WonderLoaderProbe "$OUT/crashes" >> "$OUT/download.log" 2>&1 || true; fi

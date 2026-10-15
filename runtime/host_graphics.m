@@ -201,3 +201,13 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  pthread_mutex_unlock(&replay_mutex);
  return 0;
 }
+
+// First executed draw: read its colour target back into Documents/FirstDraw/target-0.png (nvn_queue.c calls this once).
+void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target){
+ void *t=wonder_host_render_target_existing(&target->texture);
+ NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/FirstDraw"];
+ [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+ int level=target->has_view&&target->view.set_levels?target->view.base_level:0, slice=target->has_view&&target->view.set_layers?target->view.min_layer:0;
+ int r=t?wonder_host_readback_png(t,level,slice,[dir stringByAppendingPathComponent:@"target-0.png"].fileSystemRepresentation):-1;
+ fprintf(stderr,"HOST_FIRST_DRAW_CAPTURE serial=%llu format=%#x %ux%u result=%d\n",(unsigned long long)target->texture.serial,target->texture.desc.format,target->texture.desc.width,target->texture.desc.height,r);
+}

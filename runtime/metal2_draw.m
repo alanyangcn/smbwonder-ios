@@ -1,4 +1,6 @@
 #import <Metal/Metal.h>
+#import <ImageIO/ImageIO.h>
+#include <stdio.h>
 #include "metal2_draw.h"
 #include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
@@ -366,6 +368,39 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
                    instanceCount:(NSUInteger)d->instances baseVertex:d->base_vertex baseInstance:(NSUInteger)d->base_instance];
     }
     [e endEncoding];
+    wonder_host_replay_unlock();
+    return 0;
+}
+
+// ---------- Render target readback (evidence) ----------
+int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) {
+    id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
+    if (!t || !device || !path_c) return 1;
+    MTLPixelFormat f = t.pixelFormat;
+    int bgra = f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB;
+    if (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB) return 2;
+    NSUInteger w = MAX((NSUInteger)1, t.width >> level), h = MAX((NSUInteger)1, t.height >> level), pitch = w * 4;
+    id<MTLBuffer> out = [device newBufferWithLength:pitch * h options:MTLResourceStorageModeShared];
+    NSString *path = [NSString stringWithUTF8String:path_c];
+    wonder_host_replay_lock();
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
+    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+    [b copyFromTexture:t sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+              toBuffer:out destinationOffset:0 destinationBytesPerRow:pitch destinationBytesPerImage:pitch * h];
+    [b endEncoding];
+    [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+        if (done.status != MTLCommandBufferStatusCompleted) { fprintf(stderr, "HOST_READBACK_FAILED %s status=%ld\n", path.UTF8String, (long)done.status); return; }
+        uint8_t *p = out.contents;
+        if (bgra) for (NSUInteger i = 0; i < w * h; i++) { uint8_t x = p[4 * i]; p[4 * i] = p[4 * i + 2]; p[4 * i + 2] = x; }
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+        CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, p, pitch * h, NULL);
+        CGImageRef image = CGImageCreate(w, h, 8, 32, pitch, space, kCGImageAlphaLast | kCGBitmapByteOrderDefault, provider, NULL, false, kCGRenderingIntentDefault);
+        CGImageDestinationRef destination = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
+        int ok = 0; if (image && destination) { CGImageDestinationAddImage(destination, image, NULL); ok = CGImageDestinationFinalize(destination); }
+        if (destination) CFRelease(destination); if (image) CGImageRelease(image); CGDataProviderRelease(provider); CGColorSpaceRelease(space);
+        (void)out;   // keeps the buffer alive until the PNG is written
+        fprintf(stderr, "HOST_READBACK %s %lux%lu ok=%d\n", path.UTF8String, (unsigned long)w, (unsigned long)h, ok);
+    }];
     wonder_host_replay_unlock();
     return 0;
 }
