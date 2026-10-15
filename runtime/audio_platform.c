@@ -200,7 +200,8 @@ HLE_FORCE("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11S
     pthread_mutex_lock(&renderers_lock);
     unsigned i = 0; while (i < MAX_RENDERERS && renderers[i].writable) i++;
     if (i == MAX_RENDERERS) { pthread_mutex_unlock(&renderers_lock); die("audio: more than %d renderers", MAX_RENDERERS); }
-    renderers[i].handle = handle[0];   // renderer object word of the 16-byte handle renderers[i].writable = writable; renderers[i].active = 0;
+    // handle[0] is the renderer object word of the 16-byte AudioRendererHandle.
+    renderers[i].handle = handle[0]; renderers[i].writable = writable; renderers[i].active = 0;
     pthread_mutex_unlock(&renderers_lock);
     LOG("HOST_AUDIO_RENDERER_OPEN handle=%#llx event=%p writable=%#x mode=%u", (unsigned long long)handle[0], event, writable, mode);
     return 0;
