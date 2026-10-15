@@ -64,5 +64,7 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('linear'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('linear OK',p.stdout)
     def test_2d_array_texture(self):
         p=self.run_case('array'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('array OK',p.stdout)
+    def test_disabled_attribute_reads_default(self):
+        p=self.run_case('default_attr'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('default attribute OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

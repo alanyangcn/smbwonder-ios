@@ -8,6 +8,7 @@ enum { WONDER_SHADER_FLOAT, WONDER_SHADER_UINT, WONDER_SHADER_SINT };
 enum { WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
        WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER };
 #define WONDER_SHADER_STREAM_BUFFER_BASE 16
+#define WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER 15   // zero buffer for disabled vertex attributes; shader buffers use 0..14
 struct wonder_shader_refl {
     int stage;                                               // 0 vertex, 1 fragment (NVNshaderStage)
     int ncbuf; struct { uint8_t slot, buffer; } cbuf[14];    // NVN uniform slot r -> [[buffer(n)]]

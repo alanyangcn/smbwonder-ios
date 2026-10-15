@@ -403,12 +403,18 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     if (!width) unsupported(d, "draw without render targets", 0);
     // Vertex layout: attribute locations from the vertex reflection, streams at [[buffer(16 + stream)]].
     MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    int uses_default = 0;
     for (int i = 0; i < d->nattr; i++) {
+        MTLVertexAttributeDescriptor *a = vd.attributes[d->vr->attr[i].location];
+        if (d->attr[i].stream == WONDER_HOST_DEFAULT_ATTRIBUTE) {   // one zero float, expanded by Metal to (0,0,0,1)
+            a.format = MTLVertexFormatFloat; a.offset = 0; a.bufferIndex = WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER; uses_default = 1; continue;
+        }
         uint32_t f = wonder_host_vertex_format((int)d->attr[i].format);
         if (!f) unsupported(d, "vertex format", (long)d->attr[i].format);
-        MTLVertexAttributeDescriptor *a = vd.attributes[d->vr->attr[i].location];
         a.format = (MTLVertexFormat)f; a.offset = d->attr[i].offset; a.bufferIndex = WONDER_SHADER_STREAM_BUFFER_BASE + d->attr[i].stream;
     }
+    if (uses_default) { MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
+                        l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
         MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_STREAM_BUFFER_BASE + s];
         if (!d->stream[s].stride) { l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
@@ -424,7 +430,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     pk.formats[8] = (uint32_t)pd.depthAttachmentPixelFormat; pk.formats[9] = (uint32_t)pd.stencilAttachmentPixelFormat;
     for (int i = 0; i < 8; i++) { pk.write_mask[i] = (uint8_t)pd.colorAttachments[i].writeMask; pk.blending[i] = pd.colorAttachments[i].blendingEnabled;
                                    if (!pk.blending[i]) pk.blend[i] = 0; }
-    for (int i = 0; i < d->nattr; i++) { pk.attr[i][0] = d->attr[i].format; pk.attr[i][1] = d->attr[i].offset; pk.attr[i][2] = d->attr[i].stream | (uint32_t)d->vr->attr[i].location << 8; }
+    for (int i = 0; i < d->nattr; i++) { pk.attr[i][0] = d->attr[i].format; pk.attr[i][1] = d->attr[i].offset; pk.attr[i][2] = d->attr[i].stream | (uint32_t)d->vr->attr[i].location << 8; }   // DEFAULT stream 0xff keyed too
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) { pk.stream[s][0] = d->stream[s].stride; pk.stream[s][1] = d->stream[s].divisor; }
     NSData *pipeline_key = [NSData dataWithBytes:&pk length:sizeof pk];
     if (!pipelines) { pipelines = [NSMutableDictionary dictionary]; depth_states = [NSMutableDictionary dictionary]; }
@@ -522,6 +528,10 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
             if (stage) { [e setFragmentTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setFragmentSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
             else { [e setVertexTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setVertexSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
         }
+    }
+    if (uses_default) {
+        static id<MTLBuffer> zeros; if (!zeros) zeros = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];   // zero-filled
+        [e setVertexBuffer:zeros offset:0 atIndex:WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
     }
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
         if (stream_copies[s]) [e setVertexBuffer:stream_copies[s] offset:0 atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];

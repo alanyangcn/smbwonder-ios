@@ -11,7 +11,8 @@ struct wonder_host_draw {
     struct wonder_nvn_texture_snapshot targets[9]; int color_count;
     int primitive, index_type, count, first, base_vertex, instances, base_instance;   // index_type -1 = DrawArrays
     struct wonder_host_span index;
-    int nattr; struct { uint32_t format, offset, stream; } attr[16];                 // indexed like vr->attr
+    int nattr; struct { uint32_t format, offset, stream; } attr[16];                 // indexed like vr->attr; stream DEFAULT = disabled
+#define WONDER_HOST_DEFAULT_ATTRIBUTE 0xffu   // disabled NVN attribute: reads (0,0,0,1) from the zero buffer at [[buffer(15)]]
     // fetch_size: bytes the draw reads from the stream start; beyond span.size Maxwell returns zeros (the host pads).
     struct { struct wonder_host_span span; uint32_t stride, divisor; uint64_t fetch_size; } stream[16]; uint16_t stream_mask;
     struct wonder_host_span ubo[2][14];                                               // [stage][NVN uniform slot], read slots only

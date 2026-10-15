@@ -911,7 +911,8 @@ int main(void) {
             EXPECT_STOP(dsubmit(queue, 1, &draw), "driver constant segment");
             const char *vs_far = "stage vs\ndepth minus_one\nattr 0 3 float\n";
             fake_refl[1] = fs_parsed; assert(!wonder_shader_refl_parse(vs_far, strlen(vs_far), &fake_refl[0], err, sizeof err));
-            EXPECT_STOP(dsubmit(queue, 1, &draw), "vertex attribute 3");
+            unsigned before_far = host_draws; dsubmit(queue, 1, &draw); assert(host_draws == before_far + 1);   // disabled attribute: Maxwell reads (0,0,0,1)
+            assert(last_draw.nattr == 1 && last_draw.attr[0].stream == WONDER_HOST_DEFAULT_ATTRIBUTE);
             assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
             // ---- Review fixes: state the Metal path cannot honour stops by name (final review Important 3-7) ----
             void (*rbegin)(void *) = slot("nvnCommandBufferBeginRecording"); uint64_t (*rend)(void *) = slot("nvnCommandBufferEndRecording");

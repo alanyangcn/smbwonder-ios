@@ -41,6 +41,7 @@ int main(void) {
     assert(parse("stage vs\nc1 2 abc\n", &r, err) && strstr(err, "c1"));          // odd hex length
     assert(parse("stage vs\ncbuf 14 1\n", &r, err) && strstr(err, "cbuf"));       // NVN uniform slots 0..13
     assert(parse("stage vs\ncbuf 0 16\n", &r, err) && strstr(err, "buffer"));     // buffers 16..30 are vertex streams
+    assert(parse("stage vs\ncbuf 0 15\n", &r, err) && strstr(err, "buffer"));     // buffer 15 holds disabled-attribute defaults
     assert(parse("stage ps\ntex 32 1 1 2d\n", &r, err) && strstr(err, "tex"));
     assert(parse("stage ps\ntex 0 1 1 hexagon\n", &r, err) && strstr(err, "hexagon"));
     char many[2048] = "stage vs\n"; for (int i = 0; i < 17; i++) snprintf(many + strlen(many), sizeof many - strlen(many), "attr %d %d float\n", i, i);

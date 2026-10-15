@@ -161,7 +161,7 @@ def reflect(census, stage_entry, job, res, msl, c1):
         lines.append(f'support {b}'); used.add(b)   # host fills it per D2R nvn_mtl.m (render_scale 1.0, BGRA flags 0)
     for b in sorted(buffers - used):
         raise ValueError(f'buffer({b}) in the MSL entry has no reflection (unknown binding)')
-    if any(b >= 16 for b in buffers): raise ValueError('buffer index >= 16 collides with vertex streams 16..30')
+    if any(b >= 15 for b in buffers): raise ValueError('buffer index >= 15 collides with the default-attribute buffer (15) / vertex streams 16..30')
     for a in attributes:
         if str(a) not in job['attr']: raise ValueError(f'attribute {a} is read but has no format in the census')
         lines.append(f"attr {a} {a} {job['attr'][str(a)]}")

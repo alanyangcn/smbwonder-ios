@@ -199,7 +199,9 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     }
     for (int i = 0; i < d.vr->nattr; i++) {
         int a = d.vr->attr[i].nvn;
-        if (a >= draw_state.nattrib || !draw_state.attrib[a].fmt) { snprintf(why, sizeof why, "vertex attribute %d is read but not enabled", a); replay_stop(opcode, why); }
+        if (a >= draw_state.nattrib || !draw_state.attrib[a].fmt) {   // disabled: Maxwell reads (0,0,0,1) (round92)
+            d.attr[i].format = 0; d.attr[i].offset = 0; d.attr[i].stream = WONDER_HOST_DEFAULT_ATTRIBUTE; continue;
+        }
         int s = (int)draw_state.attrib[a].stream;
         if (s >= 15) { snprintf(why, sizeof why, "vertex stream %d would need [[buffer(%d)]] (Metal has 0..30)", s, 16 + s); replay_stop(opcode, why); }
         d.attr[i].format = draw_state.attrib[a].fmt; d.attr[i].offset = draw_state.attrib[a].offset; d.attr[i].stream = (uint32_t)s;
@@ -243,6 +245,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         } else max_vertex = (int64_t)call.first + call.count - 1;
         int64_t max_instance = (int64_t)call.base_instance + (call.instances > 0 ? call.instances - 1 : 0);
         for (int i = 0; i < d.nattr; i++) {
+            if (d.attr[i].stream == WONDER_HOST_DEFAULT_ATTRIBUTE) continue;
             int s = (int)d.attr[i].stream, bw, bh, bytes = nvn_fmt_bpb((int)d.attr[i].format, &bw, &bh);
             uint32_t stride = d.stream[s].stride, divisor = d.stream[s].divisor;
             int64_t element = !stride ? 0 : divisor ? max_instance / divisor : max_vertex;

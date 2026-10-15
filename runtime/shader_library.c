@@ -27,14 +27,14 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             r->stage = !strcmp(word, "ps");
         } else if (!strcmp(kind, "cbuf")) {
             if (sscanf(line, "cbuf %d %d", &a, &b) != 2 || a < 0 || a > 13) return fail(err, n, "cbuf line %u: NVN uniform slot must be 0..13", line_no);
-            if (b < 0 || b >= WONDER_SHADER_STREAM_BUFFER_BASE) return fail(err, n, "cbuf line %u: buffer %d collides with vertex streams", line_no, b);
+            if (b < 0 || b >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "cbuf line %u: buffer %d collides with vertex streams", line_no, b);
             if (r->ncbuf >= 14) return fail(err, n, "cbuf line %u: more than 14 uniform buffers", line_no);
             r->cbuf[r->ncbuf].slot = (uint8_t)a; r->cbuf[r->ncbuf++].buffer = (uint8_t)b;
         } else if (!strcmp(kind, "support")) {
-            if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= WONDER_SHADER_STREAM_BUFFER_BASE) return fail(err, n, "support line %u: bad buffer", line_no);
+            if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "support line %u: bad buffer", line_no);
             r->support = a;
         } else if (!strcmp(kind, "c1")) {
-            if (sscanf(line, "c1 %d %8199s", &a, word) != 2 || a < 0 || a >= WONDER_SHADER_STREAM_BUFFER_BASE) return fail(err, n, "c1 line %u: bad buffer", line_no);
+            if (sscanf(line, "c1 %d %8199s", &a, word) != 2 || a < 0 || a >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "c1 line %u: bad buffer", line_no);
             size_t hex = strcmp(word, "-") ? strlen(word) : 0;
             if (hex % 2 || hex / 2 > sizeof r->c1) return fail(err, n, "c1 line %u: bad hex length %zu", line_no, hex);
             for (size_t i = 0; i < hex / 2; i++) {
@@ -63,7 +63,7 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "btex line %u: unknown texture type '%s'", line_no, word);
             r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)(32 + bindless), (uint8_t)tx, (uint8_t)sm, (uint8_t)t, 1, (uint8_t)ubo, (uint16_t)offset}; r->ntex++;
         } else if (!strcmp(kind, "sbuf")) {
-            if (sscanf(line, "sbuf %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b >= WONDER_SHADER_STREAM_BUFFER_BASE || r->nsbuf >= 16 ||
+            if (sscanf(line, "sbuf %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER || r->nsbuf >= 16 ||
                 (strcmp(word, "r") && strcmp(word, "rw")))
                 return fail(err, n, "sbuf line %u: storage slot 0..15, buffer 0..15, r or rw", line_no);
             r->sbuf[r->nsbuf].slot = (uint8_t)a; r->sbuf[r->nsbuf].buffer = (uint8_t)b; r->sbuf[r->nsbuf++].write = !strcmp(word, "rw");
