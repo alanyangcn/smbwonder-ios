@@ -113,6 +113,15 @@ static void trace_commands(unsigned opcode, const void *payload, size_t size, vo
     if (opcode == WONDER_NVN_CMD_CALL_COMMANDS) assert(c->a[0] == 1);
 }
 int main(void) {
+    // Cube-map arrays: NVN depth counts layer-faces (6 per cube). Round70: the game sized a 0x109000 pool for a
+    // 128x128x12 (two cubes) RG11B10F array with 8 levels; one 128x128 cube with 8 levels is 0x84000.
+    {
+        nvn_texdesc cube = {.target = 8, .format = 0x3f, .width = 128, .height = 128, .depth = 6, .levels = 8}, array = cube;
+        array.target = 9; array.depth = 12;
+        nvn_texlayout one, two; nvn_tex_layout(&cube, &one); nvn_tex_layout(&array, &two);
+        assert(one.size == 0x84000 && one.layers == 6);
+        assert(two.layers == 12 && two.size == 2 * one.size && two.size <= 0x109000);
+    }
     assert(WONDER_NVN_API_MAJOR == 55 && WONDER_NVN_API_MINOR_MIN == 15 && WONDER_NVN_NAME_COUNT == 534);
     // Bootstrap gives exactly the two names Wonder asks for; unknown names are NULL.
     assert(wonder_nvn_resolve("nvnDeviceInitialize", "nvnBootstrapLoader") == (void *)wonder_nvnDeviceInitialize);
