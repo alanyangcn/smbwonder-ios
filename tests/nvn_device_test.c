@@ -52,6 +52,7 @@ static void apply_pending_writes(void) {
 #define EXPECTED_IMPLEMENTED 267
 static unsigned released_resources, captured_programs;
 void wonder_host_release(void *resource) { if (resource) released_resources++; }
+static const void *forgotten_pool; void wonder_host_pool_forget(const void *pool) { forgotten_pool = pool; }
 static uint64_t forgotten_serial; static unsigned forgotten_textures;
 void wonder_host_texture_forget(uint64_t serial) { forgotten_serial = serial; forgotten_textures++; }
 void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size; }
@@ -1068,6 +1069,7 @@ int main(void) {
         EXPECT_STOP(((void (*)(void *))slot("nvnMemoryPoolFinalize"))(phys_pool), "still backs virtual pool");
         unsigned before = released_resources;
         ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(wt_pool);
+        assert(forgotten_pool == (const void *)wt_pool);   // GPU textures stored in the pool go with it
         assert(released_resources == before + 1);
         EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
     }

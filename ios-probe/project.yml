@@ -46,6 +46,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/shader_library.c'
       - path: '${SMBW_REFERENCE}/runtime/metal2_draw.m'
       - path: '${SMBW_REFERENCE}/runtime/profile_image.c'
+      - path: '${SMBW_REFERENCE}/runtime/texture_storage.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_service.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/os_hooks.c'

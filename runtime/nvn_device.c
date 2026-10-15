@@ -605,6 +605,7 @@ void wonder_nvnMemoryPoolFinalize(void *pool) {
     for (struct pool_registration **p = &pool_registry; *p; p = &(*p)->next)
         if ((*p)->pool == m) { struct pool_registration *dead = *p; *p = dead->next; free(dead); break; }
     pthread_mutex_unlock(&pool_registry_lock);
+    wonder_host_pool_forget(pool);
     if (m->host_buffer) wonder_host_release(m->host_buffer);
     if (m->flags & 0x200) wonder_host_unreserve(m->memory, m->size);
     free(m->mappings);
