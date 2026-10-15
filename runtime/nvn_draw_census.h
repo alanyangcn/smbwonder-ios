@@ -13,7 +13,7 @@ struct wonder_nvn_draw_state {
     struct wonder_nvn_program_shaders program; int has_program;
     int nattrib, nstream;
     wonder_nvn_vertex_attrib_state attrib[16]; wonder_nvn_vertex_stream_state stream[16];
-    struct { uint64_t address, size; } vertex_buffer[16], uniform_buffer[6][16];
+    struct { uint64_t address, size; } vertex_buffer[16], uniform_buffer[6][16], storage_buffer[6][16];
     uint64_t texture_handle[6][32];   // 0 = unbound
     const void *texture_pool, *sampler_pool;
     wonder_nvn_blend_state blend[8]; uint8_t blend_set;   // per blend target

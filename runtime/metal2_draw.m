@@ -501,6 +501,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         void (^buffer)(id<MTLBuffer>, NSUInteger, NSUInteger) = ^(id<MTLBuffer> b, NSUInteger offset, NSUInteger index) {
             if (stage) [e setFragmentBuffer:b offset:offset atIndex:index]; else [e setVertexBuffer:b offset:offset atIndex:index]; };
         for (int i = 0; i < r->ncbuf; i++) buffer(ubo_copies[stage][r->cbuf[i].slot], 0, r->cbuf[i].buffer);
+        for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][r->sbuf[i].slot]; buffer((__bridge id<MTLBuffer>)sb->buffer, sb->offset, r->sbuf[i].buffer); }
         if (r->c1_buffer >= 0) buffer(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
         if (r->support >= 0) buffer(support_buffer, 0, (NSUInteger)r->support);
         for (int i = 0; i < r->ntex; i++) {

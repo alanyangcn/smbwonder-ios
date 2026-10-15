@@ -62,6 +62,11 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
                 return fail(err, n, "btex line %u: uniform slot 0..13, offset within 64 KiB, at most 8", line_no);
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "btex line %u: unknown texture type '%s'", line_no, word);
             r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)(32 + bindless), (uint8_t)tx, (uint8_t)sm, (uint8_t)t, 1, (uint8_t)ubo, (uint16_t)offset}; r->ntex++;
+        } else if (!strcmp(kind, "sbuf")) {
+            if (sscanf(line, "sbuf %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b >= WONDER_SHADER_STREAM_BUFFER_BASE || r->nsbuf >= 16 ||
+                (strcmp(word, "r") && strcmp(word, "rw")))
+                return fail(err, n, "sbuf line %u: storage slot 0..15, buffer 0..15, r or rw", line_no);
+            r->sbuf[r->nsbuf].slot = (uint8_t)a; r->sbuf[r->nsbuf].buffer = (uint8_t)b; r->sbuf[r->nsbuf++].write = !strcmp(word, "rw");
         } else if (!strcmp(kind, "attr")) {
             if (sscanf(line, "attr %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b > 15 || r->nattr >= 16)
                 return fail(err, n, "attr line %u: location/attribute 0..15, at most 16", line_no);

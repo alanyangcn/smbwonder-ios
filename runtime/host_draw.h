@@ -15,6 +15,7 @@ struct wonder_host_draw {
     // fetch_size: bytes the draw reads from the stream start; beyond span.size Maxwell returns zeros (the host pads).
     struct { struct wonder_host_span span; uint32_t stride, divisor; uint64_t fetch_size; } stream[16]; uint16_t stream_mask;
     struct wonder_host_span ubo[2][14];                                               // [stage][NVN uniform slot], read slots only
+    struct wonder_host_span sbuf[2][16];                                              // [stage][NVN storage slot], used slots only
     struct { struct wonder_nvn_texture_registration texture; struct wonder_nvn_sampler_state sampler;
              const uint8_t *storage; uint64_t storage_size; } tex[2][40]; uint64_t tex_mask[2];   // slots 32.. = bindless; storage: pool bytes (TX1 layout)
     wonder_nvn_blend_state blend[8]; uint8_t blend_set; float blend_color[4];   // SetBlendColor (constant blend factors)

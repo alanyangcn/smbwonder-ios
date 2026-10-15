@@ -48,6 +48,13 @@ def sampler_type_name(t):
     if not base: raise ValueError(f'sampler type {t:#x} unknown')
     return base + ('ms' if t & 0x200 else '') + ('array' if t & 0x100 else '')
 
+STORAGE_BASE = {'vs': 0x110, 'ps': 0x510}   # Wonder SDK BindStorageBuffer table sdk+0xac558c (x16 bytes)
+def storage_slot(cb_offset_words, stage):
+    """Storage buffer address word in c[0] -> NVN storage slot (c[0][base + 16 r])."""
+    offset = cb_offset_words * 4 - STORAGE_BASE[stage]
+    if offset < 0 or offset % 16 or offset // 16 > 15: raise ValueError(f'storage buffer address at c[0] word {cb_offset_words} is outside the {stage} table')
+    return offset // 16
+
 def cbuf_kind(slot):
     if 3 <= slot <= 16: return ('cbuf', slot - 3)
     if slot == 1: return ('c1', None)
@@ -132,7 +139,12 @@ def reflect(census, stage_entry, job, res, msl, c1):
         if cb['binding'] not in buffers: raise ValueError(f"cbuf c[{cb['slot']}] binding {cb['binding']} missing from the MSL entry")
         lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
         used.add(cb['binding'])
-    if res['sbufs'] or res['images']: raise ValueError('storage buffers / images are not built yet')
+    if res['images']: raise ValueError('images are not built yet')
+    for b in res['sbufs']:
+        if b['cb_slot'] != 0: raise ValueError(f"storage buffer address in c[{b['cb_slot']}], not c[0]")
+        if b['binding'] not in buffers: raise ValueError(f"storage binding {b['binding']} missing from the MSL entry")
+        writes = re.search(rf'device \w+& \w+ \[\[buffer\({b["binding"]}\)\]\]', msl) and not re.search(rf'const device \w+& \w+ \[\[buffer\({b["binding"]}\)\]\]', msl)
+        lines.append(f"sbuf {storage_slot(b['cb_offset'], job['stage'])} {b['binding']} {'rw' if writes else 'r'}"); used.add(b['binding'])
     bound = {t['index'] for t in census['textures'] if t['stage'] == stage_no and t['texture']}
     for t in res['textures']:
         if t['cbuf_slot'] not in (-1, 2):   # bindless: the handle is read at run time from a uniform buffer

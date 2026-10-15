@@ -67,6 +67,12 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(build.sampler_type_name(3), '2d'); self.assertEqual(build.sampler_type_name(5 | 0x100), 'cubearray')
         self.assertEqual(build.sampler_type_name(3 | 0x100), '2darray'); self.assertEqual(build.sampler_type_name(3 | 0x200), '2dms')
         with self.assertRaises(ValueError): build.sampler_type_name(9)
+    def test_storage_buffer_slots(self):
+        # Wonder SDK BindStorageBuffer (sdk+0x468030, table sdk+0xac558c): address of slot r at c[0][base + 16 r],
+        # base vertex 0x110, fragment 0x510; the translator reports the word offset (round89: vs 88bfcbf96f575ff3 -> 68).
+        self.assertEqual(build.storage_slot(68, 'vs'), 0); self.assertEqual(build.storage_slot(0x520 // 4, 'ps'), 1)
+        with self.assertRaises(ValueError): build.storage_slot(70, 'vs')
+        with self.assertRaises(ValueError): build.storage_slot(0x100 // 4, 'vs')
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 

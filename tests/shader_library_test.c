@@ -29,6 +29,11 @@ int main(void) {
            r.tex[1].bindless && r.tex[1].ubo_slot == 1 && r.tex[1].offset == 208 && !r.tex[0].bindless);
     assert(parse("stage ps\nbtex 14 0 3 3 2d\n", &r, err) && strstr(err, "btex"));
     assert(parse("stage ps\nbtex 1 65534 3 3 2d\n", &r, err) && strstr(err, "btex"));   // handle must fit in the 64 KiB block
+    // Storage buffers: NVN slot r -> device [[buffer(n)]], read-only or read-write.
+    assert(parse("stage vs\ndepth minus_one\nsbuf 0 2 r\nsbuf 3 4 rw\n", &r, err) == 0);
+    assert(r.nsbuf == 2 && r.sbuf[0].slot == 0 && r.sbuf[0].buffer == 2 && !r.sbuf[0].write && r.sbuf[1].slot == 3 && r.sbuf[1].write);
+    assert(parse("stage vs\nsbuf 16 2 r\n", &r, err) && strstr(err, "sbuf"));
+    assert(parse("stage vs\nsbuf 0 16 r\n", &r, err) && strstr(err, "sbuf"));
     // Rejections name the problem.
     assert(parse("stage gs\n", &r, err) && strstr(err, "stage"));
     assert(parse("cbuf 0 1\n", &r, err) && strstr(err, "stage"));                  // stage line first

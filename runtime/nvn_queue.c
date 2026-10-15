@@ -165,6 +165,12 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (!draw_state.uniform_buffer[stage][slot].address) { snprintf(why, sizeof why, "unbound uniform buffer stage %d slot %d", stage, slot); replay_stop(opcode, why); }
             d.ubo[stage][slot] = span_of(opcode, draw_state.uniform_buffer[stage][slot].address, draw_state.uniform_buffer[stage][slot].size);
         }
+        for (int i = 0; i < r->nsbuf; i++) {
+            int slot = r->sbuf[i].slot;
+            if (!draw_state.storage_buffer[stage][slot].address || !draw_state.storage_buffer[stage][slot].size) {
+                snprintf(why, sizeof why, "unbound storage buffer stage %d slot %d", stage, slot); replay_stop(opcode, why); }
+            d.sbuf[stage][slot] = span_of(opcode, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
+        }
         for (int i = 0; i < r->ntex; i++) {
             int slot = r->tex[i].slot; uint64_t h;
             if (r->tex[i].bindless) {   // combined handle stored by the game in a uniform buffer (round86)
@@ -433,8 +439,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_BIND_DEPTH_STENCIL: memcpy(&draw_state.depth_stencil, blob, sizeof draw_state.depth_stencil); draw_state.states_set |= 4; break;
     case WONDER_NVN_CMD_BIND_POLYGON: memcpy(&draw_state.polygon, blob, sizeof draw_state.polygon); draw_state.states_set |= 8; break;
     case WONDER_NVN_CMD_BIND_MULTISAMPLE: memcpy(&draw_state.multisample, blob, sizeof draw_state.multisample); draw_state.states_set |= 16; break;
-    // Pure state not consumed by the first draw yet.
-    case WONDER_NVN_CMD_BIND_STORAGE_BUFFER: case WONDER_NVN_CMD_BIND_IMAGE:
+    case WONDER_NVN_CMD_BIND_STORAGE_BUFFER:
+        draw_state.storage_buffer[c->a[0]][c->a[1]].address = c->a[2]; draw_state.storage_buffer[c->a[0]][c->a[1]].size = c->a[3]; break;
+    // Pure state not consumed by draws yet.
+    case WONDER_NVN_CMD_BIND_IMAGE:
     case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
     case WONDER_NVN_CMD_SET_DEPTH_BOUNDS:
     case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:

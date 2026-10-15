@@ -17,6 +17,7 @@ struct wonder_shader_refl {
     // offset) use slots 32 + n.
     int ntex; struct wonder_shader_tex { uint8_t slot, texture, sampler, type, bindless, ubo_slot; uint16_t offset; } tex[40];
     int nattr; struct { uint8_t location, nvn, type; } attr[16];         // [[attribute(location)]] <- NVN vertex attribute
+    int nsbuf; struct { uint8_t slot, buffer, write; } sbuf[16];        // NVN storage slot r -> device [[buffer(n)]]
     uint8_t fout_mask, fout_type[8];                         // colour outputs written
     uint8_t drv_read;                                        // bit n: reads driver constant segment c[n] (0 or 2) at run time
     int depth_minus_one;                                     // vertex: 1 = built with the NEAR_IS_MINUS_W remap, 0 = without, -1 = not stated

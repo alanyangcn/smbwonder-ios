@@ -998,6 +998,13 @@ int main(void) {
               REVIEW_OK(((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(dcb, (uintptr_t)(cb_memory + 0x9100), 0x100, 16, 4, &handle_now));
               assert(last_draw.tex[1][32].texture.texture.desc.width == 128);
               ubo[4] = keep; fake_refl[1] = fs_parsed; }
+            // Storage buffers: refl slot 2 of the fragment stage bound with BindStorageBuffer (round89).
+            { const char *fs_sb = "stage ps\nsbuf 2 3 r\nfout 0 float\n";
+              assert(!wonder_shader_refl_parse(fs_sb, strlen(fs_sb), &fake_refl[1], err, sizeof err));
+              REVIEW_STOP((void)0, "unbound storage buffer stage 1 slot 2");
+              REVIEW_OK(((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindStorageBuffer"))(dcb, 1, 2, (uintptr_t)(cb_memory + 0x9800), 0x40));
+              assert(last_draw.sbuf[1][2].size == 0x40 && last_draw.sbuf[1][2].buffer);
+              fake_refl[1] = fs_parsed; }
             // Shader texture type must match the bound texture's target (texture 300 is 2D).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_array, strlen(fs_array), &fake_refl[1], err, sizeof err));
