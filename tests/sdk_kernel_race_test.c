@@ -17,6 +17,7 @@ static void *gated_mmap(void *address, size_t size, int prot, int flags, int fd,
     return mmap(address, size, prot, flags, fd, offset);
 }
 #define mmap gated_mmap
+module_t g_mod[MAX_MOD]; int g_nmod;   // no modules loaded in this test
 // Handle table stand-in (kernel_threads.c on device): one transfer-memory object at a time is enough here.
 static void *test_object; static uint32_t test_kind; static void (*test_close)(void *);
 uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *)) { test_object = obj; test_kind = kind; test_close = close; return 0x1234; }

@@ -72,6 +72,17 @@ void wonder_kernel_init(uint64_t bytes) {
     LOG("SDK_KERNEL AS=%p+%#llx pool=%llu MiB heap_region=%llu MiB alias=%llu MiB (lazy commit)",space,(unsigned long long)AS_SIZE,
         (unsigned long long)(POOL_SIZE>>20),(unsigned long long)(heap_capacity>>20),(unsigned long long)(ALIAS_SIZE>>20));
 }
+// MapMemory sources: heap pages, or a loaded module's writable data/bss (Horizon CodeData can be aliased; the
+// in-process audio server's manager thread stack is a static sdk buffer, sdk+0xd85000, round43).
+static int map_source_ok(uint64_t src, uint64_t size, uint64_t heap) {
+    if (src >= heap && src - heap <= heap_size && size <= heap_size - (src - heap)) return 1;
+    for (int i = 0; i < g_nmod; i++) {
+        uint64_t lo = (uint64_t)g_mod[i].base + g_mod[i].data_off;
+        uint64_t hi = (uint64_t)g_mod[i].base + (g_mod[i].patch_off > g_mod[i].data_off ? g_mod[i].patch_off : g_mod[i].size);
+        if (g_mod[i].data_off && src >= lo && src < hi && size <= hi - src) return 1;
+    }
+    return 0;
+}
 #define TRANSFER_MEMORY_KIND 0x544d454du   /* "TMEM" */
 struct transfer_memory { uint64_t src, size, mapped; uint32_t perm; };
 static void free_transfer_memory(void *p) { free(p); }   // a live mapping stays until UnmapTransferMemory, as in Horizon
@@ -116,7 +127,7 @@ static int kernel_call_locked(int number, uint64_t *r) {
         // move the contents in (Map) and back out (Unmap); Horizon makes src inaccessible meanwhile, so a correct
         // guest cannot observe the difference. dst pages are made accessible at 16 KiB granularity.
         uint64_t dst=r[0],src=r[1],size=r[2],sbase=(uint64_t)space+STACK_OFFSET,heap=(uint64_t)space+HEAP_OFFSET;
-        if(!size||(dst|src|size)&0xfff||dst<sbase||size>STACK_SIZE||dst-sbase>STACK_SIZE-size||src<heap||src-heap>heap_size||size>heap_size-(src-heap)){r[0]=0xd401;return 1;}
+        if(!size||(dst|src|size)&0xfff||dst<sbase||size>STACK_SIZE||dst-sbase>STACK_SIZE-size||!map_source_ok(src,size,heap)){r[0]=0xd401;return 1;}
         int found=-1;
         for(unsigned i=0;i<nregion;i++)if(dst<regions[i].base+regions[i].size&&regions[i].base<dst+size){
             if(number==5&&regions[i].base==dst&&regions[i].size==size&&regions[i].src==src&&regions[i].state==0xb)found=(int)i;

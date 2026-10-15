@@ -4,6 +4,7 @@
 extern int wonder_kernel_call(int number, uint64_t *regs);
 extern void wonder_kernel_init(uint64_t image_bytes);
 struct dm_flags g_flag;
+module_t g_mod[MAX_MOD]; int g_nmod;   // no modules loaded in this test
 // Handle table stand-in (kernel_threads.c on device): one transfer-memory object at a time is enough here.
 static void *test_object; static uint32_t test_kind; static void (*test_close)(void *);
 uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *)) { test_object = obj; test_kind = kind; test_close = close; return 0x1234; }
