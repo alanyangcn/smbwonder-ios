@@ -16,7 +16,8 @@
 
 struct sync { uint32_t magic; _Atomic uint32_t signaled; const void *device; uint64_t fence; };
 struct window_builder { uint32_t magic, device_mark; const void *device; const void *native; const void *const *textures; int32_t count, active, interval; };
-struct window { uint32_t magic; int32_t count, active, interval, next; const void *device, *native; const void *textures[MAX_WINDOW_TEXTURES]; uint64_t acquired; int32_t crop[4]; uint32_t presents; };
+struct window { uint32_t magic; int32_t count, active, interval, next; const void *device, *native; const void *textures[MAX_WINDOW_TEXTURES]; uint64_t acquired; int32_t crop[4]; uint32_t presents;
+                uint32_t presented[MAX_WINDOW_TEXTURES]; _Atomic uint32_t released[MAX_WINDOW_TEXTURES]; };
 _Static_assert(sizeof(struct sync) <= SYNC_SIZE, "sync storage");
 _Static_assert(sizeof(struct window_builder) <= WINDOW_BUILDER_SIZE, "window builder storage");
 _Static_assert(sizeof(struct window) <= WINDOW_SIZE, "window storage");
@@ -95,6 +96,14 @@ int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     if (!index) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnWindowAcquireTexture index=NULL");
     if (w->acquired & (1ull << w->next)) wonder_nvn_stop("NVN_INVALID_STATE nvnWindowAcquireTexture: texture %d still held (acquired without present)", w->next);
     *index = w->next; w->acquired |= 1ull << w->next; w->next = (w->next + 1) % w->active;
+    // The texture is available once the GPU work that last presented it has completed. The game reuses the
+    // per-frame resources tied to it after this point, so returning early lets the CPU overwrite data the
+    // GPU has not read yet (round96/97: random black / blue / half-drawn frames). Blocking here is what a
+    // console acquire does when no texture is free.
+    if (atomic_load(&w->released[*index]) != w->presented[*index]) {
+        wonder_host_flush();
+        while (atomic_load(&w->released[*index]) != w->presented[*index]) { struct timespec ts = {0, 100000}; nanosleep(&ts, NULL); }
+    }
     atomic_store(&s->signaled, 1); s->fence++;
     wonder_nvn_report("NVN_CALL nvnWindowAcquireTexture window=%p -> index %d (sync signaled)", window, *index);
     return 0;   // NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS
@@ -121,6 +130,7 @@ void wonder_nvnWindowSetPresentInterval(void *window, int interval) {
     if (interval < 0 || interval > 5) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnWindowSetPresentInterval %d", interval);
     o->interval = interval;
 }
+static void release_texture(void *released) { atomic_fetch_add((_Atomic uint32_t *)released, 1); }
 // Present: the acquired texture is drawn to the CAMetalLayer drawable after all previously submitted work.
 void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
     wonder_nvn_queue_check(queue, "nvnQueuePresentTexture");
@@ -132,6 +142,7 @@ void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
     if (!crop[2] || !crop[3]) { crop[0] = crop[1] = 0; crop[2] = (int)t->desc.width; crop[3] = (int)t->desc.height; }
     if ((int64_t)crop[0] + crop[2] > (int64_t)t->desc.width || (int64_t)crop[1] + crop[3] > (int64_t)t->desc.height)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueuePresentTexture crop %d,%d %dx%d outside %ux%u", crop[0], crop[1], crop[2], crop[3], t->desc.width, t->desc.height);
+    w->presented[index]++; wonder_host_after_gpu(release_texture, (void *)&w->released[index]);   // same command buffer as the present
     if (wonder_host_present(t->host, crop, w->interval)) wonder_nvn_stop("NVN_HOST_PRESENT_FAILED nvnQueuePresentTexture index=%d", index);
     w->acquired &= ~(1ull << index); w->presents++;
     if (w->presents <= 8 || w->presents % 600 == 0)

@@ -729,10 +729,14 @@ int main(void) {
         // Present returns the texture to the window; the next acquire can reuse it.
         void (*present)(void *, void *, int) = slot("nvnQueuePresentTexture");
         ((void (*)(void *, int, int, int, int))slot("nvnWindowSetCrop"))(window, 0, 0, 1280, 720);
+        unsigned before_present = pending_count;
         present(queue, window, 0);
         assert(host_presents == 1);
+        assert(pending_count == before_present + 1);   // texture release registered on the GPU work that presents it
         EXPECT_STOP(present(queue, window, 0), "not acquired");
-        assert(acquire(window, sync, &index) == 0 && index == 0);
+        // Acquire hands the texture back only after that GPU work completed (the game reuses its per-frame
+        // resources once the texture is available): the fake host runs completion handlers on flush.
+        assert(acquire(window, sync, &index) == 0 && index == 0 && pending_count == 0);
         ((void (*)(void *, int))slot("nvnWindowSetPresentInterval"))(window, 2);
         ((void (*)(void *, int))slot("nvnWindowSetNumActiveTextures"))(window, N);
         EXPECT_STOP(((void (*)(void *, int))slot("nvnWindowSetNumActiveTextures"))(window, N + 1), "NVN_INVALID_ARGUMENT");
