@@ -42,6 +42,12 @@ static void positive(int argc, char **argv) {
     assert(f && ((__bridge id<MTLFunction>)f).functionType == MTLFunctionTypeVertex);
     assert(wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0) == f);                     // cached by key
     const struct wonder_shader_refl *r = wonder_host_shader_refl("aaaaaaaaaaaaaaaa"); assert(r && r->stage == 0);
+    // CLAMP_TO_BORDER: Metal has three fixed border colours; the GPU is checked once by sampling outside a 1x1 texture.
+    assert(wonder_host_border_color((const float[4]){0, 0, 0, 0}) == MTLSamplerBorderColorTransparentBlack);
+    assert(wonder_host_border_color((const float[4]){0, 0, 0, 1}) == MTLSamplerBorderColorOpaqueBlack);
+    assert(wonder_host_border_color((const float[4]){1, 1, 1, 1}) == MTLSamplerBorderColorOpaqueWhite);
+    assert(wonder_host_border_color((const float[4]){0.5f, 0, 0, 1}) == -1);
+    assert(wonder_host_border_color_works() == 1);   // every Mac GPU honours it
     if (argc > 3) {   // real translated stages from tools/wonder_shader_build.py
         wonder_host_shader_set_directory(argv[3]);
         pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 64 * 1024);

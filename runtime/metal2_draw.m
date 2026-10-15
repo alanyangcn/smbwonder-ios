@@ -268,6 +268,47 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (!view) unsupported(d, "texture view creation on serial", (long)t->serial);
     return view;
 }
+// NVN_WRAP_MODE_CLAMP_TO_BORDER: Metal offers transparent black, opaque black and opaque white only.
+int wonder_host_border_color(const float c[4]) {
+    if (c[0] == 0 && c[1] == 0 && c[2] == 0) return c[3] == 0 ? (int)MTLSamplerBorderColorTransparentBlack : c[3] == 1 ? (int)MTLSamplerBorderColorOpaqueBlack : -1;
+    if (c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 1) return (int)MTLSamplerBorderColorOpaqueWhite;
+    return -1;
+}
+// The A11's support for clamp-to-border is not documented as a feature-set row: sample once outside a red 1x1 texture
+// with an opaque-white border and read the pixel back (1 = white, 0 = anything else, e.g. the edge texel).
+int wonder_host_border_color_works(void) {
+    static int result = -1; if (result >= 0) return result;
+    NSString *src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct o { float4 p [[position]]; };\n"
+        "vertex o v(uint i [[vertex_id]]) { o r; r.p = float4(i == 1 ? 3.0 : -1.0, i == 2 ? 3.0 : -1.0, 0, 1); return r; }\n"
+        "fragment float4 f(texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) { return t.sample(s, float2(2.5, 2.5)); }\n";
+    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion2_1;
+    id<MTLLibrary> lib = [device newLibraryWithSource:src options:options error:nil];
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"v"]; pd.fragmentFunction = [lib newFunctionWithName:@"f"];
+    pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+    id<MTLRenderPipelineState> pso = lib ? [device newRenderPipelineStateWithDescriptor:pd error:nil] : nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
+    td.storageMode = CPU_TEXTURE_STORAGE; id<MTLTexture> red = [device newTextureWithDescriptor:td];
+    uint32_t px = 0xff0000ff; [red replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:&px bytesPerRow:4];
+    td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModePrivate; id<MTLTexture> target = [device newTextureWithDescriptor:td];
+    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
+    sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToBorderColor; sd.borderColor = MTLSamplerBorderColorOpaqueWhite;
+    id<MTLSamplerState> smp = [device newSamplerStateWithDescriptor:sd];
+    id<MTLBuffer> out = [device newBufferWithLength:4 options:MTLResourceStorageModeShared];
+    id<MTLCommandQueue> q = [device newCommandQueue]; id<MTLCommandBuffer> cb = [q commandBuffer];
+    if (!pso || !red || !target || !smp || !out || !cb) { result = 0; return result; }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target; pass.colorAttachments[0].loadAction = MTLLoadActionClear; pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
+    [e setRenderPipelineState:pso]; [e setFragmentTexture:red atIndex:0]; [e setFragmentSamplerState:smp atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [e endEncoding];
+    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
+    [b copyFromTexture:target sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(1, 1, 1) toBuffer:out destinationOffset:0 destinationBytesPerRow:4 destinationBytesPerImage:4];
+    [b endEncoding]; [cb commit]; [cb waitUntilCompleted];
+    result = cb.status == MTLCommandBufferStatusCompleted && *(uint32_t *)out.contents == 0xffffffffu;
+    fprintf(stderr, "HOST_BORDER_COLOR_CHECK pixel=%#x works=%d\n", *(uint32_t *)out.contents, result);
+    return result;
+}
 static NSMutableDictionary<NSData *, id<MTLSamplerState>> *samplers;
 static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const struct wonder_nvn_sampler_state *m) {
     NSData *key = [NSData dataWithBytes:m length:sizeof *m];
@@ -278,13 +319,23 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
     sd.minFilter = (m->min & 1) ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;   // NEAREST 0, LINEAR 1, *_MIPMAP_* 2..5
     sd.mipFilter = m->min < 2 ? MTLSamplerMipFilterNotMipmapped : m->min < 4 ? MTLSamplerMipFilterNearest : MTLSamplerMipFilterLinear;
     sd.magFilter = m->mag ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
-    const uint8_t wraps[3] = {m->wrap_s, m->wrap_t, m->wrap_r}; MTLSamplerAddressMode modes[3];
+    const uint8_t wraps[3] = {m->wrap_s, m->wrap_t, m->wrap_r}; MTLSamplerAddressMode modes[3]; int border = 0;
     for (int i = 0; i < 3; i++) switch (wraps[i]) {
         case 0: case 7: modes[i] = MTLSamplerAddressModeClampToEdge; break;   // CLAMP (legacy GL clamp) treated as clamp-to-edge
         case 1: modes[i] = MTLSamplerAddressModeRepeat; break;
         case 2: case 3: modes[i] = MTLSamplerAddressModeMirrorClampToEdge; break;
         case 6: modes[i] = MTLSamplerAddressModeMirrorRepeat; break;
-        default: unsupported(d, "sampler wrap mode (border colours are not mapped yet)", wraps[i]);
+        case 5: modes[i] = MTLSamplerAddressModeClampToBorderColor; border = 1; break;
+        default: unsupported(d, "sampler wrap mode (MIRROR_CLAMP_TO_BORDER has no Metal mode)", wraps[i]);
+    }
+    if (border) {
+        int color = wonder_host_border_color(m->border);
+        if (color < 0) {
+            char what[96]; snprintf(what, sizeof what, "sampler border colour %g,%g,%g,%g (Metal: transparent/opaque black, opaque white)", m->border[0], m->border[1], m->border[2], m->border[3]);
+            unsupported(d, what, 5);
+        }
+        if (!wonder_host_border_color_works()) unsupported(d, "sampler CLAMP_TO_BORDER: this GPU does not sample the border colour", 5);
+        sd.borderColor = (MTLSamplerBorderColor)color;
     }
     sd.sAddressMode = modes[0]; sd.tAddressMode = modes[1]; sd.rAddressMode = modes[2];
     sd.lodMinClamp = m->lod_min; sd.lodMaxClamp = m->lod_max;
