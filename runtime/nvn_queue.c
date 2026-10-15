@@ -278,8 +278,8 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     const struct wonder_nvn_cmd *c = payload; const uint8_t *blob = wonder_nvn_cmd_blob(c);
     switch (opcode) {
     case WONDER_NVN_CMD_CALL_COMMANDS: {
-        uint64_t handles[1024]; uint64_t n = c->a[0]; memcpy(handles, blob, n * 8);
-        for (uint64_t i = 0; i < n; i++) replay_handle(handles[i], (unsigned)(uintptr_t)context + 1);
+        uint64_t n = c->a[0];   // handles read from the snapshotted blob (no 8 KiB stack copy per nesting level)
+        for (uint64_t i = 0; i < n; i++) { uint64_t h; memcpy(&h, blob + i * 8, 8); replay_handle(h, (unsigned)(uintptr_t)context + 1); }
         break;
     }
     case WONDER_NVN_CMD_SET_RENDER_TARGETS:
@@ -455,12 +455,19 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
 }
 
+struct submit_job { void *queue; int count; const uint64_t *handles; };
+static void submit_on_replay_stack(void *arg);
 void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handles) {
     wonder_nvn_queue_check(queue, "nvnQueueSubmitCommands");
     if (count < 0 || (count && !handles)) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueueSubmitCommands count=%d", count);
     pthread_t *owner = atomic_load(&replay_owner);
     if (owner && !pthread_equal(*owner, pthread_self())) wonder_nvn_stop("NVN_UNSUPPORTED nvnQueueSubmitCommands concurrent submitters");
     replay_owner_storage[0] = pthread_self(); atomic_store(&replay_owner, replay_owner_storage);
+    struct submit_job job = {queue, count, handles};
+    wonder_host_run_on_replay_stack(submit_on_replay_stack, &job);
+}
+static void submit_on_replay_stack(void *arg) {
+    const struct submit_job *job = arg; void *queue = job->queue; int count = job->count; const uint64_t *handles = job->handles;
     char gpu_error[256];
     if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
         wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);

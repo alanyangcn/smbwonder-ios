@@ -247,3 +247,29 @@ void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *ta
  int r=t?wonder_host_readback_png(t,level,slice,[dir stringByAppendingPathComponent:@"target-0.png"].fileSystemRepresentation):-1;
  fprintf(stderr,"HOST_FIRST_DRAW_CAPTURE serial=%llu format=%#x %ux%u result=%d\n",(unsigned long long)target->texture.serial,target->texture.desc.format,target->texture.desc.width,target->texture.desc.height,r);
 }
+
+// ---------- Host replay thread ----------
+static pthread_mutex_t job_lock=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t job_ready=PTHREAD_COND_INITIALIZER, job_done=PTHREAD_COND_INITIALIZER;
+static void (*job_fn)(void *); static void *job_arg; static int job_pending, job_finished; static pthread_t replay_thread;
+static void *replay_thread_main(void *unused){
+ (void)unused;
+ for(;;){
+  pthread_mutex_lock(&job_lock); while(!job_pending) pthread_cond_wait(&job_ready,&job_lock);
+  void (*fn)(void *)=job_fn; void *arg=job_arg; job_pending=0; pthread_mutex_unlock(&job_lock);
+  @autoreleasepool { fn(arg); }   // a stop inside exits this thread; the waiting guest thread then stays parked
+  pthread_mutex_lock(&job_lock); job_finished=1; pthread_cond_broadcast(&job_done); pthread_mutex_unlock(&job_lock);
+ }
+ return NULL;
+}
+void wonder_host_run_on_replay_stack(void (*fn)(void *),void *arg){
+ static int started; static pthread_mutex_t start_lock=PTHREAD_MUTEX_INITIALIZER;
+ pthread_mutex_lock(&start_lock);
+ if(!started){ pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a,16u<<20);
+  if(pthread_create(&replay_thread,&a,replay_thread_main,NULL)){ fprintf(stderr,"HOST_REPLAY_THREAD_FAILED\n"); abort(); } started=1; }
+ pthread_mutex_unlock(&start_lock);
+ if(pthread_equal(pthread_self(),replay_thread)){ fn(arg); return; }
+ pthread_mutex_lock(&job_lock);
+ job_fn=fn; job_arg=arg; job_pending=1; job_finished=0; pthread_cond_signal(&job_ready);
+ while(!job_finished) pthread_cond_wait(&job_done,&job_lock);
+ pthread_mutex_unlock(&job_lock);
+}

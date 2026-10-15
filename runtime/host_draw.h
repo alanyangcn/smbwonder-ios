@@ -46,4 +46,7 @@ int wonder_host_readback_png(void *texture, int level, int slice, const char *pa
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target);
 int wonder_host_gpu_error(char *out, size_t size);
 void wonder_host_note_submit(unsigned submit);
-void wonder_host_gpu_error_reset(void);              // diagnostic bisect only (WONDER_DRAW_SYNC)       // labels the pending command buffer with the submits it holds (GPU error reports)   // 1 = a committed replay command buffer failed (text in out)
+void wonder_host_gpu_error_reset(void);
+// Runs fn(arg) on the host replay thread (16 MiB stack) and waits: guest threads have small stacks, and the replay
+// (nested CallCommands, Metal encoders) needs more (round85: ___chkstk_darwin in renderCommandEncoderWithDescriptor).
+void wonder_host_run_on_replay_stack(void (*fn)(void *), void *arg);              // diagnostic bisect only (WONDER_DRAW_SYNC)       // labels the pending command buffer with the submits it holds (GPU error reports)   // 1 = a committed replay command buffer failed (text in out)
