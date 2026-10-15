@@ -4,6 +4,8 @@
 // Host-code faults are re-raised unchanged so real host defects still crash. Every guest thread gets an
 // alternate signal stack because guest stacks can be a single 4 KiB page.
 #include "dm.h"
+#include "sysreg_emul.h"
+#include <stdatomic.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +31,21 @@ static void handler(int sig, siginfo_t *info, void *context) {
     if (!module_of((void *)pc)) {   // not guest code: restore and re-raise
         int i = index_of(sig); if (i >= 0) sigaction(sig, &previous[i], NULL);
         return;                     // returning re-executes the faulting instruction under the old handler
+    }
+    if (sig == SIGILL) {            // EL0 system-register reads iOS traps but Horizon allows (sysreg_emul.h)
+        uint64_t value; int rt = wonder_sysreg_read_emulated(*(const uint32_t *)pc, &value);
+        if (rt >= 0) {
+            if (rt < 29) uc->uc_mcontext->__ss.__x[rt] = value;   // __x holds x0..x28; x29/x30 are fp/lr; 31 = xzr
+            if (rt == 29) uc->uc_mcontext->__ss.__fp = value;
+            if (rt == 30) uc->uc_mcontext->__ss.__lr = value;
+            uc->uc_mcontext->__ss.__pc = pc + 4;
+            static _Atomic unsigned long emulated;
+            if (!atomic_fetch_add(&emulated, 1)) {
+                char where[96]; describe(where, sizeof where, pc);
+                LOG("HOST_SYSREG_EMULATED mrs CTR_EL0 at %s -> %#llx (first; further reads are silent)", where, (unsigned long long)value);
+            }
+            return;
+        }
     }
     char where[96], caller[96]; describe(where, sizeof where, pc); describe(caller, sizeof caller, lr);
     LOG("GUEST_FAULT signal=%d address=%p pc=%s lr=%s sp=%#llx", sig, info->si_addr, where, caller, (unsigned long long)uc->uc_mcontext->__ss.__sp);

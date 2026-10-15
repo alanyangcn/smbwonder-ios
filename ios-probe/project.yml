@@ -44,6 +44,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/ngc_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_service.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_hooks.c'
+      - path: '${SMBW_REFERENCE}/runtime/os_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/graphics_gate.c'
       - path: '${SMBW_REFERENCE}/runtime/metal2_probe.m'
       - path: '${SMBW_REFERENCE}/runtime/metal2_shader_check.m'
