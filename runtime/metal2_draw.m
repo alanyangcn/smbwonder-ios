@@ -12,6 +12,15 @@
 #include <stdlib.h>
 #include <string.h>
 static id<MTLDevice> device;
+// Metal compiles shaders and pipelines on the calling thread's stack on iOS; guest threads have small stacks (round84:
+// ___chkstk_darwin overflow in the compiler). Such work runs on a GCD worker (normal stack) while the caller waits;
+// dispatch_async + semaphore, because dispatch_sync may run the block on the caller's own stack.
+static void on_host_stack(void (^work)(void)) {
+    if (pthread_get_stacksize_np(pthread_self()) >= (1u << 20)) { work(); return; }
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ work(); dispatch_semaphore_signal(done); });
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+}
 static NSString *directory; static NSDictionary *manifest;
 static NSMutableDictionary<NSString *, id<MTLFunction>> *functions;
 static NSMutableDictionary<NSString *, NSValue *> *reflections;
@@ -66,8 +75,8 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
         MTLCompileOptions *options = [MTLCompileOptions new];
         options.languageVersion = MTLLanguageVersion2_1; options.fastMathEnabled = NO;   // keep the translator's precision contract
-        NSError *error = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&error];
+        __block NSError *error = nil; __block id<MTLLibrary> library = nil;
+        on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&e]; error = e; });
         if (!library) {
             NSString *first = nil;   // the compiler's own "program_source:L:C: error:" line when there is one
             for (NSString *line in [error.localizedDescription componentsSeparatedByString:@"\n"]) if ([line containsString:@"error:"]) { first = line; break; }
@@ -407,7 +416,8 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     if (!pipelines) { pipelines = [NSMutableDictionary dictionary]; depth_states = [NSMutableDictionary dictionary]; }
     id<MTLRenderPipelineState> pso = pipelines[pipeline_key];
     if (!pso) {
-        NSError *error = nil; pso = [device newRenderPipelineStateWithDescriptor:pd error:&error];
+        __block NSError *error = nil; __block id<MTLRenderPipelineState> built = nil;
+        on_host_stack(^{ NSError *e = nil; built = [device newRenderPipelineStateWithDescriptor:pd error:&e]; error = e; }); pso = built;
         if (!pso) wonder_nvn_stop("NVN_DRAW_PIPELINE_FAILED vs=%s fs=%s: %s", d->vs_key, d->fs_key, error.localizedDescription.UTF8String);
         pipelines[pipeline_key] = pso;
     }
@@ -552,7 +562,7 @@ static NSString *const clear_source = @"#include <metal_stdlib>\nusing namespace
 int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture; if (!t || !device) return 1;
     static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines_by_key; static id<MTLLibrary> library;
-    if (!library) { NSError *e = nil; library = [device newLibraryWithSource:clear_source options:nil error:&e]; if (!library) return 2; }
+    if (!library) { __block id<MTLLibrary> l = nil; on_host_stack(^{ l = [device newLibraryWithSource:clear_source options:nil error:NULL]; }); library = l; if (!library) return 2; }
     MTLPixelFormat f = t.pixelFormat;
     MTLColorWriteMask wm = (mask & 1 ? MTLColorWriteMaskRed : 0) | (mask & 2 ? MTLColorWriteMaskGreen : 0) | (mask & 4 ? MTLColorWriteMaskBlue : 0) | (mask & 8 ? MTLColorWriteMaskAlpha : 0);
     NSNumber *key = @((NSUInteger)f << 4 | wm);
@@ -562,7 +572,8 @@ int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = [library newFunctionWithName:@"clear_vs"]; pd.fragmentFunction = [library newFunctionWithName:@"clear_fs"];
         pd.colorAttachments[0].pixelFormat = f; pd.colorAttachments[0].writeMask = wm;
-        NSError *e = nil; pso = [device newRenderPipelineStateWithDescriptor:pd error:&e]; if (!pso) return 3;   // e.g. integer formats
+        __block id<MTLRenderPipelineState> built = nil; on_host_stack(^{ built = [device newRenderPipelineStateWithDescriptor:pd error:NULL]; }); pso = built;
+        if (!pso) return 3;   // e.g. integer formats
         pipelines_by_key[key] = pso;
     }
     NSUInteger w = MAX((NSUInteger)1, t.width >> level), h = MAX((NSUInteger)1, t.height >> level);
@@ -595,7 +606,7 @@ int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, in
     clear_depth = clear_depth && has_depth; clear_stencil = clear_stencil && has_stencil && (stencil_mask & 0xff);
     if (!clear_depth && !clear_stencil) return 0;
     static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines_by_format; static id<MTLLibrary> library;
-    if (!library) { NSError *e = nil; library = [device newLibraryWithSource:clear_depth_source options:nil error:&e]; if (!library) return 2; }
+    if (!library) { __block id<MTLLibrary> l = nil; on_host_stack(^{ l = [device newLibraryWithSource:clear_depth_source options:nil error:NULL]; }); library = l; if (!library) return 2; }
     if (!pipelines_by_format) pipelines_by_format = [NSMutableDictionary dictionary];
     id<MTLRenderPipelineState> pso = pipelines_by_format[@(f)];
     if (!pso) {
@@ -603,7 +614,8 @@ int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, in
         pd.fragmentFunction = [library newFunctionWithName:@"clear_depth_fs"];
         if (has_depth) pd.depthAttachmentPixelFormat = f;
         if (has_stencil) pd.stencilAttachmentPixelFormat = f;
-        NSError *e = nil; pso = [device newRenderPipelineStateWithDescriptor:pd error:&e]; if (!pso) return 3;
+        __block id<MTLRenderPipelineState> built = nil; on_host_stack(^{ built = [device newRenderPipelineStateWithDescriptor:pd error:NULL]; }); pso = built;
+        if (!pso) return 3;
         pipelines_by_format[@(f)] = pso;
     }
     MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];

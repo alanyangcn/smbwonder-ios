@@ -27,6 +27,15 @@ static void missing(void) { wonder_host_shader_function("0000000000000000", 0); 
 static void broken(void) { wonder_host_shader_function("bbbbbbbbbbbbbbbb", 1); }
 static void tampered(void) { wonder_host_shader_function("cccccccccccccccc", 0); }
 static void wrong_stage(void) { wonder_host_shader_function("aaaaaaaaaaaaaaaa", 1); }
+// Guest threads run on small stacks; Metal's compiler must not run on them (round84: ___chkstk_darwin overflow).
+#include <pthread.h>
+struct small_stack_job { const char *dir; int ok; };
+static void *compile_all(void *arg) {
+    struct small_stack_job *job = arg;
+    NSDictionary *m = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%s/manifest.json", job->dir]] options:0 error:nil];
+    for (NSString *key in m[@"keys"]) wonder_host_shader_function(key.UTF8String, [m[@"keys"][key][@"stage"] isEqual:@"ps"]);
+    job->ok = 1; return NULL;
+}
 static void positive(int argc, char **argv) {
     assert(wonder_host_shader_available("aaaaaaaaaaaaaaaa") == 1 && wonder_host_shader_available("0000000000000000") == 0);
     void *f = wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0);
@@ -35,6 +44,9 @@ static void positive(int argc, char **argv) {
     const struct wonder_shader_refl *r = wonder_host_shader_refl("aaaaaaaaaaaaaaaa"); assert(r && r->stage == 0);
     if (argc > 3) {   // real translated stages from tools/wonder_shader_build.py
         wonder_host_shader_set_directory(argv[3]);
+        pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 64 * 1024);
+        struct small_stack_job job = {argv[3], 0}; pthread_t th;
+        assert(!pthread_create(&th, &attr, compile_all, &job)); pthread_join(th, NULL); assert(job.ok);
         NSDictionary *m = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%s/manifest.json", argv[3]]] options:0 error:nil];
         for (NSString *key in m[@"keys"]) {
             int stage = [m[@"keys"][key][@"stage"] isEqual:@"ps"];

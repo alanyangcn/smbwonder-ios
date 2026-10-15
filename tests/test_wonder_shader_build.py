@@ -39,8 +39,8 @@ class PureHelpers(unittest.TestCase):
         self.assertIn('_88 = wonder_cb(vp_c3._m0, int(uint(int(_99)) >> uint(2)))[int(_99) & 3];', out)
         self.assertIn('y = wonder_cb(fp_c1._m0, i + f(a[2]));', out)                               # nested brackets kept whole
         # The load itself is clamped into range (the compiler may turn the ternary into load + select), then zeroed.
-        self.assertIn('static inline float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }', out)
-        self.assertEqual(out.index('static inline float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))
+        self.assertIn('static inline __attribute__((unused)) float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }', out)
+        self.assertEqual(out.index('static inline __attribute__((unused)) float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))
     def test_support_buffer_parameters(self):
         # Ryujinx's support buffer is the struct carrying render_scale (float[73]); its entry parameter needs no reflection.
         msl = ("struct _10\n{\n    uint _m0;\n    uint _m1[8];\n    float4 _m2;\n    float4 _m3;\n    int _m4;\n    float _m5[73];\n    int4 _m6;\n    int _m7;\n};\n"
