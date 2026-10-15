@@ -192,7 +192,9 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     id<MTLTexture> gpu = (__bridge id<MTLTexture>)wonder_host_render_target_existing(t);
     id<MTLTexture> tex = gpu;
     if (!tex) {
-        if (t->desc.target != 1) unsupported(d, "sampled texture target (2D only so far)", t->desc.target);
+        int target = t->desc.target, linear = (t->desc.flags & 0x10) != 0;   // NVN_TEXTURE_FLAGS_LINEAR: pitch layout, desc.stride bytes per row
+        if (target != 1 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 2D array / rectangle so far)", target);
+        if (linear && (target == 4 || t->desc.levels > 1)) unsupported(d, "pitch-linear texture with layers or mips, serial", (long)t->serial);
         if (!d->tex[stage][slot].storage) unsupported(d, "sampled texture without CPU storage, serial", (long)t->serial);
         uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL), bc_bpp = 0; uint32_t bc_pf = 0;
         // BC formats map "exactly" in the table, but the A11 cannot sample them: decode on the CPU unless the GPU has BC
@@ -206,22 +208,34 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         tex = sampled[key];
         if (!tex || sampled_hash[key].unsignedLongLongValue != hash) {
             MTLPixelFormat pf = (MTLPixelFormat)(bc ? bc_pf : mtl);
+            NSUInteger layers = target == 4 ? (t->desc.depth ? t->desc.depth : 1) : 1;
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:t->desc.width height:t->desc.height mipmapped:t->desc.levels > 1];
+            if (target == 4) { td.textureType = MTLTextureType2DArray; td.arrayLength = layers; }
             td.mipmapLevelCount = t->desc.levels ? t->desc.levels : 1; td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; td.storageMode = CPU_TEXTURE_STORAGE;
             tex = [device newTextureWithDescriptor:td];
             if (!tex) unsupported(d, "sampled texture allocation, serial", (long)t->serial);
-            for (unsigned level = 0; level < td.mipmapLevelCount; level++) {
-                uint32_t row_bytes, rows, slices, lbpb; uint64_t base; unsigned th, tdp;
-                if (nvn_deswizzle_geom(&t->desc, level, 0, &row_bytes, &rows, &slices, &base, &th, &tdp, &lbpb)) unsupported(d, "texture layout level", level);
-                if (base + (uint64_t)row_bytes * rows > d->tex[stage][slot].storage_size) unsupported(d, "texture level beyond storage, level", level);
-                NSMutableData *linear = [NSMutableData dataWithLength:(NSUInteger)row_bytes * rows];
-                if (nvn_deswizzle(&t->desc, level, 0, d->tex[stage][slot].storage, linear.mutableBytes, row_bytes)) unsupported(d, "texture deswizzle level", level);
+            for (NSUInteger layer = 0; layer < layers; layer++) for (unsigned level = 0; level < td.mipmapLevelCount; level++) {
                 uint32_t w = t->desc.width >> level ? t->desc.width >> level : 1, h = t->desc.height >> level ? t->desc.height >> level : 1;
+                const uint8_t *src; uint32_t row_bytes; NSMutableData *linear_copy = nil;
+                if (linear) {   // rows of desc.stride bytes straight from the pool
+                    int bw, bh, bpb = nvn_fmt_bpb(t->desc.format, &bw, &bh);
+                    row_bytes = (uint32_t)((w + (uint32_t)bw - 1) / (uint32_t)bw * (uint32_t)bpb);
+                    uint32_t rows = (h + (uint32_t)bh - 1) / (uint32_t)bh, stride = t->desc.stride ? t->desc.stride : row_bytes;
+                    if (stride < row_bytes || (uint64_t)stride * (rows - 1) + row_bytes > d->tex[stage][slot].storage_size) unsupported(d, "pitch-linear texture beyond storage, serial", (long)t->serial);
+                    src = d->tex[stage][slot].storage; row_bytes = stride;
+                } else {
+                    uint32_t rows, slices, lbpb; uint64_t base; unsigned th, tdp;
+                    if (nvn_deswizzle_geom(&t->desc, level, (unsigned)layer, &row_bytes, &rows, &slices, &base, &th, &tdp, &lbpb)) unsupported(d, "texture layout level", level);
+                    if (base + (uint64_t)row_bytes * rows > d->tex[stage][slot].storage_size) unsupported(d, "texture level beyond storage, level", level);
+                    linear_copy = [NSMutableData dataWithLength:(NSUInteger)row_bytes * rows];
+                    if (nvn_deswizzle(&t->desc, level, (unsigned)layer, d->tex[stage][slot].storage, linear_copy.mutableBytes, row_bytes)) unsupported(d, "texture deswizzle level", level);
+                    src = linear_copy.bytes;
+                }
                 if (bc) {
                     NSMutableData *rgba = [NSMutableData dataWithLength:(NSUInteger)w * h * (NSUInteger)bc_bpp];
-                    if (nvn_bc_decode((uint32_t)t->desc.format, linear.bytes, row_bytes, w, h, rgba.mutableBytes, (size_t)w * (size_t)bc_bpp)) unsupported(d, "BC decode level", level);
-                    [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level withBytes:rgba.bytes bytesPerRow:(NSUInteger)w * (NSUInteger)bc_bpp];
-                } else [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level withBytes:linear.bytes bytesPerRow:row_bytes];
+                    if (nvn_bc_decode((uint32_t)t->desc.format, src, row_bytes, w, h, rgba.mutableBytes, (size_t)w * (size_t)bc_bpp)) unsupported(d, "BC decode level", level);
+                    [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:rgba.bytes bytesPerRow:(NSUInteger)w * (NSUInteger)bc_bpp bytesPerImage:0];
+                } else [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
             }
             tex.label = [NSString stringWithFormat:@"NVN sampled %llu %ux%u fmt %#x", (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.format];
             sampled[key] = tex; sampled_hash[key] = @(hash);

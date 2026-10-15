@@ -60,5 +60,9 @@ class Metal2EncodeTests(unittest.TestCase):
         p=self.run_case('fetch_pad'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('fetch padding OK',p.stdout)
     def test_cube_render_target_sampled_through_a_view(self):
         p=self.run_case('cube_view'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('cube view OK',p.stdout)
+    def test_pitch_linear_texture(self):
+        p=self.run_case('linear'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('linear OK',p.stdout)
+    def test_2d_array_texture(self):
+        p=self.run_case('array'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('array OK',p.stdout)
     def test_vertex_format_without_metal_equivalent_stops(self):
         p=self.run_case('bad_vertex_format'); self.assertEqual(p.returncode,3,p.stdout+p.stderr[-2000:]); self.assertIn('vertex format',p.stderr)

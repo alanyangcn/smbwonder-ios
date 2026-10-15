@@ -40,6 +40,8 @@ static NSString *const fs_src = @"#include <metal_stdlib>\nusing namespace metal
     "fragment float4 main0(constant U& u [[buffer(1)]], texture2d<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float2(0.25, 0.75)) * u.tint + u.beyond; }\n";
 static NSString *const fs_cube_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
     "fragment float4 main0(constant U& u [[buffer(1)]], texturecube<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float3(1, 0, 0)) * u.tint; }\n";
+static NSString *const fs_array_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
+    "fragment float4 main0(constant U& u [[buffer(1)]], texture2d_array<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float2(0.25, 0.75), 1) * u.tint; }\n";
 static id<MTLFunction> function(NSString *source) {
     NSError *e = nil; MTLCompileOptions *o = [MTLCompileOptions new]; o.languageVersion = MTLLanguageVersion2_1;
     id<MTLLibrary> l = [device newLibraryWithSource:source options:o error:&e]; assert(l); return [l newFunctionWithName:@"main0"];
@@ -168,6 +170,23 @@ int main(int argc, char **argv) {
             uint8_t white[2][2][4] = {{{255, 255, 255, 255}, {255, 255, 255, 255}}, {{255, 255, 255, 255}, {255, 255, 255, 255}}};
             assert(!nvn_swizzle(&td, 0, 0, white, 8, storage)); d.tex[1][0].texture.texture.serial = 80;
         }
+        if (!strcmp(mode, "linear")) {
+            // Pitch-linear 2x2 RGBA8 with a 16-byte row stride (NVN LINEAR flag 0x10): row 1 texel 0 is green.
+            static uint8_t lin[32]; memset(lin, 0x55, sizeof lin);
+            uint8_t rows[2][2][4] = {{{255, 0, 0, 255}, {255, 0, 0, 255}}, {{0, 255, 0, 255}, {255, 0, 0, 255}}};
+            memcpy(lin, rows[0], 8); memcpy(lin + 16, rows[1], 8);
+            nvn_texdesc ld = {.target = 1, .format = 0x25, .flags = 0x10, .width = 2, .height = 2, .depth = 1, .levels = 1, .stride = 16};
+            d.tex[1][0].texture.texture.desc = ld; d.tex[1][0].storage = lin; d.tex[1][0].storage_size = sizeof lin; d.tex[1][0].texture.texture.serial = 91;
+        }
+        if (!strcmp(mode, "array")) {
+            // 2D array, 2 layers of 2x2: layer 1 texel (0,1) green, layer 0 all red; the shader samples layer 1.
+            nvn_texdesc ad = {.target = 4, .format = 0x25, .width = 2, .height = 2, .depth = 2, .levels = 1};
+            nvn_texlayout al; nvn_tex_layout(&ad, &al); uint8_t *as = calloc(1, al.size);
+            uint8_t red[2][2][4] = {{{255, 0, 0, 255}, {255, 0, 0, 255}}, {{255, 0, 0, 255}, {255, 0, 0, 255}}};
+            assert(!nvn_swizzle(&ad, 0, 0, red, 8, as) && !nvn_swizzle(&ad, 0, 1, linear, 8, as));
+            d.tex[1][0].texture.texture.desc = ad; d.tex[1][0].storage = as; d.tex[1][0].storage_size = al.size; d.tex[1][0].texture.texture.serial = 92;
+            d.fs = (__bridge_retained void *)function(fs_array_src); fr.tex[0].type = WONDER_SHADER_TEX_2D_ARRAY;
+        }
         if (!strcmp(mode, "cube_view")) {
             // Sampling a GPU-written cube render target through a level view (round83: a 1-slice view of a cube array aborts).
             struct wonder_nvn_texture ct = {0}; ct.serial = 90; ct.desc = (nvn_texdesc){.target = 8, .format = 0x25, .width = 4, .height = 4, .depth = 6, .levels = 2};
@@ -226,7 +245,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
@@ -240,6 +259,7 @@ int main(int argc, char **argv) {
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
         if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
         if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "linear") || !strcmp(mode, "array")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); printf("metal2 encode %s OK\n", mode); return 0; }
         if (!strcmp(mode, "cube_view")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode cube view OK"); return 0; }
         if (!strcmp(mode, "fetch_pad")) {   // the corner would be covered if vertex 3 came from the pool bytes (5,5)
             const uint8_t *far_px = px + (2 * 64 + 62) * 4; assert(far_px[2] == 255 && far_px[1] == 0); puts("metal2 encode fetch padding OK"); return 0; }
