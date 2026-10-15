@@ -1,6 +1,7 @@
 #import <Metal/Metal.h>
 #import <ImageIO/ImageIO.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
 #include "metal2_draw.h"
@@ -252,6 +253,26 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
     if (!s) unsupported(d, "sampler creation", 0);
     samplers[key] = s; return s;
 }
+// Diagnostic mode (WONDER_DRAW_SYNC=1): commit and wait after every draw; a GPU error stops naming this draw and every
+// buffer span it read (round62-64: a page fault inside one 11-draw submit).
+static void sync_check(const struct wonder_host_draw *d) {
+    wonder_host_finish();
+    char error[256];
+    for (int i = 0; i < 100 && !wonder_host_gpu_error(error, sizeof error); i++) usleep(1000);   // completion handlers run asynchronously
+    if (!wonder_host_gpu_error(error, sizeof error)) return;
+    char spans[1400]; size_t at = 0;
+    #define SPAN(name, sp) do { id<MTLBuffer> b_ = (__bridge id<MTLBuffer>)(sp).buffer; at += (size_t)snprintf(spans + at, sizeof spans - at, " %s=%p+%#zx/%#zx(len %#lx)", name, \
+        (sp).buffer, (sp).offset, (sp).size, b_ ? (unsigned long)b_.length : 0ul); } while (0)
+    if (d->index_type >= 0) SPAN("index", d->index);
+    for (int s = 0; s < 16 && at < sizeof spans - 100; s++) if (d->stream_mask >> s & 1) { char n[16]; snprintf(n, sizeof n, "stream%d", s); SPAN(n, d->stream[s].span); }
+    const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
+    for (int st = 0; st < 2; st++) for (int i = 0; i < refl[st]->ncbuf && at < sizeof spans - 100; i++) {
+        char n[16]; snprintf(n, sizeof n, "ubo%d.%d", st, refl[st]->cbuf[i].slot); SPAN(n, d->ubo[st][refl[st]->cbuf[i].slot]); }
+    for (int st = 0; st < 2; st++) for (int r = 0; r < 32 && at < sizeof spans - 60; r++) if (d->tex_mask[st] >> r & 1)
+        at += (size_t)snprintf(spans + at, sizeof spans - at, " tex%d.%d=serial %llu", st, r, (unsigned long long)d->tex[st][r].texture.texture.serial);
+    #undef SPAN
+    wonder_nvn_stop("NVN_DRAW_GPU_FAULT vs=%s fs=%s primitive=%d count=%d base_vertex=%d: %s;%s", d->vs_key, d->fs_key, d->primitive, d->count, d->base_vertex, error, spans);
+}
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
 static id<MTLBuffer> support_buffer;
@@ -424,6 +445,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     }
     [e endEncoding];
     wonder_host_replay_unlock();
+    if (getenv("WONDER_DRAW_SYNC")) sync_check(d);
     return 0;
 }
 

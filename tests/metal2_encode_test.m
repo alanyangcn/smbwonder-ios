@@ -20,6 +20,7 @@ static NSMutableDictionary<NSNumber *, id<MTLTexture>> *targets;
 // Like host_graphics.m: one non-recursive replay mutex, also taken by the render-target lookups; re-entry aborts.
 static pthread_mutex_t replay = PTHREAD_MUTEX_INITIALIZER;
 static void take(const char *who) { if (pthread_mutex_trylock(&replay)) { fprintf(stderr, "replay mutex re-entered by %s (deadlock on device)\n", who); abort(); } }
+void wonder_host_finish(void) {} int wonder_host_gpu_error(char *out, size_t size) { (void)out; (void)size; return 0; }
 void wonder_host_replay_lock(void) { take("wonder_host_replay_lock"); } void wonder_host_replay_unlock(void) { pthread_mutex_unlock(&replay); }
 void *wonder_host_replay_command_buffer(void) { if (!pending) pending = [queue commandBuffer]; return (__bridge void *)pending; }
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { take("render_target_existing"); id<MTLTexture> x = targets[@(t->serial)]; pthread_mutex_unlock(&replay); return (__bridge void *)x; }

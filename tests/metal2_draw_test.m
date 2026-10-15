@@ -11,6 +11,7 @@
 #include <stdlib.h>
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stderr, format, a); va_end(a); fputc('\n', stderr); exit(3); }
 // Replay hooks (host_graphics.m on device); the shader-library checks never draw.
+void wonder_host_finish(void) {} int wonder_host_gpu_error(char *out, size_t size) { (void)out; (void)size; return 0; }
 void wonder_host_replay_lock(void) {} void wonder_host_replay_unlock(void) {}
 void *wonder_host_replay_command_buffer(void) { return NULL; }
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { (void)t; return NULL; }

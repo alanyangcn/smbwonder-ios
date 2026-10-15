@@ -118,7 +118,8 @@ for attempt in 1 2 3; do
     step "ios-deploy justlaunch rc=$rc (LLDB state at detach, not app exit)"
   else
     step "launch attempt $attempt: LLDB attached in background (app stays foreground)"
-    "$DEPLOY" --id "$DEVICE" --bundle "$APP" --debug --noinstall --noninteractive > "$OUT/launch-$attempt.log" 2>&1 &
+    # WONDER_ENVS="KEY=VALUE ..." passes diagnostics to the app (e.g. WONDER_DRAW_SYNC=1).
+    "$DEPLOY" --id "$DEVICE" --bundle "$APP" --debug --noinstall --noninteractive ${WONDER_ENVS:+--envs "$WONDER_ENVS"} > "$OUT/launch-$attempt.log" 2>&1 &
     DEBUG_PID=$!
   fi
   for i in $(seq 1 6); do
