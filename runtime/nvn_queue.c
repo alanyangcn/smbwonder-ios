@@ -26,6 +26,10 @@ static struct wonder_nvn_draw_state draw_state;
 // Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
 static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages; }
     raster = {.sample_mask = 0xffffffffu, .line_width = 1.0f};
+// Census-only: after the first draw whose program has no translated shaders, the rest of the submit only tracks state and
+// writes a census for every further missing program; no GPU work of this submit runs after that point, and the submit
+// stops by name at its end (nothing is presented from a partly executed frame).
+static int census_only; static unsigned missing_programs; static char missing_list[512];
 // The first executed draw's colour target is read back (evidence) after the submit that holds it.
 static struct wonder_nvn_texture_snapshot first_draw_target; static int first_draw_pending, first_draw_captured;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
@@ -112,10 +116,17 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     wonder_nvn_shader_key(draw_state.program.control[0], d.vs_key); wonder_nvn_shader_key(draw_state.program.control[1], d.fs_key);
     if (!wonder_host_shader_available(d.vs_key) || !wonder_host_shader_available(d.fs_key)) {
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
-        wonder_nvn_stop("NVN_SHADER_MISSING vs=%s%s fs=%s%s: run tools/wonder_shader_build.py on the draw census; %s (queue=%s, command %u of submit %u)",
-                        d.vs_key, wonder_host_shader_available(d.vs_key) ? "" : "(missing)", d.fs_key, wonder_host_shader_available(d.fs_key) ? "" : "(missing)",
-                        summary, replay_queue ? replay_queue : "?", state.commands, state.submits);
+        char pair[40]; snprintf(pair, sizeof pair, "%s-%s", d.vs_key, d.fs_key);
+        if (!strstr(missing_list, pair)) {
+            size_t used = strlen(missing_list);
+            if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
+            missing_programs++;
+        }
+        if (!census_only) wonder_nvn_report("NVN_CENSUS_ONLY from command %u of submit %u: %s", state.commands, state.submits, summary);
+        census_only = 1;
+        return;
     }
+    if (census_only) return;   // translated, but this submit no longer executes
     d.vr = wonder_host_shader_refl(d.vs_key); d.fr = wonder_host_shader_refl(d.fs_key);
     if (d.vr->stage != 0 || d.fr->stage != 1) replay_stop(opcode, "shader reflection stage does not match the program stage");
     int want_minus_one = depth_mode != 1;   // NVN default (never set, -1) is NEAR_IS_MINUS_W
@@ -207,6 +218,14 @@ static void replay_handle(uint64_t handle, unsigned depth) {
 }
 static void replay_visit(unsigned opcode, const void *payload, size_t size, void *context) {
     (void)size; state.commands++;
+    if (census_only) switch (opcode) {   // GPU work after the first missing program does not run in this submit
+    case WONDER_NVN_CMD_CLEAR_COLOR: case WONDER_NVN_CMD_CLEAR_DEPTH_STENCIL: case WONDER_NVN_CMD_CLEAR_BUFFER: case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER:
+    case WONDER_NVN_CMD_REPORT_COUNTER: case WONDER_NVN_CMD_REPORT_VALUE: case WONDER_NVN_CMD_RESET_COUNTER: case WONDER_NVN_CMD_CLEAR_TEXTURE:
+    case WONDER_NVN_CMD_COPY_TEXTURE_TO_BUFFER: case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE: case WONDER_NVN_CMD_DOWNSAMPLE:
+    case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT: case WONDER_NVN_CMD_SET_RENDER_ENABLE_CONDITIONAL:
+        return;
+    default: break;
+    }
     if (opcode == WONDER_NVN_DRAW_ELEMENTS) {
         const struct wonder_nvn_draw_elements *e = payload;
         if (state.render_enable)
@@ -386,6 +405,13 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
         if (!wonder_nvn_command_handle_valid(handles[i]))
             wonder_nvn_stop("NVN_INVALID_HANDLE nvnQueueSubmitCommands handle[%d]=%#llx", i, (unsigned long long)handles[i]);
         replay_handle(handles[i], 0);
+    }
+    if (census_only) {
+        char list[sizeof missing_list]; unsigned programs = missing_programs;
+        memcpy(list, missing_list, sizeof list); census_only = 0; missing_programs = 0; missing_list[0] = 0;
+        atomic_store(&replay_owner, (pthread_t *)NULL);
+        wonder_nvn_stop("NVN_SHADER_MISSING %u programs (vs-fs): %s; census=DrawCensus/<vs>-<fs>, build them with tools/wonder_shader_build.py (submit %u)",
+                        programs, list, state.submits);
     }
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;

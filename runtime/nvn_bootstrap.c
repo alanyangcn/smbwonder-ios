@@ -90,6 +90,8 @@ int wonder_host_census_write(const char *name, const void *data, size_t size) {
     if (!home || snprintf(directory, sizeof directory, "%s/Documents/DrawCensus", home) >= (int)sizeof directory) return -1;
     if (mkdir(directory, 0700) && errno != EEXIST) return -1;
     char path[1200]; if (snprintf(path, sizeof path, "%s/%s", directory, name) >= (int)sizeof path) return -1;
+    char *slash = strrchr(path, '/');   // per-program subdirectory (<vs>-<fs>/...)
+    if (slash && slash > path + strlen(directory)) { *slash = 0; if (mkdir(path, 0700) && errno != EEXIST) return -1; *slash = '/'; }
     FILE *f = fopen(path, "wb"); if (!f) return -1;
     int ok = fwrite(data, 1, size, f) == size; if (fflush(f) || fsync(fileno(f))) ok = 0; if (fclose(f)) ok = 0;
     if (ok) LOG("NVN_DRAW_CENSUS wrote Documents/DrawCensus/%s (%zu bytes)", name, size);

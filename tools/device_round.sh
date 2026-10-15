@@ -27,12 +27,22 @@ fetch(){
     done
   fi
   if grep -q 'NVN_DRAW_CENSUS wrote' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
-    for f in draw.json stage-{0..5}.{code,control}.bin; do
-      "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/DrawCensus/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
-    done
+    # One directory per program (<vs>-<fs>), listed in DrawCensus/index.txt.
+    "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/DrawCensus/index.txt" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+    while read -r dir; do
+      [ -n "$dir" ] || continue
+      for f in draw.json stage-{0..1}.{code,control}.bin; do
+        "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/DrawCensus/$dir/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+      done
+    done < "$OUT/Documents/DrawCensus/index.txt"
   fi
   if grep -q 'HOST_FIRST_DRAW_CAPTURE' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
     "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/FirstDraw/target-0.png" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+  fi
+  if grep -q 'Documents/Present/present-' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
+    for f in $(grep -o 'Present/present-[0-9]*\.png' "$OUT/Documents/loader-probe.log" | sort -u); do
+      "$DEPLOY" --id "$DEVICE" --bundle_id "$BUNDLE" --download="/Documents/$f" --to "$OUT" >> "$OUT/download.log" 2>&1 || true
+    done
   fi
   # Crash reports for this app (the guest stops cleanly; a crash here is a host defect).
   mkdir -p "$OUT/crashes"

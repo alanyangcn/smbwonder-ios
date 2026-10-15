@@ -17,9 +17,9 @@ void wonder_nvn_report(const char *format, ...) { va_list a; va_start(a, format)
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vsnprintf(last_stop, sizeof last_stop, format, a); va_end(a); if (!expecting_stop) { fprintf(stderr, "unexpected stop: %s\n", last_stop); abort(); } longjmp(stopped, 1); }
 static void *last_labeled_resource; static const char *last_resource_label;
 // Draw census sink (Documents/DrawCensus on device): files kept in memory for assertions.
-static struct { char name[64]; unsigned char *data; size_t size; } census_files[16]; static unsigned census_count;
+static struct { char name[64]; unsigned char *data; size_t size; } census_files[64]; static unsigned census_count;
 int wonder_host_census_write(const char *name, const void *data, size_t size) {
-    assert(census_count < 16); snprintf(census_files[census_count].name, 64, "%s", name);
+    assert(census_count < 64); snprintf(census_files[census_count].name, 64, "%s", name);
     census_files[census_count].data = malloc(size ? size : 1); memcpy(census_files[census_count].data, data, size);
     census_files[census_count++].size = size; return 0;
 }
@@ -764,14 +764,18 @@ int main(void) {
             ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));
             uint64_t draw = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb);
             void (*dsubmit)(void *, int, const uint64_t *) = slot("nvnQueueSubmitCommands");
-            EXPECT_STOP(dsubmit(queue, 1, &draw), "census=DrawCensus");
-            assert(strstr(last_stop, "NVN_SHADER_MISSING"));
+            EXPECT_STOP(dsubmit(queue, 1, &draw), "NVN_SHADER_MISSING 1 programs");
+            assert(strstr(last_stop, "census=DrawCensus"));
             unsigned char digest[CC_SHA256_DIGEST_LENGTH]; char key[17];
             CC_SHA256(vs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key + 2 * i, "%02x", digest[i]);
             assert(strstr(last_stop, key));
-            size_t n; const unsigned char *bytes = census_file("stage-0.control.bin", &n); assert(bytes && n == 0x880 && !memcmp(bytes, vs_control, 0x880));
-            bytes = census_file("stage-1.code.bin", &n); assert(bytes && n == 0x100 && !memcmp(bytes, cb_memory + 0x200, 0x100));
-            bytes = census_file("draw.json", &n); assert(bytes);
+            char fs_key[17], dir[40], file[96]; CC_SHA256(fs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(fs_key + 2 * i, "%02x", digest[i]);
+            snprintf(dir, sizeof dir, "%s-%s", key, fs_key);   // one census directory per program (vs-fs keys)
+            size_t n; snprintf(file, sizeof file, "%s/stage-0.control.bin", dir);
+            const unsigned char *bytes = census_file(file, &n); assert(bytes && n == 0x880 && !memcmp(bytes, vs_control, 0x880));
+            snprintf(file, sizeof file, "%s/stage-1.code.bin", dir);
+            bytes = census_file(file, &n); assert(bytes && n == 0x100 && !memcmp(bytes, cb_memory + 0x200, 0x100));
+            snprintf(file, sizeof file, "%s/draw.json", dir); bytes = census_file(file, &n); assert(bytes);
             char *json = calloc(1, n + 1); memcpy(json, bytes, n);
             char want[64]; snprintf(want, sizeof want, "\"key\":\"%s\"", key); assert(strstr(json, want));
             assert(strstr(json, "\"primitive\":4") && strstr(json, "\"index_type\":1") && strstr(json, "\"count\":6"));
@@ -784,7 +788,39 @@ int main(void) {
             free(json);
             unsigned files = census_count;
             EXPECT_STOP(dsubmit(queue, 1, &draw), "NVN_SHADER_MISSING");
-            assert(census_count == files);   // written once per run
+            assert(census_count == files);   // written once per program
+
+            // ---- Batch census: after the first missing program the rest of the submit is census-only ----
+            {
+                static _Alignas(16) unsigned char program2[0x90]; static _Alignas(8) unsigned char vs2[0x880], fs2[0x880];
+                memcpy(vs2, vs_control, 0x880); memcpy(fs2, fs_control, 0x880); vs2[0x100] = 0x5a; fs2[0x100] = 0xa5;   // different keys
+                assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(program2, device) == 1);
+                struct { uint64_t code; const void *control; } st2[2] = {{code, vs2}, {code + 0x100, fs2}};
+                assert(set_shaders(program2, 2, st2) == 1);
+                float red[4] = {1, 0, 0, 1};
+                ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
+                ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));   // program 1 (missing)
+                ((void (*)(void *, int, const float *, int))slot("nvnCommandBufferClearColor"))(dcb, 0, red, 0xf);                                   // must not run
+                ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program2, 0x11);
+                ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));   // program 2 (missing)
+                ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));   // program 2 again
+                ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
+                uint64_t batch = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb);
+                unsigned clears_before = host_clears, draws_before = host_draws, files_before = census_count;
+                EXPECT_STOP(dsubmit(queue, 1, &batch), "NVN_SHADER_MISSING 2 programs");
+                assert(host_clears == clears_before && host_draws == draws_before);   // nothing after the first missing draw ran
+                char key2[17], fkey2[17], dir2[40]; CC_SHA256(vs2, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key2 + 2 * i, "%02x", digest[i]);
+                CC_SHA256(fs2, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(fkey2 + 2 * i, "%02x", digest[i]);
+                snprintf(dir2, sizeof dir2, "%s-%s", key2, fkey2); snprintf(file, sizeof file, "%s/draw.json", dir2);
+                assert(census_file(file, &n) && census_count == files_before + 6);   // program 2's 5 files + index.txt; program 1 was written earlier
+                const unsigned char *index = NULL; size_t index_size = 0;
+                for (unsigned i = 0; i < census_count; i++) if (!strcmp(census_files[i].name, "index.txt")) { index = census_files[i].data; index_size = census_files[i].size; }
+                char *index_text = calloc(1, index_size + 1); memcpy(index_text, index, index_size);
+                assert(strstr(index_text, dir) && strstr(index_text, dir2)); free(index_text);
+                assert(strstr(last_stop, key2) && strstr(last_stop, key));
+                // The next submit replays normally again (census-only ends with the submit).
+                ((void (*)(void *))slot("nvnProgramFinalize"))(program2);
+            }
 
             // ---- With translated shaders the replay assembles a host draw from the recorded state ----
             wonder_nvnDeviceSetDepthMode(device, 0);   // NEAR_IS_MINUS_W, as Wonder sets it (round52 log)

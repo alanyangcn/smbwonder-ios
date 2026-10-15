@@ -194,9 +194,19 @@ static int present_setup(void){
 // The game's display texture bytes go to the screen unchanged: sRGB textures are read through a UNORM view
 // so the BGRA8Unorm drawable receives the encoded values. Aspect-fit with black bars; row 0 is the top
 // (the game sets NVN_WINDOW_ORIGIN_MODE_UPPER_LEFT).
+// Evidence of what reaches the screen: the presented texture is saved as Documents/Present/present-<n>.png for the first
+// 5 presents, then every 60th (at most 20 files), before it is drawn to the drawable.
+static void capture_present(id<MTLTexture> t){
+ static unsigned presents, saved; unsigned n=++presents;
+ if(saved>=20||!(n<=5||n%60==0)) return;
+ NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
+ [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+ if(!wonder_host_readback_png((__bridge void*)t,0,0,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]].fileSystemRepresentation)) saved++;
+}
 int wonder_host_present(void *texture,const int crop[4],int interval){
  (void)interval;
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t||!device||!surface) return EINVAL;
+ capture_present(t);
  if(present_setup()) return EIO;
  if(t.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
  else if(t.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatBGRA8Unorm];

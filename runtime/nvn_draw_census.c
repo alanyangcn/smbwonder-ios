@@ -31,15 +31,20 @@ static void texture_json(struct out *o, const struct wonder_nvn_texture *t, cons
                       v->set_levels | v->set_layers << 1 | v->set_format << 2 | v->set_swizzle << 3 | v->set_depth_stencil << 4 | v->set_target << 5);
     put(o, "}");
 }
-static int write_stage(unsigned index, const char *kind, const void *data, size_t size) {
-    char name[64]; snprintf(name, sizeof name, "stage-%u.%s.bin", index, kind);
+static int write_stage(const char *dir, unsigned index, const char *kind, const void *data, size_t size) {
+    char name[96]; snprintf(name, sizeof name, "%s/stage-%u.%s.bin", dir, index, kind);
     return wonder_host_census_write(name, data, size);
 }
+// One census per program (vertex+fragment key pair) per run; the first 256 programs are remembered.
+static char written_dirs[256][40]; static unsigned written_count;
+static int already_written(const char *dir) { for (unsigned i = 0; i < written_count; i++) if (!strcmp(written_dirs[i], dir)) return 1; return 0; }
 int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct wonder_nvn_draw_call *d, char *summary, size_t summary_size) {
-    static _Atomic int written;
     if (!s->has_program || !s->program.mask) { snprintf(summary, summary_size, "census=none (no program bound)"); return 0; }
-    if (atomic_load(&written)) { snprintf(summary, summary_size, "census=DrawCensus (written earlier this run)"); return 0; }
-    struct out o = {0}; char keys[6][17] = {{0}}; int failed = 0; unsigned index = 0;
+    char keys[6][17] = {{0}}, dir[40];
+    for (unsigned stage = 0; stage < 6; stage++) if (s->program.mask & (1u << stage)) wonder_nvn_shader_key(s->program.control[stage], keys[stage]);
+    snprintf(dir, sizeof dir, "%s-%s", keys[0][0] ? keys[0] : "none", keys[1][0] ? keys[1] : "none");
+    if (already_written(dir)) { snprintf(summary, summary_size, "census=DrawCensus/%s (written earlier this run)", dir); return 0; }
+    struct out o = {0}; int failed = 0; unsigned index = 0;
     put(&o, "{\"draw\":{\"name\":\"%s\",\"primitive\":%d,\"index_type\":%d,\"count\":%d,\"first\":%d,\"base_vertex\":%d,\"instances\":%d,\"base_instance\":%d,\"index_address\":%llu,\"indirect_address\":%llu},",
         d->name, d->primitive, d->index_type, d->count, d->first, d->base_vertex, d->instances, d->base_instance,
         (unsigned long long)d->index_address, (unsigned long long)d->indirect_address);
@@ -49,11 +54,10 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
         if (!(s->program.mask & (1u << stage))) continue;
         const uint8_t *control = s->program.control[stage]; uint32_t length, c1_offset;
         memcpy(&c1_offset, control + 0x700, 4); memcpy(&length, control + 0x704, 4);
-        wonder_nvn_shader_key(control, keys[stage]);
         struct wonder_nvn_pool_view view = {0};
         if (length) wonder_nvn_address_span(s->program.code[stage], length, &view);
         if (!length || view.size < length || !view.memory) { failed = 1; break; }
-        if (write_stage(index, "control", control, WONDER_NVN_SHADER_CONTROL_SIZE) || write_stage(index, "code", view.memory, length)) { failed = 1; break; }
+        if (write_stage(dir, index, "control", control, WONDER_NVN_SHADER_CONTROL_SIZE) || write_stage(dir, index, "code", view.memory, length)) { failed = 1; break; }
         put(&o, "%s{\"index\":%u,\"stage\":%u,\"name\":\"%s\",\"key\":\"%s\",\"code_address\":%llu,\"code_size\":%u,\"c1_offset\":%u}", index ? "," : "",
             index, stage, stage_names[stage], keys[stage], (unsigned long long)s->program.code[stage], length, c1_offset);
         index++;
@@ -109,9 +113,13 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
     put(&o, ",\"viewport\":"); if (s->viewport_set) put(&o, "[%g,%g,%g,%g]", s->viewport[0], s->viewport[1], s->viewport[2], s->viewport[3]); else put(&o, "null");
     put(&o, ",\"scissor\":"); if (s->scissor_set) put(&o, "[%d,%d,%d,%d]", s->scissor[0], s->scissor[1], s->scissor[2], s->scissor[3]); else put(&o, "null");
     put(&o, "}\n");
-    if (!failed && !o.failed && !wonder_host_census_write("draw.json", o.data, o.size)) {
-        atomic_store(&written, 1);
-        snprintf(summary, summary_size, "census=DrawCensus vs=%s fs=%s", keys[0][0] ? keys[0] : "-", keys[1][0] ? keys[1] : "-");
+    char json_name[64]; snprintf(json_name, sizeof json_name, "%s/draw.json", dir);
+    if (!failed && !o.failed && !wonder_host_census_write(json_name, o.data, o.size)) {
+        if (written_count < 256) snprintf(written_dirs[written_count++], sizeof written_dirs[0], "%s", dir);
+        char index[256 * 41 + 1]; size_t at = 0;   // index.txt: every census directory of this run, one per line (device fetch)
+        for (unsigned i = 0; i < written_count; i++) at += (size_t)snprintf(index + at, sizeof index - at, "%s\n", written_dirs[i]);
+        wonder_host_census_write("index.txt", index, at);
+        snprintf(summary, summary_size, "census=DrawCensus/%s vs=%s fs=%s", dir, keys[0][0] ? keys[0] : "-", keys[1][0] ? keys[1] : "-");
         free(o.data); return 1;
     }
     free(o.data);
