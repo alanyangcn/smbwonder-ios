@@ -212,6 +212,15 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
     // The sampling instruction decides the dimension on Maxwell: a 2D texture sampled as a 1-layer array, and a 2D array
     // sampled by a 2D instruction (round153) reads its first layer (metal3_draw.m binds a 2D view of it).
     int as_layer = (target == 1 || target == 7) && rt->type == WONDER_SHADER_TEX_2D_ARRAY, first_layer = target == 4 && rt->type == WONDER_SHADER_TEX_2D;
+    {   // Diagnostic (WONDER_DIAG_CUBE_AS_EMPTY=1): a cube declaration over a bound 2D texture samples zeros instead of
+        // stopping (round186: a quality path the game takes with frozen GPU timestamps); not a product behaviour.
+        static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DIAG_CUBE_AS_EMPTY"); on = e && *e == '1'; }
+        if (on && (target == 1 || target == 7) && (rt->type == WONDER_SHADER_TEX_CUBE || rt->type == WONDER_SHADER_TEX_CUBE_ARRAY)) {
+            static unsigned logged; if (logged++ < 8) wonder_nvn_report("NVN_DIAG_CUBE_AS_EMPTY stage %d slot %d (vs=%s fs=%s)", stage, slot, out->vs_key, out->fs_key);
+            memset(&out->tex[out_stage][slot], 0, sizeof out->tex[out_stage][slot]); out->tex[out_stage][slot].empty = 1; out->tex_mask[out_stage] |= 1ull << slot;
+            return;
+        }
+    }
     if (target < 0 || target > 10 || (target_type[target] != rt->type && !as_layer && !first_layer)) {
         snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d (vs=%s fs=%s)", stage, slot, target, rt->type, out->vs_key, out->fs_key); replay_stop(opcode, why);
     }
