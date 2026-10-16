@@ -74,7 +74,7 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         NSData *source = verified(key, @"metal", @"msl_sha256", stage);
         if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
         MTLCompileOptions *options = [MTLCompileOptions new];
-        options.languageVersion = MTLLanguageVersion3_2; options.fastMathEnabled = NO;   // keep the translator's precision contract
+        options.languageVersion = MTLLanguageVersion3_2; options.mathMode = MTLMathModeSafe;   // no fast math: keep the translator's precision contract
         __block NSError *error = nil; __block id<MTLLibrary> library = nil;
         on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&e]; error = e; });
         if (!library) {
@@ -274,8 +274,8 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         if (n < 16 || n % 2000 == 0) {
             size_t nonzero = 0; const uint8_t *st = d->tex[stage][slot].storage;
             for (size_t i = 0; st && i < d->tex[stage][slot].storage_size; i += 64) nonzero += st[i] != 0;
-            fprintf(stderr, "HOST_GLYPH_SAMPLE #%d vs=%s fs=%s serial=%llu %ux%u stride=%u swizzle=%u,%u,%u,%u view=%d storage=%zu nonzero/64=%zu gpu=%d\n", n, d->vs_key, d->fs_key,
-                    (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.stride, z[0], z[1], z[2], z[3], v != NULL, d->tex[stage][slot].storage_size, nonzero, gpu != nil);
+            fprintf(stderr, "HOST_GLYPH_SAMPLE #%d vs=%s fs=%s serial=%llu %ux%u stride=%u swizzle=%u,%u,%u,%u view=%d storage=%llu nonzero/64=%zu gpu=%d\n", n, d->vs_key, d->fs_key,
+                    (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.stride, z[0], z[1], z[2], z[3], v != NULL, (unsigned long long)d->tex[stage][slot].storage_size, nonzero, gpu != nil);
         }
     }
     int identity = z[0] == 2 && z[1] == 3 && z[2] == 4 && z[3] == 5, unset = !(z[0] | z[1] | z[2] | z[3]);
@@ -332,7 +332,12 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
     }
     sd.sAddressMode = modes[0]; sd.tAddressMode = modes[1]; sd.rAddressMode = modes[2];
     sd.lodMinClamp = m->lod_min; sd.lodMaxClamp = m->lod_max;
-    if (m->lod_bias != 0) unsupported(d, "sampler LOD bias x1000", (long)(m->lod_bias * 1000));
+    if (m->lod_bias != 0) {   // round130: -1.5 on a course material; MTLSamplerDescriptor.lodBias exists from iOS / macOS 26
+        if (@available(iOS 26.0, macOS 26.0, *)) {
+            if (m->lod_bias < -16.0f || m->lod_bias > 15.99f) unsupported(d, "sampler LOD bias outside Metal's range x1000", (long)(m->lod_bias * 1000));
+            sd.lodBias = m->lod_bias;
+        } else unsupported(d, "sampler LOD bias (needs iOS 26) x1000", (long)(m->lod_bias * 1000));
+    }
     if (m->reduction) unsupported(d, "sampler reduction filter", m->reduction);
     sd.maxAnisotropy = m->anisotropy >= 1 ? (NSUInteger)m->anisotropy : 1;
     if (m->compare_mode) sd.compareFunction = compare(d, m->compare_func);

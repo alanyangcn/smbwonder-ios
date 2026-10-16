@@ -304,6 +304,13 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                 k += snprintf(line + k, sizeof line - k, " inst0=[%g %g %g %g | %g %g %g %g | %#x %#x layer=%d %d | %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], iv[8], iv[9], iv[10], iv[11], f[12], f[13], f[14], f[15]); }
             if (ua && us >= 64) { make_cpu_visible(ua, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(ua, 64, &v); const float *f = (const float *)v.memory;
                 k += snprintf(line + k, sizeof line - k, " c3=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]); }
+            uint64_t fa = draw_state.uniform_buffer[1][0].address, fs = draw_state.uniform_buffer[1][0].size;
+            if (fa && fs >= 128) { make_cpu_visible(fa, 128); struct wonder_nvn_pool_view v; wonder_nvn_address_span(fa, 128, &v); const float *f = (const float *)v.memory;
+                k += snprintf(line + k, sizeof line - k, " fs_c3[4..7]=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]", f[16], f[17], f[18], f[19], f[20], f[21], f[22], f[23], f[24], f[25], f[26], f[27], f[28], f[29], f[30], f[31]); }
+            uint64_t fb = draw_state.uniform_buffer[1][1].address;
+            if (fb) { make_cpu_visible(fb, 4); struct wonder_nvn_pool_view v; wonder_nvn_address_span(fb, 4, &v); k += snprintf(line + k, sizeof line - k, " fs_c4.x=%#x", *(const uint32_t *)v.memory); }
+            k += snprintf(line + k, sizeof line - k, " blend_en=%#x blend0=%u/%u/%u %u/%u/%u mask=%#x depth=%u/%u/%u", d.color.blend_en, d.blend[0].src_rgb, d.blend[0].dst_rgb, d.blend[0].eq_rgb,
+                          d.blend[0].src_a, d.blend[0].dst_a, d.blend[0].eq_a, d.channel_mask.mask, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df);
             for (int i = 0; i < d.color_count && i < 1; i++) if (d.targets[i].valid)
                 k += snprintf(line + k, sizeof line - k, " rt0=%llu:%ux%u fmt=%#x", (unsigned long long)d.targets[i].texture.serial, d.targets[i].texture.desc.width, d.targets[i].texture.desc.height, d.targets[i].texture.desc.format);
             wonder_nvn_report("%s", line);
