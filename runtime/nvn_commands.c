@@ -281,7 +281,15 @@ static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *
     if (slot < 0) slot = (int)(((uintptr_t)cb >> 4) & 63);
     trace_bound[slot].cb = cb; memcpy(trace_bound[slot].vs, key, sizeof key);
     pthread_mutex_unlock(&trace_lock);
-    static _Atomic unsigned shown; if (atomic_fetch_add(&shown, 1) < 6) wonder_nvn_report("NVN_TRACE_BIND cb=%p vs=%s mask=%#x", cb, key, s ? s->mask : 0);
+    const char *list = getenv("WONDER_TRACE_VS"); int match = 0;
+    for (const char *p = list; p && *p && !match; ) { size_t n = strcspn(p, ","); match = n && key[0] && !strncmp(p, key, n); p += n; if (*p == ',') p++; }
+    if (match) {   // record-time bind of a listed program: which command buffer, from where in the game
+        static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 120) {
+            char chain[700] = "";
+            if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), chain, sizeof chain);
+            wonder_nvn_report("NVN_TRACE_RECORD_BIND vs=%s cb=%p chain=%s", key, cb, chain);
+        }
+    }
 }
 static void trace_draw(const void *cb, const char *what, int count) {
     const char *list = getenv("WONDER_TRACE_VS"); if (!list || !*list) return;
