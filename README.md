@@ -1,6 +1,6 @@
 # Super Mario Bros. Wonder — Native iOS Port
 
-《超级马里奥 惊奇》1.2.0 的原生 iOS 移植研究项目。当前目标为 FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16），先推进 Metal 2 / MSL 2.1。
+《超级马里奥 惊奇》1.2.0 的原生 iOS 移植研究项目。当前目标为 iPhone 18 Pro（iOS 27），渲染走 Metal 3 / MSL 3.2。
 
 当前进度：游戏在真机上稳定显示启动加载画面与标题主视觉图（round108），尚未进入可玩状态。详见 [METAL2-STATUS.md](METAL2-STATUS.md)。
 
@@ -29,11 +29,11 @@ python3 -m unittest discover -s tests -q
 只构建诊断工程：
 
 ```sh
-export DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer
+export DEVELOPER_DIR=$(xcode-select -p)
 python3 tools/build_loader_probe.py --stage main --graphics-backend metal2 \
   --xcodegen "$PWD/work/tools/xcodegen/xcodegen/bin/xcodegen"
 ```
 
-生成的 Xcode 工程位于 `work/build/loader-probe/project/WonderLoaderProbe.xcodeproj`。真机轮次默认使用 LLDB 启动；不等同于独立冷启动验收。
+生成的 Xcode 工程位于 `work/build/loader-probe/project/WonderLoaderProbe.xcodeproj`。真机轮次用 `xcrun devicectl device process launch --console` 启动并记录 App 输出。
 
 本地开发者 Team ID、设备 ID 与 App ID 当前延续已验证配置。游戏文件和密钥由使用者自行在本地提供；本仓库不包含这些内容。原始 Downloads 文件不因项目迁移而移动。

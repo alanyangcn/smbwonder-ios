@@ -9,16 +9,16 @@
 
 ## 设备与环境
 - 新机器搭建 `work/`：`tools/setup_env.sh`（工具链）→ `tools/import_game.sh`（游戏包 + prod.keys，按 verified-inputs.json 核对）→ `tools/local_state.sh import`（着色器普查）。详见 SETUP.md。
-- 测试机 FlyMe：iPhone 8 Plus / A11 / iOS 16.7.16，USB 连接。先做 Metal 2 / MSL 2.1，暂不换新设备。
-- Xcode：`DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer`（脚本已默认）。付费 Team `5H8VE3NN7D`，Bundle `two.local.smbwonder.loaderprobe`。
+- 测试机：iPhone 18 Pro（iPhone19,2，UDID `00008160-001E68D40421400A`，iOS 27），USB 连接。渲染只考虑 Metal 3 / MSL 3.2（原生 BC、边框色、swizzle 视图）；不再为 A11 / Metal 2 做任何让步，旧 FlyMe（iPhone 8 Plus）已退役。
+- Mac：Apple M6（arm64，无 Rosetta），Xcode 27.1（脚本默认 `xcode-select -p`）。真机操作全部用 `xcrun devicectl`（ios-deploy 已弃用）。付费 Team `5H8VE3NN7D`，Bundle `two.local.smbwonder.loaderprobe`。
 - `work/` 整体不进 Git（游戏文件、工具链、构建、设备日志）；唯一例外 `work/analysis/first-frame/ledger.md` 需 `git add -f`。
 
 ## 一轮真机验证
 ```sh
-tools/device_round.sh first-frame-round<N>          # 宿主测试 → 构建 → 签名 → 安装 → LLDB 启动 → 取日志
+tools/device_round.sh first-frame-round<N>          # 宿主测试 → 构建 → 签名 → 安装 → devicectl --console 启动 → 取日志
 tools/device_round.sh first-frame-round<N> --fetch-only   # 只重新取回日志
 ```
-结果在 `work/analysis/<轮次>/`：`steps.log`、`Documents/loader-probe.log`（客体日志，看结尾的 `BOOT_BLOCKED` / `BLOCKED_CALLER` / die 信息）、`launch-*.log`（LLDB）、`crashes/`。
+结果在 `work/analysis/<轮次>/`：`steps.log`、`Documents/loader-probe.log`（客体日志，看结尾的 `BOOT_BLOCKED` / `BLOCKED_CALLER` / die 信息）、`console-*.log`（App 的 stdout/stderr，宿主 fprintf 诊断都在这里）、`crashes/`。
 停点调用栈用 `python3 tools/symbolize.py sdk+0x... main+0x...` 换成符号；`--dis N` 反汇编（能解析 PLT 桩），`--find 文本 sdk` 查符号。
 轮次名递增，不覆盖旧轮次；RomFS 档案（3.7 GB）按 sha256 标记只传一次。
 

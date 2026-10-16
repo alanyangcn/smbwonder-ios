@@ -1,6 +1,14 @@
-# Metal 2 当前进度
+# 当前进度（Metal 3）
 
-目标：Wonder 1.2.0 / update 262144；FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16）。继续以 Metal 2 / MSL 2.1 推进，目前没有已证实必须换新设备的停点。游戏已在真机上稳定显示启动加载画面和标题主视觉图（round108），尚未进入可玩状态（3D 场景、输入、音频输出等仍在推进）。
+目标：Wonder 1.2.0 / update 262144；iPhone 18 Pro（iPhone19,2 / iOS 27）。2026-10-16 起换机：渲染只走 Metal 3 / MSL 3.2，不再为 A11 / Metal 2 做让步（见下方“换机”一节）。round108 之前的记录是在 FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16）上用 Metal 2 跑出来的，作为历史保留。游戏在 FlyMe 上已稳定显示启动加载画面和标题主视觉图（round108），尚未进入可玩状态（3D 场景、输入、音频输出等仍在推进）。
+
+## 换机：iPhone 18 Pro / Metal 3（2026-10-16）
+
+- 去掉的让步：MSL 2.1 → 3.2（运行时编译、GPU 探针、spirv-cross `--msl-version 30200`；57 个阶段重建，源码与 2.1 版逐字节相同），最低 iOS 18.0；BC1–7 原生采样（删去 CPU 解码）；CLAMP_TO_BORDER 的不透明黑/白直接用 ClampToBorderColor（删去运行时边框探测）；swizzle 视图视为必备。图形边界只剩 Metal 3 一条路径，GPU 缺 Metal 3 家族或 BC 采样即按名停止（`GRAPHICS_DEVICE_UNSUPPORTED`）。源码 `metal2_*` 改名 `metal3_*`。
+- 共享字体：iOS/macOS 27 的 PingFang SC/TC 是 `hvgl` 可变字形格式（无 glyf/CFF 轮廓），游戏字体引擎无法使用；改为按候选列表取第一个带 glyf/CFF 轮廓、PostScript 名匹配的系统字体（简体/繁体依次试 PingFang → 华文黑体 STHeiti → 冬青黑体 GB）。功能差异：中文字形来自替代字体。
+- 工具：新 Mac（Apple M6，无 Rosetta，Xcode 27.1）。ios-deploy 弃用，`device_round.sh` 改用 `xcrun devicectl`（安装、App 容器传文件、`launch --console` 记录 App 输出到 `console-*.log`、系统崩溃日志）；`setup_env.sh` 按本机架构重装工具（arm64 工具链重建的着色器与原产物逐字节一致）。
+- round109（2026-10-16，首轮新机）：测试、构建、签名通过，**安装被拒**：付费 Team `5H8VE3NN7D` 新生成的描述文件（13:18）里没有这台 iPhone，而开发者服务器又回复该设备“已在本 Team 存在”——设备在该 Team 里多半处于停用状态（个人 Team MFXJ9AKFM5 的描述文件里有它）。需要在开发者网站把设备启用后重跑。
+- 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
 
 ## 首帧推进（2026-10-15，持续进行）
 

@@ -6,12 +6,12 @@
 
 | 项目 | 说明 |
 | --- | --- |
-| Mac + Xcode | Xcode 26.6，默认路径 `/Applications/Xcode-26.6.0.app`；放在别处时设置 `DEVELOPER_DIR=<Xcode.app>/Contents/Developer`。还需要命令行工具（`xcode-select --install`），提供 git、make、clang、python3。 |
+| Mac + Xcode | Apple 芯片 Mac（当前 M6，无需 Rosetta）+ Xcode 27.1；默认用 `xcode-select -p` 指向的 Xcode，放在别处时设置 `DEVELOPER_DIR=<Xcode.app>/Contents/Developer`。还需要命令行工具（`xcode-select --install`）。 |
 | 磁盘 | 导入时峰值约 8 GB；完成后游戏相关约 7.3 GB（加 `--no-romfs-dir` 约 3.6 GB），工具链约 1 GB。 |
 | 网络 | github.com、dot.net、pypi.org（只有 `setup_env.sh` 用到）。 |
 | 游戏包（自备） | 《超级马里奥 惊奇》本体 v0（`010015100B514000`）与 1.2.0 更新 v262144（`010015100B514800`），`.nsz` 或 `.nsp` 均可。 |
 | prod.keys（自备） | 从你自己的主机导出。只在本机读取，不会复制进仓库。 |
-| 真机 | 测试机 FlyMe（iPhone 8 Plus / iOS 16.7.16），USB 连接并已信任这台 Mac。 |
+| 真机 | iPhone 18 Pro（iOS 27，开发者模式已开），USB 连接并已信任这台 Mac。安装、传文件、启动都用 `xcrun devicectl`。 |
 | Apple 开发者账号 | 付费 Team `5H8VE3NN7D`：两项内核内存 entitlement（扩展虚拟地址、提高内存上限）需要付费账号，免费个人 Team 签不出来。在新 Mac 的 Xcode 里登录同一个账号即可。 |
 
 ## 1. 装工具链
@@ -24,11 +24,10 @@ tools/setup_env.sh
 
 - Python venv：依赖见 `requirements.txt`
 - hactool、nstool 1.9.2、XcodeGen 2.46.0
-- ios-deploy，打了 `tools/patches/ios-deploy-streaming-upload.patch`：3.7 GB 的 RomFS 归档要分块上传，原版会整个读进内存
 - .NET SDK 10.0.402，用来编 `tools/wonder_xlate`（Ryujinx 着色器前端，源码在 `vendor/`）
 - SPIRV-Cross
 
-nstool 只有 x86_64 版，Apple 芯片的 Mac 要装 Rosetta（`softwareupdate --install-rosetta`）。
+nstool 按本机架构下载（arm64 / x86_64）；`setup_env.sh` 会删掉并重装架构不符的旧产物（例如从 Intel Mac 拷来的 `work/`）。
 
 ## 2. 导入游戏
 
