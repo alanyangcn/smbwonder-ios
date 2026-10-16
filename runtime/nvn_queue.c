@@ -89,6 +89,9 @@ static void draw_dump_flush(void) {
     }
     run_valid = 0;
 }
+// Draws left out by NVN render enable (SetRenderEnable(false) or a conditional render that evaluated to skip), reported
+// with NVN_QUEUE_SUBMIT every 600 submits (round171: are course hedges among them?).
+static unsigned disabled_draws, conditional_evals, conditional_skips;
 static int frame_dump_every(void) { static int n = -1; if (n < 0) { const char *e = getenv("WONDER_FRAME_DUMP_EVERY"); n = e ? atoi(e) : 0; if (n < 0) n = 0; } return n; }
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
@@ -587,6 +590,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         struct wonder_nvn_pool_view v; wonder_nvn_address_span(c->a[1], 32, &v);
         uint64_t a, b; memcpy(&a, v.memory, 8); memcpy(&b, v.memory + 16, 8);
         state.render_enable = c->a[0] == 0 ? a == b : a != b;
+        conditional_evals++; if (!state.render_enable) conditional_skips++;
         static _Atomic unsigned logged;
         if (atomic_fetch_add(&logged, 1) < 8)
             wonder_nvn_report("NVN_CONDITIONAL_RENDER mode=%llu counters=%llu,%llu -> %s (submit %u)", (unsigned long long)c->a[0],
@@ -720,7 +724,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         break;
     case WONDER_NVN_CMD_DRAW_ARRAYS: case WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED: case WONDER_NVN_CMD_DRAW_ELEMENTS_BASE_VERTEX:
     case WONDER_NVN_CMD_DRAW_ELEMENTS_INDIRECT: case WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED: {
-        if (!state.render_enable) break;
+        if (!state.render_enable) { disabled_draws++; break; }
         struct wonder_nvn_draw_call d = {.primitive = (int)c->a[0], .instances = 1};
         if (opcode == WONDER_NVN_CMD_DRAW_ARRAYS || opcode == WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED) {
             d.index_type = -1; d.first = (int)c->a[1]; d.count = (int)c->a[2];
@@ -813,6 +817,7 @@ static void submit_on_replay_stack(void *arg) {
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
     wonder_host_note_submit(submits);
+    if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u", submits, disabled_draws, conditional_evals, conditional_skips);
     if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
         wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u dispatches=%u programs=%s", queue, submits, count, commands, clears,
                           submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");
