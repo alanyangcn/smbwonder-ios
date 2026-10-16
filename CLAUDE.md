@@ -8,6 +8,7 @@
 - 计划：`docs/superpowers/plans/2026-10-15-first-game-frame.md`；渲染设计：`METAL2-RENDER-PLAN.md`。
 
 ## 设备与环境
+- 新机器搭建 `work/`：`tools/setup_env.sh`（工具链）→ `tools/import_game.sh`（游戏包 + prod.keys，按 verified-inputs.json 核对）→ `tools/local_state.sh import`（着色器普查）。详见 SETUP.md。
 - 测试机 FlyMe：iPhone 8 Plus / A11 / iOS 16.7.16，USB 连接。先做 Metal 2 / MSL 2.1，暂不换新设备。
 - Xcode：`DEVELOPER_DIR=/Applications/Xcode-26.6.0.app/Contents/Developer`（脚本已默认）。付费 Team `5H8VE3NN7D`，Bundle `two.local.smbwonder.loaderprobe`。
 - `work/` 整体不进 Git（游戏文件、工具链、构建、设备日志）；唯一例外 `work/analysis/first-frame/ledger.md` 需 `git add -f`。

@@ -1,0 +1,8 @@
+# Python packages for work/tools/venv (tools/setup_env.sh). Versions are the ones the verified artifacts were built with.
+capstone==5.0.9        # tools/symbolize.py --dis, nvn_inventory.py
+lz4==4.4.5             # NSO segments (patch_nso.py, structck/equiv, symbolize.py)
+unicorn==2.1.4         # vendor/d2r-mobile/dm/verify/equiv.py (rewrite equivalence check)
+numpy==2.0.2
+pillow==11.3.0         # present / first-draw image inspection
+zstandard==0.25.0
+nsz==5.0.0             # NSZ -> NSP decompression (tools/import_game.sh)

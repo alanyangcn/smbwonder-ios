@@ -2,7 +2,9 @@
 
 《超级马里奥 惊奇》1.2.0 的原生 iOS 移植研究项目。当前目标为 FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16），先推进 Metal 2 / MSL 2.1。
 
-当前真机停点：`nvnCommandBufferBeginRecording`（main+0x5c388）。已通过 SDK 启动、资源读取、采样器设置与首次控制/命令内存绑定；尚无游戏首帧，也未达到可玩状态。
+当前进度：游戏在真机上稳定显示启动加载画面与标题主视觉图（round108），尚未进入可玩状态。详见 [METAL2-STATUS.md](METAL2-STATUS.md)。
+
+**新机器搭建（工具链、导入自己的游戏包、着色器普查迁移）见 [SETUP.md](SETUP.md)。**
 
 ## 目录
 
@@ -11,7 +13,7 @@
 - `tools/`：构建、真机验证、资源与着色器分析工具。
 - `tests/`：宿主回归测试和 GPU 诊断。
 - `vendor/d2r-mobile/`：本地保存的 D2R Mobile 依赖源码及原许可证；构建不读取旁边的参考仓库。
-- `work/`：本地游戏资源、工具链、构建产物、设备日志与历史验证证据，全部排除出 Git。
+- `work/`：本地游戏资源、工具链、构建产物、设备日志与历史验证证据，全部排除出 Git；由 `tools/setup_env.sh`、`tools/import_game.sh`、`tools/local_state.sh` 重建（见 SETUP.md）。
 
 进度见 [METAL2-STATUS.md](METAL2-STATUS.md)，审查见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)，迁移说明见 [MIGRATION.md](MIGRATION.md)。
 

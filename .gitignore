@@ -19,3 +19,7 @@ __pycache__/
 *.nso
 *.metallib
 *.air
+
+# dotnet build output of tools/wonder_xlate (published into work/tools/wonder_xlate)
+tools/wonder_xlate/bin/
+tools/wonder_xlate/obj/
