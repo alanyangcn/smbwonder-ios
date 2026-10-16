@@ -774,6 +774,11 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
                 textures[stage][i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
                 if (!textures[stage][i]) unsupported(d, "2D texture as a 2D-array view, serial", (long)d->tex[stage][slot].texture.texture.serial);
             }
+            if (r->tex[i].type == WONDER_SHADER_TEX_2D && textures[stage][i].textureType == MTLTextureType2DArray) {   // first layer (round153)
+                id<MTLTexture> t2 = textures[stage][i];
+                textures[stage][i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+                if (!textures[stage][i]) unsupported(d, "first layer of a 2D array as a 2D view, serial", (long)d->tex[stage][slot].texture.texture.serial);
+            }
         }
         if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
             c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
@@ -939,6 +944,11 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
             id<MTLTexture> t2 = textures[i];
             textures[i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
             if (!textures[i]) unsupported(d, "2D texture as a 2D-array view, serial", (long)d->tex[0][slot].texture.texture.serial);
+        }
+        if (r->tex[i].type == WONDER_SHADER_TEX_2D && textures[i].textureType == MTLTextureType2DArray) {   // first layer (round153)
+            id<MTLTexture> t2 = textures[i];
+            textures[i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2D levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+            if (!textures[i]) unsupported(d, "first layer of a 2D array as a 2D view, serial", (long)d->tex[0][slot].texture.texture.serial);
         }
     }
     for (int i = 0; i < r->nimg; i++) {

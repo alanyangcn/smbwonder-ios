@@ -164,9 +164,11 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
     static const int target_type[11] = {WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
         WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER};
     int target = t->has_view && t->view.set_target ? t->view.target : t->texture.desc.target;
-    int as_layer = (target == 1 || target == 7) && rt->type == WONDER_SHADER_TEX_2D_ARRAY;   // 2D sampled as a 1-layer array (Maxwell)
-    if (target < 0 || target > 10 || (target_type[target] != rt->type && !as_layer)) {
-        snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, rt->type); replay_stop(opcode, why);
+    // The sampling instruction decides the dimension on Maxwell: a 2D texture sampled as a 1-layer array, and a 2D array
+    // sampled by a 2D instruction (round153) reads its first layer (metal3_draw.m binds a 2D view of it).
+    int as_layer = (target == 1 || target == 7) && rt->type == WONDER_SHADER_TEX_2D_ARRAY, first_layer = target == 4 && rt->type == WONDER_SHADER_TEX_2D;
+    if (target < 0 || target > 10 || (target_type[target] != rt->type && !as_layer && !first_layer)) {
+        snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d (vs=%s fs=%s)", stage, slot, target, rt->type, out->vs_key, out->fs_key); replay_stop(opcode, why);
     }
     out->tex[out_stage][slot].texture = *t; out->tex[out_stage][slot].sampler = *m; out->tex_mask[out_stage] |= 1ull << slot;
     if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
