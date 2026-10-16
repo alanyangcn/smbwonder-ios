@@ -24,6 +24,10 @@
     - `BindImage` 记录；派发按反射解析 uniform（`cbuf`，以及经 c[0][0x210+16r] 地址读的 `uptr`）、存储缓冲（c[0][0x310+16r]）、纹理、图像（c[2][0x120+8r]，sdk+0x46a280）；Metal 计算编码器派发，图像为带 ShaderWrite 的 GPU 纹理（`NVN_TEXTURE_FLAGS_IMAGE`）。CPU 内容尚未上传的图像被读、渲染关闭时的派发、线程组尺寸与控制段不符等都按名停止。
     - 控制段（Lib/agl、Lib/gsys、Effect 共 58 个计算着色器普查）：线程组 x/y/z 在 +0x748，共享内存字节数在 +0x710；计算代码区没有 0x30 头 / SPH，翻译器从第 0 字节解码（与 D2R 一致）。普查目录 `DrawCensus/cs-<key>/`。
     - 着色器积攒问题顺带修：片元/计算阶段 buffer 号可用 0..30（15、16..30 只对顶点阶段保留）；未启用的顶点属性按 float 声明（运行时给 (0,0,0,1)）。构建 135/138（原 130），剩 3 个片元着色器普查时纹理槽未绑定。
+  - round136（普查扫描）：**第一次进入关卡**（开场关卡 Course900：马里奥、云、城堡、金币、UI 图标），但只有约 6 fps，缺着色器的 draw 被跳过（黑块、蓝色剪影），数字等文字仍不显示。第一个计算着色器普查 `cs-1fb9d970e6bbceb8`：计算代码区是 0x100 字节头（magic `79563412`，其余为零）+ 指令（c1 = 0x100 + 指令长度对齐 0x100，58 个离线样本全符），线程组 32×1×1；它经 c[0] 读存储/uniform 地址表做地址运算 → 构建验证 c[0] 读取只落在地址表内（`drv 0 <buffer>`），宿主按 NVN 布局（u64 地址 + u32 大小）填表。截图改按 present 的裁剪矩形保存（关卡里窗口 1920×1080、裁剪 1280×720，屏幕上本来就是放大显示的）。
+  - round138：加载页又卡住（60 fps、无文件读取、所有工作线程在 main+0x66bf24 空闲），与 round134 相同；round136 慢速时反而通过——与时序有关。新增 `KERNEL_RUNNING`：每 ~30 s 采样未阻塞客体线程的 pc 与调用链（挂起读寄存器后立即恢复），定位它轮询的条件。
+  - **文字根因（round138）**：文字顶点着色器 982e87b1faa0b87f 用两个间接跳转（BRX，c1 跳转表各 3 个目标）按顶点角选 UV 字段；Ryujinx 的 AST 优化器把每个 BRX 只保留一个目标，UV 取错 → 采样为 0 → 片元全部丢弃。DebugMode（不跑该优化器）三路分支都在。构建改为所有阶段 DebugMode（D2R 原本的默认）；196 个阶段在 Mac GPU 上全部编译通过。带 BRX 的其它着色器（粒子、材质）同样受益。
+  - 性能：每个 draw 单独一个 render pass（附件整张 load/store）+ 每个 uniform 一块 64 KiB 拷贝分配，关卡每帧 141 个 draw 只有约 6 fps。改为同附件的连续 draw 合并为一个 render pass，拷贝统一进前置 blit、从 4 MiB 暂存块切窗口；其它 GPU 操作取命令缓冲时先收尾当前批（保持命令顺序），写存储缓冲或采样本批附件的 draw 结束本批。`HOST_MEMORY` 行报告 draws/passes 与 fps。
   - 脚本按键后 1.5 s 自动截图（`Documents/Present/present-<帧>.png`，日志 `HOST_PRESENT_CAPTURE ... requested`）。
   - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。

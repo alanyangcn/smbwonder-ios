@@ -219,8 +219,8 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     }
     if (!tex) {
         int target = t->desc.target, linear = (t->desc.flags & 0x10) != 0;   // NVN_TEXTURE_FLAGS_LINEAR: pitch layout, desc.stride bytes per row
-        if (target != 1 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 2D array / rectangle so far)", target);
-        if (linear && (target == 4 || t->desc.levels > 1)) unsupported(d, "pitch-linear texture with layers or mips, serial", (long)t->serial);
+        if (target != 1 && target != 2 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 3D / 2D array / rectangle so far)", target);
+        if (linear && (target == 2 || target == 4 || t->desc.levels > 1)) unsupported(d, "pitch-linear texture with layers, depth or mips, serial", (long)t->serial);
         if (!d->tex[stage][slot].storage) unsupported(d, "sampled texture without CPU storage, serial", (long)t->serial);
         // BC1-7 map exactly and are sampled natively (the graphics gate requires supportsBCTextureCompression).
         uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL);
@@ -236,6 +236,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
             NSUInteger layers = target == 4 ? (t->desc.depth ? t->desc.depth : 1) : 1;
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:t->desc.width height:t->desc.height mipmapped:t->desc.levels > 1];
             if (target == 4) { td.textureType = MTLTextureType2DArray; td.arrayLength = layers; }
+            if (target == 2) { td.textureType = MTLTextureType3D; td.depth = t->desc.depth ? t->desc.depth : 1; }   // round139: compute 1fb9d970 samples a 3D table
             td.mipmapLevelCount = t->desc.levels ? t->desc.levels : 1; td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; td.storageMode = CPU_TEXTURE_STORAGE;
             tex = [device newTextureWithDescriptor:td];
             if (!tex) unsupported(d, "sampled texture allocation, serial", (long)t->serial);
@@ -252,6 +253,15 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
                     uint32_t rows, slices, lbpb; uint64_t base; unsigned th, tdp;
                     if (nvn_deswizzle_geom(&t->desc, level, (unsigned)layer, &row_bytes, &rows, &slices, &base, &th, &tdp, &lbpb)) unsupported(d, "texture layout level", level);
                     if (base + (uint64_t)row_bytes * rows > d->tex[stage][slot].storage_size) unsupported(d, "texture level beyond storage, level", level);
+                    if (target == 2) {   // 3D: every depth slice of the level at once, slice k at k * row_bytes * rows
+                        if (base + (uint64_t)row_bytes * rows * slices > d->tex[stage][slot].storage_size) unsupported(d, "3D texture level beyond storage, level", level);
+                        linear_copy = [NSMutableData dataWithLength:(NSUInteger)row_bytes * rows * slices];
+                        if (nvn_deswizzle(&t->desc, level, 0, d->tex[stage][slot].storage, linear_copy.mutableBytes, row_bytes)) unsupported(d, "3D texture deswizzle level", level);
+                        NSUInteger dl = MAX((NSUInteger)1, (NSUInteger)td.depth >> level);
+                        if (slices != dl) unsupported(d, "3D texture slice count differs from the level depth, level", level);
+                        [tex replaceRegion:MTLRegionMake3D(0, 0, 0, w, h, dl) mipmapLevel:level slice:0 withBytes:linear_copy.bytes bytesPerRow:row_bytes bytesPerImage:(NSUInteger)row_bytes * rows];
+                        continue;
+                    }
                     linear_copy = [NSMutableData dataWithLength:(NSUInteger)row_bytes * rows];
                     if (nvn_deswizzle(&t->desc, level, (unsigned)layer, d->tex[stage][slot].storage, linear_copy.mutableBytes, row_bytes)) unsupported(d, "texture deswizzle level", level);
                     src = linear_copy.bytes;
