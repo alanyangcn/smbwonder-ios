@@ -673,6 +673,7 @@ static id<MTLBuffer> support_buffer;
 // (after present WONDER_TEX_DUMP_AFTER, default 0) saves every 2D texture it samples, each mip level, as
 // Documents/TexDump/<fs>-s<slot>-t<serial>-f<format>-l<level>.png (round155b: terrain masks that turn far hills blue).
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c);
+static int readback_alpha;   // defined with the readback below
 static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shader_refl *r, __strong id<MTLTexture> *textures) {
     static const char *list = (const char *)1; static NSMutableSet<NSString *> *done;
     if (list == (const char *)1) list = getenv("WONDER_TEX_DUMP_FS");
@@ -716,6 +717,9 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
                               d->tex[1][slot].texture.texture.desc.format, (unsigned long)level];
             int rc = wonder_host_readback_png((__bridge void *)t, (int)level, 0, [dir stringByAppendingPathComponent:name].fileSystemRepresentation);
             fprintf(stderr, "HOST_TEX_DUMP Documents/TexDump/%s %lux%lu result=%d\n", name.UTF8String, (unsigned long)MAX(1u, t.width >> level), (unsigned long)MAX(1u, t.height >> level), rc);
+            NSString *aname = [name stringByReplacingOccurrencesOfString:@".png" withString:@"-alpha.png"];
+            readback_alpha = 1; rc = wonder_host_readback_png((__bridge void *)t, (int)level, 0, [dir stringByAppendingPathComponent:aname].fileSystemRepresentation); readback_alpha = 0;
+            fprintf(stderr, "HOST_TEX_DUMP Documents/TexDump/%s alpha result=%d\n", aname.UTF8String, rc);
         }
     }
 }
@@ -1264,9 +1268,17 @@ static NSString *const readback_source = @"#include <metal_stdlib>\nusing namesp
     "vertex V rb_vs(uint id [[vertex_id]]) { float2 c = float2(id & 1, id >> 1); V o; o.p = float4(c.x * 2 - 1, 1 - c.y * 2, 0, 1); o.uv = c; return o; }\n"
     "constexpr sampler rb_s(filter::nearest, coord::normalized, address::clamp_to_edge);\n"
     "fragment float4 rb_color(V i [[stage_in]], texture2d<float> t [[texture(0)]]) { return float4(saturate(t.sample(rb_s, i.uv).rgb), 1); }\n"
+    "fragment float4 rb_alpha(V i [[stage_in]], texture2d<float> t [[texture(0)]]) { float a = saturate(t.sample(rb_s, i.uv).a); return float4(a, a, a, 1); }\n"
     "fragment float4 rb_depth(V i [[stage_in]], depth2d<float> t [[texture(0)]]) { uint2 q = uint2(i.uv * float2(t.get_width(), t.get_height())); float d = t.read(q); return float4(d, d, d, 1); }\n";
+static int readback_alpha;   // tex_dump: the next conversions draw the alpha channel as grey (tentative definition)
 static id<MTLTexture> readback_convert(id<MTLTexture> t, int level, int slice) {
-    static id<MTLRenderPipelineState> color, depth;
+    static id<MTLRenderPipelineState> color, depth, alpha;
+    if (!alpha) {
+        NSError *error = nil; id<MTLLibrary> lib = [device newLibraryWithSource:readback_source options:nil error:&error]; if (!lib) return nil;
+        MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; d.vertexFunction = [lib newFunctionWithName:@"rb_vs"];
+        d.fragmentFunction = [lib newFunctionWithName:@"rb_alpha"]; d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        alpha = [device newRenderPipelineStateWithDescriptor:d error:&error]; if (!alpha) return nil;
+    }
     if (!color) {
         NSError *error = nil; id<MTLLibrary> lib = [device newLibraryWithSource:readback_source options:nil error:&error]; if (!lib) return nil;
         for (int k = 0; k < 2; k++) {
@@ -1288,7 +1300,7 @@ static id<MTLTexture> readback_convert(id<MTLTexture> t, int level, int slice) {
     pass.colorAttachments[0].texture = out; pass.colorAttachments[0].loadAction = MTLLoadActionDontCare; pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-    [e setRenderPipelineState:is_depth ? depth : color]; [e setFragmentTexture:view atIndex:0];
+    [e setRenderPipelineState:is_depth ? depth : readback_alpha ? alpha : color]; [e setFragmentTexture:view atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4]; [e endEncoding];
     return out;
 }
@@ -1306,7 +1318,7 @@ int wonder_host_readback_png_rect(void *texture, int level, int slice, const int
     if (!t || !device || !path_c) return 1;
     MTLPixelFormat f = t.pixelFormat;
     int bgra = f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB, converted = 0;
-    if (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB) {
+    if (readback_alpha || (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB)) {
         if (integer_format(f) || f == MTLPixelFormatStencil8) return 2;
         converted = 1;
     }
