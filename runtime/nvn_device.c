@@ -1,5 +1,6 @@
 // Strict NVN device bootstrap for Wonder (main loader 0x1080ff0, version gate 0x5bb95c).
 // Host objects live inside the guest-owned NVN storage; a magic word guards every use.
+#include "nvn_draw_census.h"
 #include <stdatomic.h>
 #include "nvn_device.h"
 #include "command_store.h"
@@ -686,6 +687,16 @@ static uint32_t program_set_shaders(void *program, int count, const uint8_t *sta
     wonder_nvn_report("NVN_PROGRAM_SHADERS program=%p serial=%llu stages=%#x vs=%#llx fs=%#llx via=%s", program,
                       (unsigned long long)next.serial, next.mask, (unsigned long long)next.code[0], (unsigned long long)next.code[1], who);
     wonder_nvn_capture_shaders(program, &next);
+    {   // Diagnostic (WONDER_TRACE_VS): programs created with a listed vertex shader (round182: does the game ever build
+        // the course hedge's colour programs?)
+        const char *list = getenv("WONDER_TRACE_VS");
+        if (list && *list && (next.mask & 1)) {
+            char vs[17], fs[17] = "-"; wonder_nvn_shader_key(next.control[0], vs); if (next.mask & 2) wonder_nvn_shader_key(next.control[1], fs);
+            for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) {
+                wonder_nvn_report("NVN_TRACE_PROGRAM vs=%s fs=%s program=%p serial=%llu", vs, fs, program, (unsigned long long)next.serial); break; }
+                q += n; if (*q == ',') q++; }
+        }
+    }
     return 1;
 }
 uint32_t wonder_nvnProgramSetShaders(void *program, int count, const void *stages) {
