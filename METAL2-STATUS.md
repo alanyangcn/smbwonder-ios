@@ -1,6 +1,6 @@
 # Metal 2 当前进度
 
-目标：Wonder 1.2.0 / update 262144；FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16）。继续以 Metal 2 / MSL 2.1 推进，目前没有已证实必须换新设备的停点。游戏尚未出首帧或达到可玩状态。
+目标：Wonder 1.2.0 / update 262144；FlyMe（iPhone 8 Plus / A11 / iOS 16.7.16）。继续以 Metal 2 / MSL 2.1 推进，目前没有已证实必须换新设备的停点。游戏已在真机上稳定显示启动加载画面和标题主视觉图（round108），尚未进入可玩状态（3D 场景、输入、音频输出等仍在推进）。
 
 ## 首帧推进（2026-10-15，持续进行）
 
@@ -43,7 +43,17 @@
   - round54/55：补 `nvnSamplerGetMinMagFilter`（266 个入口）；round55 第一个 draw 处死锁（编码时持有回放锁又去取渲染目标），已修正。
   - round56 run `84249253-BC93-403B-8AB0-B703884ECB37`：**首个 draw 在 FlyMe 真机执行**，此后每次提交都执行（提交 2–14），渲染目标读回 `Documents/FirstDraw/target-0.png`（1920×1080，sha256 8a5dae00…）：视口 1280×720 区域为不透明黑（0,0,0,255），区域外未写入。这是游戏采样 4×4 缺省贴图 258 的整屏四边形，**还不是可辨认的游戏画面**。
   - round57 run（4 个阶段已打包）：第二个程序 vs `0aeff6b7b3b657fd`（含 c1 跳转表）/ fs `ed9066c9e3f5cb63` 在设备编译通过；停在 `NVN_DRAW_UNSUPPORTED texture view on sampled texture serial 688`。整体审查后修正 8 项（流水线缓存键、UBO 越界读取改为 GPU 拷贝到补零的 64 KiB、GPU 错误按名停止、流 15、原点/深度模式校验、光栅状态与贴图类型校验等）；round58 复验：首个 draw 执行 12 次，读回图与 round56 逐字节相同（sha256 8a5dae00…），停点不变。下一步：采样贴图视图；之后每个新程序按“普查 → 离线构建 → 真机”循环，程序多时把普查扩成一次运行记录多条 draw（另写计划）。
-- 导入服务统计（main 导入，已接管/总数）：audio 4/197（其余为原生客户端库）、hid 19/53、fs 26/29（余下 3 个是线程 fs 上下文/优先级的纯客户端函数）、account 11/25、nfp 3/20、time 14/14、oe 20/20、vi 5/5、friends 11/11、nifm 8/8、aoc 1/1、nsd 1/2、prepo 3/27（其余为本地报告缓冲区拼装）、err 3/9（其余为结果值类型）、ngc 5/5（客户端原生，服务对象由宿主提供）、settings 1/1（operator==(Language, LanguageCode) 经 MakeLanguageCode 连 set:，服务对象由宿主提供）；尚未涉及：socket 30、ldn 25、swkbd 12、ssl 8、ec 2——这些若被调用，SDK 原生客户端会连 sm: 并按名停止。
+- round59–93（2026-10-16）：按“普查 → 离线翻译 → 真机”循环推进到 57 个翻译后的着色器阶段、约 216 次提交、多次 present（加载转圈可见）。期间补齐：贴图视图（含立方体/立方体数组切片按 6 的倍数）、存储缓冲（c[0][base+16r] 绑定为设备缓冲）、绑定式与无绑定贴图句柄、跨行线性贴图与 2D 数组、条件渲染（GPU 完成后在 CPU 比较 addr 与 addr+16 的计数）、带裁剪/掩码的清屏、混合常量色、禁用顶点属性读 (0,0,0,1)、越界常量读返回 0（夹取读）、顶点流越界补零、常量缓冲动态下标保护（round62–69 的 GPU 页错误）；回放改在 16 MiB 栈的宿主线程上执行，Metal 编译离开客体小栈（round84/85 栈溢出）；`nn::account::LoadProfileImage` 返回宿主生成的 256×256 JPEG 占位头像（离线主机无用户头像，功能差异）。
+- round94–95：`nn::hid::StartLrAssignmentMode/StopLrAssignmentMode` 接管（宿主只有内置手持控制器，无可重新配对的 Joy-Con，模式无效果——功能差异）；`VibrationNode::Update` 经 sdk PLT 调 `hid::detail::SendVibrationValues`，按“振动不允许”丢弃（与已有 IsVibrationPermitted=false 一致）。round95 run `5E55EAA1-8798-466B-AA5B-AB6F21B8EFDC`：**首次画出可辨认的游戏画面——标题主视觉图**，随后被 iOS 内存高水位（2098 MB）停止。
+- round96 run `6C31DF64-8CD4-4CA4-9185-681515A15F2C`：`nvnTextureFinalize` 释放宿主 Metal 副本后内存稳定在约 670 MB（每 300 次 present 记 `HOST_MEMORY`）。但画面在主视觉图与黑/蓝/斜切之间闪烁。
+- 闪烁排查（round97–107，诊断开关 `WONDER_PRESENT_EVERY`、`WONDER_SUBMIT_SYNC`、`WONDER_DRAW_LOG`，日志 `NVN_FRAME`/`NVN_DRAW_LOG`/`NVN_CALL_RECORD`/`NVN_CALL_REPLAY`）：
+  - `nvnWindowAcquireTexture` 改为等该纹理上一次 present 的 GPU 工作完成再返回（原先立即标记完成）。
+  - GPU 纹理改按存储位置（内存池 + 偏移 + 布局，`runtime/texture_storage.c`）识别：游戏每次 present 都在同一池偏移重建 9 张临时渲染目标，旧做法每个新对象拿到未初始化的 Metal 纹理；覆盖同段内存的新纹理淘汰旧条目，内存池销毁时一并清除。
+  - 采样器 CLAMP_TO_BORDER：A11 实测在边框处恒采到 0（round100 `HOST_BORDER_COLOR_CHECK pixel=0`），透明黑边框映射为 `ClampToZero`（所有 GPU 精确）；不透明黑/白边框需该 GPU 实测支持，否则按名停止；MIRROR_CLAMP_TO_BORDER 停止。
+  - 根因（round107 run `4E10C686-2F51-4980-9A26-F27D0CD21A65`）：`CallCommands` 原先只记句柄、回放时再查；游戏工作线程在本帧提交期间就为下一帧重录同一控制内存地址（句柄 0x331d382b0 调用时 2520 字节、回放时 9864 字节），UI 层每帧被执行 0/1/2 次。改为录制时快照被调用句柄的命令段（NVN 本就把控制项拷入调用方）。
+- round108 run `1143D54A-EF0F-4C08-BDEB-4E05595F9DD8`：启动顺序与真机一致（加载转圈 → 圆形转场 → 标题主视觉图），标题出现后的 1571 帧每帧都完整执行 3D 层 + UI 层（63–66 个 draw），不再闪烁；内存约 640 MB；无停点（取日志时仍在运行）。
+- 待查：标题主视觉图下方的 3D 场景本身渲染不对（单独显示时为蓝天/黑地/斜切色块），被 UI 完全覆盖所以当前画面正确；进入游戏前需修。宿主 present 截图只取窗口纹理左上 1280×720（屏幕显示按裁剪矩形缩放）。
+- 导入服务统计（main 导入，已接管/总数）：audio 4/197（其余为原生客户端库）、hid 21/53（另经 sdk PLT 接管 detail::SendVibrationValues）、fs 26/29（余下 3 个是线程 fs 上下文/优先级的纯客户端函数）、account 11/25、nfp 3/20、time 14/14、oe 20/20、vi 5/5、friends 11/11、nifm 8/8、aoc 1/1、nsd 1/2、prepo 3/27（其余为本地报告缓冲区拼装）、err 3/9（其余为结果值类型）、ngc 5/5（客户端原生，服务对象由宿主提供）、settings 1/1（operator==(Language, LanguageCode) 经 MakeLanguageCode 连 set:，服务对象由宿主提供）；尚未涉及：socket 30、ldn 25、swkbd 12、ssl 8、ec 2——这些若被调用，SDK 原生客户端会连 sm: 并按名停止。
 - 仍需：更多程序的普查与离线翻译、贴图视图/模板/逻辑运算等尚未映射的状态、展示路径上的真实游戏画面。六份旧样本仍不具备运行资格。
 
 以下审查和轮次保留为历史基线，不是当前停点。
