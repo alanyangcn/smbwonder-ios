@@ -487,7 +487,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
     {   // Diagnostic (WONDER_SKIP_CS=<kernel key prefix>[,...]): leave the listed dispatches out (round177: does kernel
         // 45bc61e5, run since the offline build, make the game stop issuing colour passes?)
         const char *list = getenv("WONDER_SKIP_CS");
-        for (const char *q = list; q && *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, x.key, n)) {
+        for (const char *q = list; q && *q; ) { size_t n = strcspn(q, ","); if (n && (!strncmp(q, x.key, n) || (n == 1 && *q == '*'))) {
             static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 4) wonder_nvn_report("NVN_SKIP_CS %s (diagnostic)", x.key);
             return; } q += n; if (*q == ',') q++; }
     }
