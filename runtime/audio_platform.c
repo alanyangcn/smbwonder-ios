@@ -99,7 +99,8 @@ HLE_FORCE("_ZN2nn5audio3dsp17SendCommandBufferEimmibm", "Host DSP: run the sdk's
     // DeviceSink is a no-op in the sdk's processor (jump table entry 0x13 -> sdk+0x222920, the next-command label):
     // the final mix goes to iOS from here.
     static float frame[2 * 1024]; struct wonder_audio_sink_info info; char why[200];
-    int frames = wonder_audio_sink_extract((const void *)address, (size_t)size, frame, 1024, &info, why, sizeof why);
+    uint32_t upsampled; memcpy(&upsampled, processor + 0x24, 4);   // set by the Upsample command (sdk+0x223270)
+    int frames = wonder_audio_sink_extract((const void *)address, (size_t)size, (int)upsampled, frame, 1024, &info, why, sizeof why);
     if (frames < 0) die("audio device sink unsupported: %s (sink '%s' channels %d inputs %d,%d rate %d samples %d)", why, info.name, info.channels, info.inputs[0], info.inputs[1], info.rate, info.samples);
     if (frames > 0) wonder_host_audio_push(frame, frames);
     static _Atomic int sink_logged;

@@ -20,19 +20,24 @@ int main(void) {
     mix[2][239] = 100000; mix[3][239] = -100000;   // clamped to int16
     float out[2 * 480]; struct wonder_audio_sink_info info; char why[160];
     build(48000, 2, 2, 3, 0, 1);
-    assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == 240);
+    assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == 240);
     assert(info.channels == 2 && info.sinks == 1 && !strcmp(info.name, "MainAudioOut"));
     assert(out[2 * 10] == 100 / 32768.0f && out[2 * 10 + 1] == -100 / 32768.0f);
     assert(out[2 * 239] == 32767 / 32768.0f && out[2 * 239 + 1] == -1.0f);
     build(48000, 1, 3, 0, 0, 1);   // mono: duplicated
-    assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == 240 && out[20] == out[21] && out[20] == -100 / 32768.0f);
+    assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == 240 && out[20] == out[21] && out[20] == -100 / 32768.0f);
     build(48000, 2, 2, 3, 0, 0);   // disabled sink: nothing to output
-    assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == 0);
-    build(32000, 2, 2, 3, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == -1 && strstr(why, "32000"));
-    build(48000, 2, 2, 3, 0x1000, 1); assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == -1 && strstr(why, "upsampler"));
-    build(48000, 6, 2, 3, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == -1 && strstr(why, "6 channels"));
-    build(48000, 2, 2, 9, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == -2);   // input beyond the buffers
-    build(48000, 2, 2, 3, 0, 1); list[0x20 + 0x30] = 0; assert(wonder_audio_sink_extract(list, sizeof list, out, 480, &info, why, sizeof why) == -2);   // bad magic
+    assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == 0);
+    build(32000, 2, 2, 3, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == -1 && strstr(why, "32000 without upsampler"));
+    // Upsampler output (round142 MainAudioOut): buffer index i at sample_buffer + i * upsampled samples.
+    static int32_t up[4][240]; for (int f = 0; f < 240; f++) { up[2][f] = 7; up[3][f] = -7; }
+    build(32000, 2, 2, 3, (uintptr_t)up, 1);
+    assert(wonder_audio_sink_extract(list, sizeof list, 240, out, 480, &info, why, sizeof why) == 240 && out[0] == 7 / 32768.0f && out[479] == -7 / 32768.0f);
+    assert(wonder_audio_sink_extract(list, sizeof list, 160, out, 480, &info, why, sizeof why) == -1 && strstr(why, "48 kHz"));
+    assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == -2);
+    build(48000, 6, 2, 3, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == -1 && strstr(why, "6 channels"));
+    build(48000, 2, 2, 9, 0, 1); assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == -2);   // input beyond the buffers
+    build(48000, 2, 2, 3, 0, 1); list[0x20 + 0x30] = 0; assert(wonder_audio_sink_extract(list, sizeof list, 0, out, 480, &info, why, sizeof why) == -2);   // bad magic
     // Ring: wraps, drops what does not fit, pulls what is there.
     struct wonder_audio_ring r; assert(!wonder_audio_ring_init(&r, 300));
     float in[2 * 240], got[2 * 400];

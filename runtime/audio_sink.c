@@ -11,7 +11,7 @@ static int fail(char *why, size_t n, int code, const char *format, ...) {
     if (why && n) { va_list a; va_start(a, format); vsnprintf(why, n, format, a); va_end(a); }
     return code;
 }
-int wonder_audio_sink_extract(const void *list, size_t size, float *out, int max_frames, struct wonder_audio_sink_info *info, char *why, size_t n) {
+int wonder_audio_sink_extract(const void *list, size_t size, int upsampled, float *out, int max_frames, struct wonder_audio_sink_info *info, char *why, size_t n) {
     const uint8_t *base = list; memset(info, 0, sizeof *info);
     if (!base || size < 0x20) return fail(why, n, -2, "command list too small (%zu bytes)", size);
     uint32_t count, buffers, samples, rate; uint64_t mix;
@@ -35,8 +35,13 @@ int wonder_audio_sink_extract(const void *list, size_t size, float *out, int max
     info->channels = channels;
     for (int c = 0; c < 6; c++) memcpy(&info->inputs[c], sink + 0x134 + 2 * c, 2);
     if (info->sinks != 1) return fail(why, n, -1, "%d enabled device sinks", info->sinks);
-    if (info->sample_buffer) return fail(why, n, -1, "device sink reads the upsampler output %#llx (rate %u)", (unsigned long long)info->sample_buffer, rate);
-    if (rate != WONDER_AUDIO_RATE) return fail(why, n, -1, "renderer sample rate %u", rate);
+    // The device always runs at 48 kHz: either the renderer does, or the sink reads the upsampler's 48 kHz output.
+    if (!info->sample_buffer && rate != WONDER_AUDIO_RATE) return fail(why, n, -1, "renderer sample rate %u without upsampler output", rate);
+    if (info->sample_buffer) {
+        if (upsampled <= 0) return fail(why, n, -2, "upsampler output %#llx with %d samples", (unsigned long long)info->sample_buffer, upsampled);
+        if ((uint64_t)upsampled * 200 != WONDER_AUDIO_RATE) return fail(why, n, -1, "upsampler output of %d samples per 5 ms frame (not 48 kHz)", upsampled);
+        mix = info->sample_buffer; samples = (uint32_t)upsampled;
+    }
     if (channels != 1 && channels != 2) return fail(why, n, -1, "device sink with %d channels", channels);
     if (!mix || !samples) return fail(why, n, -2, "mix buffers %#llx samples %u", (unsigned long long)mix, samples);
     if ((int)samples > max_frames) return fail(why, n, -1, "%u samples per frame exceed the %d-frame output", samples, max_frames);
