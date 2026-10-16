@@ -58,6 +58,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/host_audio.m'
       - path: '${SMBW_REFERENCE}/runtime/audio_sink.c'
       - path: '${SMBW_REFERENCE}/runtime/page_guard.c'
+      - path: '${SMBW_REFERENCE}/runtime/gpu_gate.c'
       - path: '${SMBW_REFERENCE}/runtime/log_throttle.c'
       - path: '${SMBW_REFERENCE}/runtime/command_store.c'
       - path: '${SMBW_REFERENCE}/runtime/input_script.c'

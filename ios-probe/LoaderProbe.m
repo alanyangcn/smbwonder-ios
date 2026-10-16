@@ -1,5 +1,6 @@
 // 真机原生启动诊断：签名模块、SDK、构造函数、nnMain；按首个未实现接口停止。
 // Native boot diagnostic: signed modules, SDK, constructors and nnMain; stop at the first missing interface.
+#include "gpu_gate.h"
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -163,8 +164,9 @@ uint64_t wonder_host_language(void) {
 
 @implementation ProbeSceneDelegate
 // Lifecycle is logged so a round can tell whether iOS backgrounded the probe.
-- (void)sceneDidBecomeActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE active t=%.3f\n",now_ns()/1e9);wonder_applet_focus(1); }
-- (void)sceneWillResignActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE resign t=%.3f\n",now_ns()/1e9);wonder_applet_focus(2); }
+// GPU submissions wait from resign to active (gpu_gate.h): iOS refuses GPU work once the app is in the background.
+- (void)sceneDidBecomeActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE active t=%.3f\n",now_ns()/1e9);wonder_applet_focus(1);wonder_gpu_gate_set(1); }
+- (void)sceneWillResignActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE resign t=%.3f\n",now_ns()/1e9);wonder_gpu_gate_set(0);wonder_applet_focus(2); }
 - (void)sceneDidEnterBackground:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE background t=%.3f\n",now_ns()/1e9);wonder_applet_focus(3); }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
     (void)session; (void)options;

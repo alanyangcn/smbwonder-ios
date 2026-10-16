@@ -1,5 +1,6 @@
 // NVN display path for Wonder (main+0x9849bc): sync objects and the window over the VI CAMetalLayer.
 // Textures live in nvn_texture.c.
+#include "gpu_gate.h"
 #include "nvn_device.h"
 #include "nvn_texture.h"
 #include <stdlib.h>
@@ -135,6 +136,8 @@ void wonder_nvnWindowSetPresentInterval(void *window, int interval) {
 static void release_texture(void *released) { atomic_fetch_add((_Atomic uint32_t *)released, 1); }
 // Present: the acquired texture is drawn to the CAMetalLayer drawable after all previously submitted work.
 void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
+    { uint64_t waited = wonder_gpu_gate_wait();   // gpu_gate.h
+      if (waited) wonder_nvn_report("NVN_GPU_GATE present waited %.1f s for the app to become active", waited / 1e9); }
     wonder_nvn_queue_check(queue, "nvnQueuePresentTexture");
     struct window *w = window_of(window, "nvnQueuePresentTexture");
     if (index < 0 || index >= w->count || !(w->acquired & (1ull << index)))

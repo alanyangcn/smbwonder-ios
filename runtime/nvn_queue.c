@@ -3,6 +3,7 @@
 // all state tracking (persistent per queue, as GPU state is). Not executed yet: draws, dispatches, texture
 // copies/downsamples/clears, non-timestamp counters (TIMESTAMP and TIMESTAMP_TOP run), conditional rendering: replay stops by name before any
 // of them is skipped or faked. Host backend: host_graphics.m (device) or the test harness.
+#include "gpu_gate.h"
 #include "nvn_commands.h"
 #include "nvn_tex.h"
 #include "nvn_draw_census.h"
@@ -736,6 +737,8 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
 struct submit_job { void *queue; int count; const uint64_t *handles; };
 static void submit_on_replay_stack(void *arg);
 void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handles) {
+    { uint64_t waited = wonder_gpu_gate_wait();   // app not active: iOS refuses GPU work in the background (gpu_gate.h)
+      if (waited) wonder_nvn_report("NVN_GPU_GATE submit waited %.1f s for the app to become active", waited / 1e9); }
     wonder_nvn_queue_check(queue, "nvnQueueSubmitCommands");
     if (count < 0 || (count && !handles)) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueueSubmitCommands count=%d", count);
     pthread_t *owner = atomic_load(&replay_owner);
