@@ -300,6 +300,8 @@ void wonder_nvnCommandBufferCallCommands(void *cb, int count, const uint64_t *ha
         if (!wonder_nvn_command_handle_valid(handles[i]))
             wonder_nvn_stop("NVN_INVALID_HANDLE nvnCommandBufferCallCommands handle[%d]=%#llx", i, (unsigned long long)handles[i]);
     const uint64_t a[] = {(uint64_t)count}; rec(cb, WONDER_NVN_CMD_CALL_COMMANDS, a, 1, handles, (size_t)count * 8);
+    { static int on = -1; if (on < 0) on = getenv("WONDER_DRAW_LOG") != NULL;   // diagnostic: compare with NVN_CALL_REPLAY
+      if (on) for (int i = 0; i < count; i++) wonder_nvn_report("NVN_CALL_RECORD command_buffer=%p handle=%#llx bytes=%ld", cb, (unsigned long long)handles[i], wonder_nvn_command_handle_bytes(handles[i])); }
 }
 
 // ---------- Clears, copies, draws, dispatch ----------
@@ -597,6 +599,15 @@ uint64_t wonder_nvnCommandBufferEndRecording(void *cmdbuf) {
     memset(c + 0x50, 0, 8); c[0x11] = c[0x12] = 0;
     wonder_nvn_report("NVN_RECORD_END command_buffer=%p handle=%p command_bytes=%zu segments=%u", cmdbuf, body, bytes, count);
     return (uint64_t)(uintptr_t)body; // Valid native uncompressed handle; no GPU work has executed.
+}
+// Command bytes the handle currently refers to (diagnostics); -1 = unknown handle.
+long wonder_nvn_command_handle_bytes(uint64_t handle) {
+    long bytes = -1;
+    pthread_mutex_lock(&handles_lock);
+    for (struct recorded_handle *p = recorded_handles; p; p = p->next)
+        if (p->handle == handle) { bytes = 0; for (unsigned i = 0; i < p->count; i++) bytes += (long)p->segments[i].bytes; break; }
+    pthread_mutex_unlock(&handles_lock);
+    return bytes;
 }
 int wonder_nvn_command_handle_valid(uint64_t handle) {
     int found = 0;

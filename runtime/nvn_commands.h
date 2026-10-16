@@ -39,3 +39,4 @@ struct wonder_nvn_copy_region { int32_t x, y, z, width, height, depth; };
 typedef void (*wonder_nvn_command_visitor)(unsigned opcode, const void *payload, size_t size, void *context);
 void wonder_nvn_command_walk(uint64_t handle, wonder_nvn_command_visitor visitor, void *context);
 int wonder_nvn_command_handle_valid(uint64_t handle);
+long wonder_nvn_command_handle_bytes(uint64_t handle);   // diagnostics: bytes the handle refers to now, -1 = unknown
