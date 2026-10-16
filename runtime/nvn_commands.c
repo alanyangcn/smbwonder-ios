@@ -299,7 +299,22 @@ void wonder_nvnCommandBufferCallCommands(void *cb, int count, const uint64_t *ha
     for (int i = 0; i < count; i++)
         if (!wonder_nvn_command_handle_valid(handles[i]))
             wonder_nvn_stop("NVN_INVALID_HANDLE nvnCommandBufferCallCommands handle[%d]=%#llx", i, (unsigned long long)handles[i]);
-    const uint64_t a[] = {(uint64_t)count}; rec(cb, WONDER_NVN_CMD_CALL_COMMANDS, a, 1, handles, (size_t)count * 8);
+    // NVN copies the called handles' control entries (command memory address + size) into this command buffer, so
+    // the call keeps the commands recorded so far even if the handle's control memory is re-recorded before the
+    // queue runs it (round107: worker threads reuse handle addresses for the next frame during this frame's submit).
+    struct call_segment { uint64_t cpu, bytes; } *list = NULL; size_t used = 0;
+    pthread_mutex_lock(&handles_lock);
+    for (int i = 0; i < count; i++)
+        for (struct recorded_handle *p = recorded_handles; p; p = p->next) if (p->handle == handles[i]) {
+            struct call_segment *grown = realloc(list, (used + p->count + 1) * sizeof *list);
+            if (!grown) { pthread_mutex_unlock(&handles_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY CallCommands"); }
+            list = grown;
+            for (unsigned k = 0; k < p->count; k++) list[used++] = (struct call_segment){(uint64_t)(uintptr_t)p->segments[k].cpu, p->segments[k].bytes};
+            break;
+        }
+    pthread_mutex_unlock(&handles_lock);
+    const uint64_t a[] = {(uint64_t)count, (uint64_t)used};
+    rec(cb, WONDER_NVN_CMD_CALL_COMMANDS, a, 2, list, used * sizeof *list); free(list);
     { static int on = -1; if (on < 0) on = getenv("WONDER_DRAW_LOG") != NULL;   // diagnostic: compare with NVN_CALL_REPLAY
       if (on) for (int i = 0; i < count; i++) wonder_nvn_report("NVN_CALL_RECORD command_buffer=%p handle=%#llx bytes=%ld", cb, (unsigned long long)handles[i], wonder_nvn_command_handle_bytes(handles[i])); }
 }
@@ -616,6 +631,7 @@ int wonder_nvn_command_handle_valid(uint64_t handle) {
     pthread_mutex_unlock(&handles_lock);
     return found;
 }
+static void walk_segments(const struct segment *segments, unsigned count, uint64_t handle, wonder_nvn_command_visitor visitor, void *context);
 void wonder_nvn_command_walk(uint64_t handle, wonder_nvn_command_visitor visitor, void *context) {
     struct segment segments[MAX_SEGMENTS + 1]; unsigned count = 0; int found = 0;
     pthread_mutex_lock(&handles_lock);
@@ -623,6 +639,18 @@ void wonder_nvn_command_walk(uint64_t handle, wonder_nvn_command_visitor visitor
         if (p->handle == handle) { found = 1; count = p->count; memcpy(segments, p->segments, count * sizeof *segments); break; }
     pthread_mutex_unlock(&handles_lock);
     if (!found || !visitor) wonder_nvn_stop("NVN_INVALID_HANDLE command handle=%#llx", (unsigned long long)handle);
+    walk_segments(segments, count, handle, visitor, context);
+}
+void wonder_nvn_call_walk(const struct wonder_nvn_cmd *call, wonder_nvn_command_visitor visitor, void *context) {
+    if (call->nargs < 2 || call->blob_size != call->a[1] * 16) wonder_nvn_stop("NVN_INVALID_COMMAND CallCommands snapshot malformed");
+    const uint8_t *blob = (const uint8_t *)(call->a + call->nargs);
+    for (uint64_t i = 0; i < call->a[1]; i++) {
+        struct segment one; uint64_t cpu, bytes; memcpy(&cpu, blob + i * 16, 8); memcpy(&bytes, blob + i * 16 + 8, 8);
+        one.cpu = (uint8_t *)(uintptr_t)cpu; one.gpu = 0; one.bytes = (size_t)bytes;
+        walk_segments(&one, 1, 0, visitor, context);
+    }
+}
+static void walk_segments(const struct segment *segments, unsigned count, uint64_t handle, wonder_nvn_command_visitor visitor, void *context) {
     for (unsigned s = 0; s < count; s++) {
         const uint8_t *command = segments[s].cpu; size_t size = segments[s].bytes, offset = 0;
         while (offset < size) {

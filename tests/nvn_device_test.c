@@ -121,7 +121,7 @@ static void rec_memory_callback(void *cmdbuf, int event, size_t min_size, void *
     ((void (*)(void *, const void *, ptrdiff_t, size_t))wonder_nvn_resolve("nvnCommandBufferAddCommandMemory", "test"))(cmdbuf, rec_pool, rec_next, 0x1000);
     rec_next += 0x1000;
 }
-struct rec_trace { unsigned count, opcodes[256]; float clear[4]; uint64_t uniform_word; unsigned targets; uint32_t program_mask; };
+struct rec_trace { unsigned count, opcodes[256]; float clear[4]; uint64_t uniform_word; unsigned targets; uint32_t program_mask; struct rec_trace *called; };
 static void trace_commands(unsigned opcode, const void *payload, size_t size, void *context) {
     struct rec_trace *t = context; (void)size;
     if (t->count < 256) t->opcodes[t->count] = opcode;
@@ -132,7 +132,7 @@ static void trace_commands(unsigned opcode, const void *payload, size_t size, vo
     if (opcode == WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER) memcpy(&t->uniform_word, wonder_nvn_cmd_blob(c), 8);
     if (opcode == WONDER_NVN_CMD_SET_RENDER_TARGETS) t->targets = (unsigned)c->a[0];
     if (opcode == WONDER_NVN_CMD_BIND_PROGRAM) t->program_mask = ((const struct wonder_nvn_program_shaders *)wonder_nvn_cmd_blob(c))->mask;
-    if (opcode == WONDER_NVN_CMD_CALL_COMMANDS) assert(c->a[0] == 1);
+    if (opcode == WONDER_NVN_CMD_CALL_COMMANDS) { assert(c->a[0] == 1); if (t->called) wonder_nvn_call_walk(c, trace_commands, t->called); }
 }
 int main(void) {
     // Cube-map arrays: NVN depth counts layer-faces (6 per cube). Round70: the game sized a 0x109000 pool for a
@@ -678,8 +678,19 @@ int main(void) {
         uint64_t bogus = 0x777;
         EXPECT_STOP(((void (*)(void *, int, const uint64_t *))slot("nvnCommandBufferCallCommands"))(rcb, 1, &bogus), "NVN_INVALID_HANDLE");
         uint64_t outer = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(rcb);
-        struct rec_trace outer_trace = {0}; wonder_nvn_command_walk(outer, trace_commands, &outer_trace);
-        assert(outer_trace.count == 1 && outer_trace.opcodes[0] == WONDER_NVN_CMD_CALL_COMMANDS);
+        struct rec_trace called = {0}, outer_trace = {.called = &called}; wonder_nvn_command_walk(outer, trace_commands, &outer_trace);
+        assert(outer_trace.count == 1 && outer_trace.opcodes[0] == WONDER_NVN_CMD_CALL_COMMANDS && called.count == 50);
+        // CallCommands takes the called handle's command segments at record time, as NVN copies its control entries:
+        // re-recording at the same control memory (round107: worker threads reuse handle addresses for the next frame
+        // while the frame that called them is still being submitted) must not change what the caller runs.
+        ((void (*)(void *, void *, size_t))slot("nvnCommandBufferAddControlMemory"))(rcb, rctl, sizeof rctl);
+        ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);
+        ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3);
+        uint64_t reused = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(rcb);
+        assert(reused == sub);
+        struct rec_trace now = {0}; wonder_nvn_command_walk(sub, trace_commands, &now); assert(now.count == 1);
+        struct rec_trace called_again = {0}, outer_again = {.called = &called_again}; wonder_nvn_command_walk(outer, trace_commands, &outer_again);
+        assert(called_again.count == 50 && called_again.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR);
         // Disabled callback: exhaustion stops by name instead of overrunning.
         ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetCommandMemoryCallbackEnabled"))(rcb, 0);
         ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);

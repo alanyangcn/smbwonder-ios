@@ -332,11 +332,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     const struct wonder_nvn_cmd *c = payload; const uint8_t *blob = wonder_nvn_cmd_blob(c);
     switch (opcode) {
     case WONDER_NVN_CMD_CALL_COMMANDS: {
-        uint64_t n = c->a[0];   // handles read from the snapshotted blob (no 8 KiB stack copy per nesting level)
-        static int on = -1; if (on < 0) on = getenv("WONDER_DRAW_LOG") != NULL;
-        for (uint64_t i = 0; i < n; i++) { uint64_t h; memcpy(&h, blob + i * 8, 8);
-            if (on) wonder_nvn_report("NVN_CALL_REPLAY handle=%#llx bytes=%ld (submit %u)", (unsigned long long)h, wonder_nvn_command_handle_bytes(h), state.submits);
-            replay_handle(h, (unsigned)(uintptr_t)context + 1); }
+        // The called commands as captured when CallCommands was recorded (see nvnCommandBufferCallCommands).
+        unsigned depth = (unsigned)(uintptr_t)context + 1; (void)blob;
+        if (depth > 8) wonder_nvn_stop("NVN_INVALID_COMMAND CallCommands nesting deeper than 8");
+        wonder_nvn_call_walk(c, replay_visit, (void *)(uintptr_t)depth);
         break;
     }
     case WONDER_NVN_CMD_SET_RENDER_TARGETS:
