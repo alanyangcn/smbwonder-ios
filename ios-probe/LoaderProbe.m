@@ -1,6 +1,5 @@
 // 真机原生启动诊断：签名模块、SDK、构造函数、nnMain；按首个未实现接口停止。
 // Native boot diagnostic: signed modules, SDK, constructors and nnMain; stop at the first missing interface.
-#include "gpu_gate.h"
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -11,6 +10,7 @@
 #import "../runtime/metal3_shader_check.h"
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
+#include "../runtime/gpu_gate.h"
 #if !defined(__aarch64__)
 #error This probe requires a physical ARM64 iOS device, not an Intel simulator.
 #endif
