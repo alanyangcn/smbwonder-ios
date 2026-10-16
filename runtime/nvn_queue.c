@@ -150,6 +150,13 @@ static int scissor_covers(const struct wonder_nvn_texture *t) {
            (int64_t)state.scissor[0] + state.scissor[2] >= (int64_t)t->desc.width && (int64_t)state.scissor[1] + state.scissor[3] >= (int64_t)t->desc.height;
 }
 
+// WONDER_DRAW_LOG=<first>-<last> present numbers: every draw (and colour clear) of those frames is logged. The bounds
+// are plain statics so a debugger can open a window on a running game (round189).
+static int draw_log_first = -1, draw_log_last = -1;
+static int draw_log_frame(unsigned f) {
+    if (draw_log_first < 0) { const char *e = getenv("WONDER_DRAW_LOG"); draw_log_first = 0; draw_log_last = -1; if (e) sscanf(e, "%d-%d", &draw_log_first, &draw_log_last); }
+    return (int)f >= draw_log_first && (int)f <= draw_log_last;
+}
 struct report { uint64_t address; uint32_t value; int timestamp; };
 static void write_report(void *arg) {
     struct report *r = arg; struct wonder_nvn_pool_view view;
@@ -449,8 +456,6 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     submit_draws++;
     { // Diagnostic (WONDER_DRAW_LOG=<first>-<last> present numbers, with WONDER_PRESENT_EVERY): every draw's targets and
       // textures by storage, to compare frames that execute the same draw sequence.
-      static int first = -1, last = -1;
-      if (first < 0) { const char *e = getenv("WONDER_DRAW_LOG"); first = 0; last = -1; if (e) sscanf(e, "%d-%d", &first, &last); }
       unsigned f = atomic_load(&frame_index) + 1; int dump = frame_dump_every() && f % (unsigned)frame_dump_every() == 0;
       if (dump) for (int i = 0; i < 9; i++) if (d.targets[i].valid) {
           int known = 0; const struct wonder_nvn_texture_snapshot *t = &d.targets[i];
@@ -463,8 +468,9 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
           if (run_valid && (strcmp(run_vs, d.vs_key) || strcmp(run_fs, d.fs_key) || run_target.texture.serial != d.targets[0].texture.serial)) draw_dump_flush();
           if (d.color_count && d.targets[0].valid) { run_target = d.targets[0]; run_depth = d.color_count < 9 ? d.targets[d.color_count] : (struct wonder_nvn_texture_snapshot){0}; snprintf(run_vs, sizeof run_vs, "%s", d.vs_key); snprintf(run_fs, sizeof run_fs, "%s", d.fs_key); run_valid = 1; }
       }
-      if (dump || ((int)f >= first && (int)f <= last)) {
-          char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d", f, d.vs_key, d.fs_key, d.primitive, call.count);
+      if (dump || draw_log_frame(f)) {
+          char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d inst=%d mask=%#x blend=%#x depth=%u/%u/%u cull=%u", f, d.vs_key, d.fs_key, d.primitive,
+                                           call.count, call.instances, (d.states_set & 2) ? d.channel_mask.mask : 0xffffffffu, d.color.blend_en, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df, d.polygon.cull);
           for (int i = 0; i < 9 && n < (int)sizeof line - 80; i++) if (d.targets[i].valid) {
               const struct wonder_nvn_texture *t = &d.targets[i].texture;
               n += snprintf(line + n, sizeof line - n, " rt%d=%llu:%ux%u@%p+%#llx:%#x", i, (unsigned long long)t->serial, t->desc.width, t->desc.height, t->pool, (unsigned long long)t->offset, t->desc.format);
@@ -645,6 +651,9 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (!mask) break;
         const struct wonder_nvn_texture_snapshot *t = &state.targets[index];
         float rgba[4]; memcpy(rgba, blob, 16); int level, slice; view_level_slice(t, &level, &slice);
+        { unsigned f = atomic_load(&frame_index) + 1;
+          if (draw_log_frame(f)) wonder_nvn_report("NVN_CLEAR_LOG present=%u rt%d=%llu:%ux%u:%#x mask=%#x rgba=%g,%g,%g,%g", f, index, (unsigned long long)t->texture.serial,
+                                                   t->texture.desc.width, t->texture.desc.height, t->texture.desc.format, mask, rgba[0], rgba[1], rgba[2], rgba[3]); }
         if (mask != 0xf || !scissor_covers(&t->texture)) {   // drawn over the scissor rectangle with the channel mask
             int full[4] = {0, 0, (int)t->texture.desc.width, (int)t->texture.desc.height};
             if (wonder_host_clear_rect(target_texture(t, opcode), level, slice, rgba, mask, state.scissor_set ? state.scissor : full))
