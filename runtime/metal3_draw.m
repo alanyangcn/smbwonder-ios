@@ -77,6 +77,7 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
         MTLCompileOptions *options = [MTLCompileOptions new];
         options.languageVersion = MTLLanguageVersion3_2; options.mathMode = MTLMathModeSafe;   // no fast math: keep the translator's precision contract
+        options.preserveInvariance = YES;   // [[position, invariant]] (wonder_shader_build.py): depth pre-pass + depth EQUAL passes
         __block NSError *error = nil; __block id<MTLLibrary> library = nil;
         on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&e]; error = e; });
         if (!library) {

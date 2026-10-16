@@ -136,6 +136,14 @@ def fragment_inputs(msl):
     """user(locnN) inputs of a fragment stage: {location: MSL type}."""
     m = re.search(r'struct main0_in\n\{(.*?)\n\};', msl, re.S)
     return {int(loc): t for t, loc in VARYING.findall(m.group(1))} if m else {}
+def invariant_position(msl):
+    """Vertex position as [[position, invariant]] (the host compiles with preserveInvariance): a depth pre-pass and the
+    colour pass drawn with depth EQUAL (150 census draws) must compute bit-identical depth from the same inputs, as
+    Maxwell does for identical instruction sequences (round161: course hedges showed the blue clear colour)."""
+    out, n = re.subn(r'float4 gl_Position \[\[position\]\];', 'float4 gl_Position [[position, invariant]];', msl)
+    if n != 1: raise ValueError(f'vertex stage declares [[position]] {n} times')
+    return out
+
 def pad_vertex_outputs(msl, wanted):
     """Declare every varying a fragment may read (locations 0..7, plus `wanted` {location: type} from paired fragments)
     that the vertex stage does not write: Metal rejects unmatched fragment inputs, Maxwell leaves them undefined; the
@@ -329,7 +337,7 @@ def build(census_dirs, out):
             if keys.get('vs') in built and keys.get('fs') in built:
                 reads.setdefault(keys['vs'], {}).update(fragment_inputs(built[keys['fs']][1]))
         for key, (stage, msl, refl, census_sha) in built.items():
-            if stage == 'vs': msl = pad_vertex_outputs(msl, reads.get(key, {}))
+            if stage == 'vs': msl = invariant_position(pad_vertex_outputs(msl, reads.get(key, {})))
             (out / f'{key}.metal').write_text(msl); (out / f'{key}.refl').write_text(refl)
             manifest['keys'][key] = {'stage': stage, 'msl_sha256': sha(msl.encode()), 'refl_sha256': sha(refl.encode()), 'census_sha256': census_sha}
     (out / 'jobs.json').write_text(json.dumps([{k: v for k, v in j.items() if k != 'code'} for j in jobs], indent=1) + '\n')
