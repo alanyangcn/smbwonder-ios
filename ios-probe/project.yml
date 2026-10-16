@@ -45,6 +45,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/nvn_draw_census.c'
       - path: '${SMBW_REFERENCE}/runtime/shader_library.c'
       - path: '${SMBW_REFERENCE}/runtime/metal3_draw.m'
+      - path: '${SMBW_REFERENCE}/runtime/tbdr_plan.c'
       - path: '${SMBW_REFERENCE}/runtime/profile_image.c'
       - path: '${SMBW_REFERENCE}/runtime/texture_storage.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_service.c'

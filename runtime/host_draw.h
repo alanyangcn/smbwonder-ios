@@ -59,6 +59,14 @@ int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, in
 void wonder_host_replay_lock(void);
 void wonder_host_replay_unlock(void);
 void *wonder_host_replay_command_buffer(void);                               // pending id<MTLCommandBuffer>, call under the lock
+// Deferred work (metal3_draw.m operation queue, planned for load/store actions when the command buffer is next taken),
+// under the lock: a full clear (render pass descriptor with Clear / Load attachments, no draws) and buffer-only work.
+void wonder_host_draw_queue_clear_locked(void *render_pass_descriptor);
+#ifdef __OBJC__
+@protocol MTLCommandBuffer;
+void wonder_host_draw_queue_work_locked(void (^work)(id<MTLCommandBuffer>));
+#endif
+void wonder_host_tbdr_window(char *out, size_t size);                        // HOST_MEMORY planning counters (WONDER_TBDR)
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t); // GPU-written texture for this serial, or NULL
 // Evidence: after the submit holding the first executed draw, its first colour target is written as a PNG once the GPU
 // is done (host_graphics.m: Documents/FirstDraw/target-0.png). RGBA8/BGRA8 (+sRGB) only; other formats return non-zero.

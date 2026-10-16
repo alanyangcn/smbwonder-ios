@@ -116,7 +116,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
                 'runtime/romfs.c', 'runtime/romfs_hooks.c',
                 'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/ngc_service.c', 'runtime/ngc_hooks.c',
-                'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal3_draw.m', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
+                'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal3_draw.m', 'runtime/tbdr_plan.c', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
                 'runtime/graphics_gate.c', 'runtime/metal3_probe.m', 'runtime/host_input.m', 'runtime/host_audio.m', 'runtime/audio_sink.c', 'runtime/page_guard.c', 'runtime/log_throttle.c', 'runtime/command_store.c', 'runtime/input_script.c',
                 'runtime/metal3_pixels.c', 'runtime/metal3_shader_check.m',
                 *RUNTIME_GRAPHICS)]

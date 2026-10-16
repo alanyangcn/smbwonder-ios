@@ -7,6 +7,7 @@
 #include <TargetConditionals.h>
 #include "metal3_draw.h"
 #include "host_draw.h"
+#include "tbdr_plan.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -465,7 +466,7 @@ struct draw_encoding {
     float blend_color[4], bias_units, bias_slope, bias_clamp;
     MTLCullMode cull; MTLWinding winding; MTLViewport viewport; MTLScissorRect scissor; MTLPrimitiveType primitive; MTLIndexType itype; NSUInteger ib_offset;
 };
-static MTLRenderPassDescriptor *batch_pass; static NSMutableArray *batch_blocks, *batch_buffers; static struct draw_copy *batch_copies; static int batch_ncopies, batch_cap;
+static MTLRenderPassDescriptor *batch_pass; static NSMutableArray *batch_blocks, *batch_buffers; static NSMutableData *batch_reads; static struct draw_copy *batch_copies; static int batch_ncopies, batch_cap;
 static unsigned batch_draws_total, batch_passes_total;
 // Scratch windows for copies: carved from 4 MiB private buffers, never reused (the command buffer retains each chunk
 // until it completes), instead of one 64 KiB allocation per uniform buffer per draw.
@@ -497,7 +498,16 @@ static int draw_batch_attachment_sampled_by(MTLRenderPassDescriptor *p, __strong
 }
 static int draw_batch_attachment_sampled(__strong id<MTLTexture> *textures, int n) { return draw_batch_open() && draw_batch_attachment_sampled_by(batch_pass, textures, n); }
 static void draw_batch_begin(MTLRenderPassDescriptor *p) {
-    batch_pass = p; if (!batch_blocks) { batch_blocks = [NSMutableArray array]; batch_buffers = [NSMutableArray array]; }
+    batch_pass = p; if (!batch_blocks) { batch_blocks = [NSMutableArray array]; batch_buffers = [NSMutableArray array]; batch_reads = [NSMutableData data]; }
+}
+// Sampled textures of the batch's draws, as roots (tbdr_plan.c: a pass reading a texture keeps its earlier stores).
+static void batch_note_reads(__strong id<MTLTexture> *textures, int n) {
+    for (int i = 0; i < n; i++) {
+        if (!textures[i]) continue;
+        uintptr_t r = (uintptr_t)(__bridge void *)texture_root(textures[i]); const uintptr_t *have = batch_reads.bytes; NSUInteger k = 0, m = batch_reads.length / sizeof r;
+        while (k < m && have[k] != r) k++;
+        if (k == m) [batch_reads appendBytes:&r length:sizeof r];
+    }
 }
 static void draw_batch_add(const struct draw_copy *c, int n, void (^encode)(id<MTLRenderCommandEncoder>)) {
     if (batch_ncopies + n > batch_cap) {
@@ -508,27 +518,125 @@ static void draw_batch_add(const struct draw_copy *c, int n, void (^encode)(id<M
     for (int i = 0; i < n; i++) { batch_copies[batch_ncopies++] = c[i]; [batch_buffers addObject:c[i].src]; [batch_buffers addObject:c[i].dst]; }   // retained until the flush
     [batch_blocks addObject:encode];
 }
+// ---------- Deferred operation queue and load/store planning (tbdr_plan.c) ----------
+// A closed batch, a full clear (host_graphics.m wonder_host_clear_color / _depth_stencil) and a buffer fill / update wait in
+// a queue. Anything else that needs the command buffer (compute, copies, scissored clears, readback, present, commit)
+// takes it through wonder_host_replay_command_buffer(), which first plans and encodes the queue in order, so command
+// order is kept and everything after that point counts as unknown (Store). Planning folds each full clear into the next
+// pass's Clear load and stores DontCare what the next queued operation overwrites (proof rules in tbdr_plan.h).
+// WONDER_TBDR=0 (diagnostic): no planning, every attachment Load/Store and every clear its own pass, as before, for
+// comparing frames; WONDER_TBDR=ab alternates on/off per HOST_MEMORY window (300 presents) for in-run fps comparison.
+@interface WonderQueuedOp : NSObject { @public int kind; MTLRenderPassDescriptor *pass; NSArray *blocks, *buffers; NSData *copies, *reads; void (^work)(id<MTLCommandBuffer>); }
+@end
+@implementation WonderQueuedOp
+@end
+static NSMutableArray<WonderQueuedOp *> *queued;
+static int tbdr_mode = -1, tbdr_active;   // mode 0 off, 1 on, 2 ab; active: planning in this window
+static struct tbdr_stats tbdr_totals; static unsigned queue_drains, queue_ops_total;
+static void tbdr_init(void) {
+    if (tbdr_mode >= 0) return;
+    const char *e = getenv("WONDER_TBDR"); tbdr_mode = e && !strcmp(e, "0") ? 0 : e && !strcmp(e, "ab") ? 2 : 1; tbdr_active = tbdr_mode != 0;
+}
 void *wonder_host_replay_command_buffer_raw(void);   // host_graphics.m: the pending command buffer without flushing
-void wonder_host_draw_flush_locked(void) {
+static void queue_drain(void);
+static void queue_push(WonderQueuedOp *q) {
+    if (!queued) queued = [NSMutableArray array];
+    [queued addObject:q];
+    if (queued.count >= 1024) queue_drain();   // bounded lookahead: the rest of the queue counts as unknown
+}
+static void batch_close(void) {
     if (!batch_pass) return;
-    MTLRenderPassDescriptor *pass = batch_pass; batch_pass = nil;
-    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer_raw();
-    if (batch_ncopies) {
+    WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_PASS; q->pass = batch_pass; q->blocks = [batch_blocks copy]; q->buffers = [batch_buffers copy];
+    q->copies = batch_ncopies ? [NSData dataWithBytes:batch_copies length:sizeof *batch_copies * (size_t)batch_ncopies] : nil; q->reads = [batch_reads copy];
+    batch_pass = nil; [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0; batch_reads.length = 0;
+    queue_push(q);
+}
+void wonder_host_draw_queue_clear_locked(void *render_pass) {
+    batch_close();
+    WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_CLEAR; q->pass = (__bridge MTLRenderPassDescriptor *)render_pass; queue_push(q);
+}
+void wonder_host_draw_queue_work_locked(void (^work)(id<MTLCommandBuffer>)) {
+    batch_close();
+    WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_NEUTRAL; q->work = work; queue_push(q);
+}
+static void add_att(struct tbdr_op *o, __unsafe_unretained MTLRenderPassAttachmentDescriptor **ad, MTLRenderPassAttachmentDescriptor *a, int plane) {
+    if (!a.texture || o->natt >= TBDR_MAX_ATT) return;
+    struct tbdr_att *t = &o->att[o->natt]; ad[o->natt++] = a;
+    t->object = (uintptr_t)(__bridge void *)a.texture; t->root = (uintptr_t)(__bridge void *)texture_root(a.texture); t->plane = plane;
+    t->level = (int)a.level; t->slice = (int)(a.texture.textureType == MTLTextureType3D ? a.depthPlane : a.slice);
+    t->load = a.loadAction == MTLLoadActionClear ? TBDR_LOAD_CLEAR : TBDR_LOAD_LOAD;
+}
+static void encode_pass_op(id<MTLCommandBuffer> cb, WonderQueuedOp *q) {
+    const struct draw_copy *copies = q->copies.bytes; NSUInteger ncopies = q->copies.length / sizeof *copies;
+    if (ncopies) {
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder]; blit.label = @"NVN draw batch copies";
-        for (int i = 0; i < batch_ncopies; i++) {
-            const struct draw_copy *c = &batch_copies[i];
+        for (NSUInteger i = 0; i < ncopies; i++) {
+            const struct draw_copy *c = &copies[i];
             if (c->window > c->size) [blit fillBuffer:c->dst range:NSMakeRange(c->dst_offset + c->size, c->window - c->size) value:0];
             if (c->size) [blit copyFromBuffer:c->src sourceOffset:c->src_offset toBuffer:c->dst destinationOffset:c->dst_offset size:c->size];
         }
         [blit endEncoding];
     }
-    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-    if (!e) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED render encoder creation for a batch of %lu draws", (unsigned long)batch_blocks.count);
-    e.label = [NSString stringWithFormat:@"NVN pass (%lu draws)", (unsigned long)batch_blocks.count];
-    for (void (^encode)(id<MTLRenderCommandEncoder>) in batch_blocks) encode(e);
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:q->pass];
+    if (!e) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED render encoder creation for a batch of %lu draws", (unsigned long)q->blocks.count);
+    e.label = [NSString stringWithFormat:@"NVN pass (%lu draws)", (unsigned long)q->blocks.count];
+    for (void (^encode)(id<MTLRenderCommandEncoder>) in q->blocks) encode(e);
     [e endEncoding];
-    batch_draws_total += (unsigned)batch_blocks.count; batch_passes_total++;
-    [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0;
+    batch_draws_total += (unsigned)q->blocks.count; batch_passes_total++;
+}
+static void queue_drain(void) {
+    NSUInteger n = queued.count; if (!n) return;
+    tbdr_init();
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer_raw();
+    struct tbdr_op *ops = calloc(n, sizeof *ops);
+    __unsafe_unretained MTLRenderPassAttachmentDescriptor *(*ad)[TBDR_MAX_ATT] = (__unsafe_unretained MTLRenderPassAttachmentDescriptor *(*)[TBDR_MAX_ATT])calloc(n, sizeof *ad);
+    if (!ops || !ad) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED queue plan allocation of %lu operations failed", (unsigned long)n);
+    if (tbdr_active) {
+        for (NSUInteger i = 0; i < n; i++) {
+            WonderQueuedOp *q = queued[i]; struct tbdr_op *o = &ops[i]; o->kind = q->kind;
+            if (q->pass) {
+                for (int k = 0; k < 8; k++) add_att(o, ad[i], q->pass.colorAttachments[k], TBDR_PLANE_COLOR);
+                add_att(o, ad[i], q->pass.depthAttachment, TBDR_PLANE_DEPTH); add_att(o, ad[i], q->pass.stencilAttachment, TBDR_PLANE_STENCIL);
+            }
+            o->reads = q->reads.bytes; o->nreads = (int)(q->reads.length / sizeof(uintptr_t));
+        }
+        tbdr_plan(ops, (int)n, &tbdr_totals);
+        for (NSUInteger i = 0; i < n; i++) for (int k = 0; k < ops[i].natt; k++) {
+            const struct tbdr_att *t = &ops[i].att[k]; MTLRenderPassAttachmentDescriptor *a = ad[i][k];
+            a.storeAction = t->store == TBDR_STORE_DONTCARE ? MTLStoreActionDontCare : MTLStoreActionStore;
+            if (ops[i].kind != TBDR_OP_PASS || t->load != TBDR_LOAD_CLEAR) continue;
+            MTLRenderPassAttachmentDescriptor *src = ad[t->clear_op][t->clear_att]; a.loadAction = MTLLoadActionClear;
+            if (t->plane == TBDR_PLANE_COLOR) ((MTLRenderPassColorAttachmentDescriptor *)a).clearColor = ((MTLRenderPassColorAttachmentDescriptor *)src).clearColor;
+            else if (t->plane == TBDR_PLANE_DEPTH) ((MTLRenderPassDepthAttachmentDescriptor *)a).clearDepth = ((MTLRenderPassDepthAttachmentDescriptor *)src).clearDepth;
+            else ((MTLRenderPassStencilAttachmentDescriptor *)a).clearStencil = ((MTLRenderPassStencilAttachmentDescriptor *)src).clearStencil;
+        }
+    }
+    for (NSUInteger i = 0; i < n; i++) {
+        WonderQueuedOp *q = queued[i];
+        if (ops[i].dropped) continue;
+        if (q->kind == TBDR_OP_PASS) encode_pass_op(cb, q);
+        else if (q->kind == TBDR_OP_CLEAR) {
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:q->pass];
+            if (!e) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED render encoder creation for a clear");
+            e.label = @"NVN clear"; [e endEncoding];
+        } else q->work(cb);
+    }
+    free(ops); free(ad); queue_drains++; queue_ops_total += (unsigned)n;
+    [queued removeAllObjects];
+}
+void wonder_host_draw_flush_locked(void) { batch_close(); queue_drain(); }
+// HOST_MEMORY window report (host_graphics.m, every 300 presents): planning counters since the last call; WONDER_TBDR=ab
+// switches planning for the next window.
+void wonder_host_tbdr_window(char *out, size_t size) {
+    static struct tbdr_stats last; static unsigned last_drains, last_ops;
+    wonder_host_replay_lock(); tbdr_init();
+    struct tbdr_stats s = tbdr_totals;
+    snprintf(out, size, "tbdr=%s drains=%u ops=%u folded_clears=%u dropped_clears=%u dontcare=%u stored=%u", tbdr_active ? "on" : "off",
+             queue_drains - last_drains, queue_ops_total - last_ops, s.folded_clears - last.folded_clears, s.dropped_clears - last.dropped_clears,
+             s.dontcare_stores - last.dontcare_stores, s.stores - last.stores);
+    last = s; last_drains = queue_drains; last_ops = queue_ops_total;
+    if (tbdr_mode == 2) tbdr_active = !tbdr_active;
+    wonder_host_replay_unlock();
 }
 void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes) { *draws = batch_draws_total; *passes = batch_passes_total; }
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
@@ -761,14 +869,14 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->nsbuf; i++) writes |= refl[stage]->sbuf[i].write;
     wonder_host_replay_lock();
     if (draw_batch_open() && (!draw_batch_same_pass(pass) || draw_batch_attachment_sampled(textures[0], refl[0]->ntex) || draw_batch_attachment_sampled(textures[1], refl[1]->ntex)))
-        wonder_host_draw_flush_locked();
+        batch_close();
     if (!draw_batch_open() && (draw_batch_attachment_sampled_by(pass, textures[0], refl[0]->ntex) || draw_batch_attachment_sampled_by(pass, textures[1], refl[1]->ntex))) {
         // The draw samples one of its own attachments: a pass of its own, as before batching.
-        draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); wonder_host_draw_flush_locked();
+        draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex); batch_close();
     } else {
         if (!draw_batch_open()) draw_batch_begin(pass);
-        draw_batch_add(copies, ncopies, encode);
-        if (writes) wonder_host_draw_flush_locked();
+        draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex);
+        if (writes) batch_close();
     }
     wonder_host_replay_unlock();
     if (getenv("WONDER_DRAW_SYNC")) sync_check(d);

@@ -264,6 +264,31 @@ int main(int argc, char **argv) {
         // Clear colour to blue, depth to 1.0, then draw.
         id<MTLTexture> color = (__bridge id<MTLTexture>)wonder_host_render_target(&d.targets[0].texture, MTLPixelFormatRGBA8Unorm);
         id<MTLTexture> depth = (__bridge id<MTLTexture>)wonder_host_render_target(&d.targets[1].texture, MTLPixelFormatDepth32Float);
+        // Queued clears and load/store planning (WONDER_TBDR on / 0 give the same bytes): clear colour+depth, draw, clear depth
+        // only, draw again; the first pass's depth is overwritten by the second clear (DontCare), both clears fold.
+        if (!strcmp(mode, "tbdr")) {
+            MTLRenderPassDescriptor *c1 = [MTLRenderPassDescriptor renderPassDescriptor];
+            c1.colorAttachments[0].texture = color; c1.colorAttachments[0].loadAction = MTLLoadActionClear; c1.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 1, 1);
+            c1.colorAttachments[0].storeAction = MTLStoreActionStore;
+            c1.depthAttachment.texture = depth; c1.depthAttachment.loadAction = MTLLoadActionClear; c1.depthAttachment.clearDepth = 1; c1.depthAttachment.storeAction = MTLStoreActionStore;
+            MTLRenderPassDescriptor *c2 = [MTLRenderPassDescriptor renderPassDescriptor];
+            c2.depthAttachment.texture = depth; c2.depthAttachment.loadAction = MTLLoadActionClear; c2.depthAttachment.clearDepth = 1; c2.depthAttachment.storeAction = MTLStoreActionStore;
+            wonder_host_replay_lock(); wonder_host_draw_queue_clear_locked((__bridge void *)c1); wonder_host_replay_unlock();
+            assert(wonder_host_draw(&d) == 0);
+            wonder_host_replay_lock(); wonder_host_draw_queue_clear_locked((__bridge void *)c2); wonder_host_replay_unlock();
+            assert(wonder_host_draw(&d) == 0);
+            id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
+            id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
+            [b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
+            [b copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:zb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
+            [b endEncoding]; [pending commit]; [pending waitUntilCompleted]; assert(pending.status == MTLCommandBufferStatusCompleted);
+            uint64_t h = 1469598103934665603ull; const uint8_t *bytes[2] = {rb.contents, zb.contents};
+            for (int k = 0; k < 2; k++) for (int i = 0; i < 64 * 64 * 4; i++) h = (h ^ bytes[k][i]) * 1099511628211ull;
+            const uint8_t *centre = bytes[0] + (32 * 64 + 32) * 4; const float *z = zb.contents;
+            assert(bytes[0][2] == 255 && z[0] == 1.0f && centre[2] != 255);   // corner: clear colour / depth; centre drawn
+            char stats[160]; wonder_host_tbdr_window(stats, sizeof stats);
+            printf("tbdr bytes %016llx %s\n", (unsigned long long)h, stats); puts("metal3 encode tbdr OK"); return 0;
+        }
         MTLRenderPassDescriptor *clear = [MTLRenderPassDescriptor renderPassDescriptor];
         clear.colorAttachments[0].texture = color; clear.colorAttachments[0].loadAction = MTLLoadActionClear; clear.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 1, 1);
         clear.colorAttachments[0].storeAction = MTLStoreActionStore;

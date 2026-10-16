@@ -110,9 +110,11 @@ void *wonder_host_replay_command_buffer_raw(void){ return (__bridge void*)raw_pe
 static id<MTLCommandBuffer> pending_buffer(void){ wonder_host_draw_flush_locked(); return raw_pending_buffer(); }
 static unsigned pending_first_submit, pending_last_submit;
 static void commit_locked(void){ wonder_host_draw_flush_locked(); if(pending){ [pending commit]; last_committed=pending; pending=nil; pending_first_submit=pending_last_submit=0; } }
+// Labels and completion handlers do not encode anything: they take the command buffer without encoding the queued
+// operations (metal3_draw.m), which keeps the load/store lookahead across submits.
 void wonder_host_note_submit(unsigned submit){
  pthread_mutex_lock(&replay_mutex);
- id<MTLCommandBuffer> b=pending_buffer(); if(!pending_first_submit) pending_first_submit=submit; pending_last_submit=submit;
+ id<MTLCommandBuffer> b=raw_pending_buffer(); if(!pending_first_submit) pending_first_submit=submit; pending_last_submit=submit;
  b.label=[NSString stringWithFormat:@"Wonder NVN submits %u-%u",pending_first_submit,pending_last_submit];
  pthread_mutex_unlock(&replay_mutex);
 }
@@ -128,7 +130,7 @@ void wonder_host_finish(void){
  dispatch_semaphore_wait(done,DISPATCH_TIME_FOREVER);
 }
 void wonder_host_after_gpu(void (*fn)(void *), void *arg){
- pthread_mutex_lock(&replay_mutex); [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; pthread_mutex_unlock(&replay_mutex);
+ pthread_mutex_lock(&replay_mutex); [raw_pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; pthread_mutex_unlock(&replay_mutex);
 }
 void wonder_host_fence(void (*fn)(void *), void *arg){
  pthread_mutex_lock(&replay_mutex); [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; commit_locked(); pthread_mutex_unlock(&replay_mutex);
@@ -168,10 +170,9 @@ void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t for
  pthread_mutex_unlock(&replay_mutex);
  return (__bridge void*)tex;
 }
+// Full clears are queued (metal3_draw.m): folded into the next pass's Clear load when that is provably the same.
 static int encode_pass(MTLRenderPassDescriptor *pass){
- pthread_mutex_lock(&replay_mutex);
- id<MTLRenderCommandEncoder> e=[pending_buffer() renderCommandEncoderWithDescriptor:pass]; [e endEncoding];
- pthread_mutex_unlock(&replay_mutex); return e?0:EIO;
+ pthread_mutex_lock(&replay_mutex); wonder_host_draw_queue_clear_locked((__bridge void*)pass); pthread_mutex_unlock(&replay_mutex); return 0;
 }
 int wonder_host_clear_color(void *texture,int level,int slice,const float rgba[4]){
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t) return EINVAL;
@@ -194,14 +195,18 @@ int wonder_host_clear_depth_stencil(void *texture,int level,int slice,int clear_
 }
 int wonder_host_fill_buffer(void *buffer,size_t offset,size_t size,uint8_t value){
  id<MTLBuffer> b=(__bridge id<MTLBuffer>)buffer; if(!b||offset+size>b.length) return EINVAL;
- pthread_mutex_lock(&replay_mutex); id<MTLBlitCommandEncoder> e=[pending_buffer() blitCommandEncoder]; [e fillBuffer:b range:NSMakeRange(offset,size) value:value]; [e endEncoding]; pthread_mutex_unlock(&replay_mutex);
+ pthread_mutex_lock(&replay_mutex);
+ wonder_host_draw_queue_work_locked(^(id<MTLCommandBuffer> cb){ id<MTLBlitCommandEncoder> e=[cb blitCommandEncoder]; [e fillBuffer:b range:NSMakeRange(offset,size) value:value]; [e endEncoding]; });
+ pthread_mutex_unlock(&replay_mutex);
  return 0;
 }
 int wonder_host_write_buffer(void *buffer,size_t offset,const void *data,size_t size){
  id<MTLBuffer> b=(__bridge id<MTLBuffer>)buffer; if(!b||offset+size>b.length) return EINVAL;
  id<MTLBuffer> staging=[device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared]; if(!staging) return ENOMEM;
- pthread_mutex_lock(&replay_mutex); id<MTLBlitCommandEncoder> e=[pending_buffer() blitCommandEncoder];
- [e copyFromBuffer:staging sourceOffset:0 toBuffer:b destinationOffset:offset size:size]; [e endEncoding]; pthread_mutex_unlock(&replay_mutex);
+ pthread_mutex_lock(&replay_mutex);
+ wonder_host_draw_queue_work_locked(^(id<MTLCommandBuffer> cb){ id<MTLBlitCommandEncoder> e=[cb blitCommandEncoder];
+  [e copyFromBuffer:staging sourceOffset:0 toBuffer:b destinationOffset:offset size:size]; [e endEncoding]; });
+ pthread_mutex_unlock(&replay_mutex);
  return 0;
 }
 static NSString *const present_source=@"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -262,8 +267,9 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
   extern size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial); uint64_t gserial=0; size_t glyphs=wonder_nvn_glyph_cache_nonzero(&gserial);
   extern void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes); unsigned bd, bp; wonder_host_draw_batch_stats(&bd,&bp);
   static unsigned last_bd, last_bp, last_hv; static double last_t; extern unsigned wonder_host_draw_sampled_validations(void); extern unsigned wonder_guard_count(void); double now=CACurrentMediaTime();
-  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f texture_hashes=%u watched=%u\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
-          bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0,wonder_host_draw_sampled_validations()-last_hv,wonder_guard_count());
+  char tbdr[160]; wonder_host_tbdr_window(tbdr,sizeof tbdr);
+  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f texture_hashes=%u watched=%u %s\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
+          bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0,wonder_host_draw_sampled_validations()-last_hv,wonder_guard_count(),tbdr);
   last_hv=wonder_host_draw_sampled_validations();
   last_bd=bd; last_bp=bp; last_t=now;
  }
@@ -332,3 +338,4 @@ void wonder_host_run_on_replay_stack(void (*fn)(void *),void *arg){
  while(!job_finished) pthread_cond_wait(&job_done,&job_lock);
  pthread_mutex_unlock(&job_lock);
 }
+

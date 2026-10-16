@@ -14,7 +14,7 @@ class Metal3ShaderLibraryTests(unittest.TestCase):
     def test_shader_library_compiles_verified_msl_and_stops_by_name(self):
         with tempfile.TemporaryDirectory() as directory:
             exe=Path(directory)/'lib'; scratch=Path(directory)/'shaders'; scratch.mkdir()
-            subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'tests/metal3_draw_test.m'),str(ROOT/'runtime/metal3_draw.m'),str(ROOT/'runtime/page_guard.c'),str(ROOT/'runtime/shader_library.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-framework','Foundation','-framework','Metal','-framework','CoreGraphics','-framework','ImageIO','-o',str(exe)],check=True)
+            subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),str(ROOT/'tests/metal3_draw_test.m'),str(ROOT/'runtime/metal3_draw.m'),str(ROOT/'runtime/tbdr_plan.c'),str(ROOT/'runtime/page_guard.c'),str(ROOT/'runtime/shader_library.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-framework','Foundation','-framework','Metal','-framework','CoreGraphics','-framework','ImageIO','-o',str(exe)],check=True)
             built=ROOT/'work/build/wonder-shaders'
             p=subprocess.run([str(exe),str(scratch),'ok']+([str(built)] if (built/'manifest.json').exists() else []),capture_output=True,text=True)
             if p.returncode==77:self.skipTest('Host has no Metal device')
@@ -27,16 +27,25 @@ class Metal3ShaderLibraryTests(unittest.TestCase):
             self.assertIn('metal3_draw shader library OK',p.stdout)
 
 class Metal3EncodeTests(unittest.TestCase):
-    def run_case(self,case):
+    def run_case(self,case,env=None):
         with tempfile.TemporaryDirectory() as directory:
             exe=Path(directory)/'encode'
             subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-I'+str(ROOT/'runtime'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn'),'-I'+str(ROOT/'vendor/d2r-mobile/dm/gfx/tex'),
-                str(ROOT/'tests/metal3_encode_test.m'),str(ROOT/'runtime/metal3_draw.m'),str(ROOT/'runtime/page_guard.c'),str(ROOT/'runtime/shader_library.c'),
+                str(ROOT/'tests/metal3_encode_test.m'),str(ROOT/'runtime/metal3_draw.m'),str(ROOT/'runtime/tbdr_plan.c'),str(ROOT/'runtime/page_guard.c'),str(ROOT/'runtime/shader_library.c'),
                 str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'),str(ROOT/'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'),
                 str(ROOT/'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'),'-framework','Foundation','-framework','Metal','-framework','CoreGraphics','-framework','ImageIO','-o',str(exe)],check=True)
-            p=subprocess.run([str(exe),case,directory],capture_output=True,text=True)
+            p=subprocess.run([str(exe),case,directory],capture_output=True,text=True,env=env)
             if p.returncode==77:self.skipTest('Host has no Metal device')
             return p
+    def test_tbdr_planning_gives_the_same_bytes_as_load_store(self):
+        import os,re
+        runs={}
+        for mode in ('0','1'):
+            p=self.run_case('tbdr',dict(os.environ,WONDER_TBDR=mode)); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode tbdr OK',p.stdout)
+            runs[mode]=re.search(r'tbdr bytes (\w+) (.*)',p.stdout).groups()
+        self.assertEqual(runs['0'][0],runs['1'][0])
+        self.assertIn('tbdr=off',runs['0'][1]); self.assertIn('folded_clears=0 dropped_clears=0 dontcare=0 stored=0',runs['0'][1])
+        self.assertIn('tbdr=on',runs['1'][1]); self.assertIn('folded_clears=2 dropped_clears=0 dontcare=1 stored=3',runs['1'][1])
     def test_draw_textured_triangle_with_depth(self):
         p=self.run_case('draw'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode draw OK',p.stdout)
     def test_back_facing_triangle_is_culled(self):
