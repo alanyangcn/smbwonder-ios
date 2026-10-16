@@ -158,6 +158,8 @@ uint64_t wonder_host_language(void) {
     if (!freopen(log.fileSystemRepresentation, "w", stderr)) return YES;
     setvbuf(stderr, NULL, _IOLBF, 0);
     report([NSString stringWithFormat:@"PROBE_RUN id=%@ pid=%d debugger=%d stage=%@",NSUUID.UUID.UUIDString,getpid(),debugger_attached(),[NSBundle.mainBundle objectForInfoDictionaryKey:@"WonderBootStage"]]);
+    for(NSString *k in [NSProcessInfo.processInfo.environment.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        if([k hasPrefix:@"WONDER_"]) report([NSString stringWithFormat:@"PROBE_ENV %@=%@",k,NSProcessInfo.processInfo.environment[k]]);
     UIApplication.sharedApplication.idleTimerDisabled=YES;
     report(@"PROBE_START: no existing game saves or source assets will be modified");
     void (^gameTask)(void)=^{
