@@ -1209,7 +1209,7 @@ static id<MTLTexture> readback_convert(id<MTLTexture> t, int level, int slice) {
         }
     }
     MTLPixelFormat f = t.pixelFormat;
-    int is_depth = f == MTLPixelFormatDepth32Float || f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8;
+    int is_depth = f == MTLPixelFormatDepth32Float || f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float_Stencil8;   // (Depth24Unorm_Stencil8 does not exist on iOS)
     if (!is_depth && (f == MTLPixelFormatStencil8 || f == MTLPixelFormatX32_Stencil8)) return nil;
     id<MTLTexture> view = [t newTextureViewWithPixelFormat:f textureType:MTLTextureType2D levels:NSMakeRange((NSUInteger)level, 1) slices:NSMakeRange((NSUInteger)slice, 1)];
     if (!view) return nil;
