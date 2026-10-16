@@ -92,6 +92,7 @@ static void draw_dump_flush(void) {
 // Draws left out by NVN render enable (SetRenderEnable(false) or a conditional render that evaluated to skip), reported
 // with NVN_QUEUE_SUBMIT every 600 submits (round171: are course hedges among them?).
 static unsigned disabled_draws, conditional_evals, conditional_skips;
+static int trace_replay_vs;   // the bound program's vertex shader is in WONDER_TRACE_VS
 static int frame_dump_every(void) { static int n = -1; if (n < 0) { const char *e = getenv("WONDER_FRAME_DUMP_EVERY"); n = e ? atoi(e) : 0; if (n < 0) n = 0; } return n; }
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
@@ -685,6 +686,16 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
             else { draw_state.program.code[st] = 0; draw_state.program.control[st] = NULL; draw_state.program.extra[st] = 0; draw_state.program.mask &= ~(1u << st); }
         }
         draw_state.program.serial = p.serial; draw_state.has_program = draw_state.program.mask != 0;
+        {   // Diagnostic (WONDER_TRACE_VS): replayed binds of listed vertex shaders, and whether a draw follows (draw() logs it)
+            const char *list = getenv("WONDER_TRACE_VS");
+            if (list && *list && (draw_state.program.mask & 1)) {
+                char vs[17]; wonder_nvn_shader_key(draw_state.program.control[0], vs); trace_replay_vs = 0;
+                for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) trace_replay_vs = 1; q += n; if (*q == ',') q++; }
+                static _Atomic unsigned logged;
+                if (trace_replay_vs && atomic_fetch_add(&logged, 1) < 200)
+                    wonder_nvn_report("NVN_TRACE_REPLAY_BIND vs=%s submit=%u command=%u render_enable=%d", vs, state.submits, state.commands, state.render_enable);
+            } else trace_replay_vs = 0;
+        }
         break;
     }
     case WONDER_NVN_CMD_BIND_VERTEX_ATTRIB:
@@ -724,6 +735,8 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         break;
     case WONDER_NVN_CMD_DRAW_ARRAYS: case WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED: case WONDER_NVN_CMD_DRAW_ELEMENTS_BASE_VERTEX:
     case WONDER_NVN_CMD_DRAW_ELEMENTS_INDIRECT: case WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED: {
+        if (trace_replay_vs) { static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 200)
+            wonder_nvn_report("NVN_TRACE_REPLAY_DRAW %s count=%llu render_enable=%d submit=%u", wonder_nvn_command_name(opcode), (unsigned long long)c->a[2], state.render_enable, state.submits); }
         if (!state.render_enable) { disabled_draws++; break; }
         struct wonder_nvn_draw_call d = {.primitive = (int)c->a[0], .instances = 1};
         if (opcode == WONDER_NVN_CMD_DRAW_ARRAYS || opcode == WONDER_NVN_CMD_DRAW_ARRAYS_INSTANCED) {
