@@ -281,12 +281,14 @@ static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *
     if (slot < 0) slot = (int)(((uintptr_t)cb >> 4) & 63);
     trace_bound[slot].cb = cb; memcpy(trace_bound[slot].vs, key, sizeof key);
     pthread_mutex_unlock(&trace_lock);
+    static _Atomic unsigned shown; if (atomic_fetch_add(&shown, 1) < 6) wonder_nvn_report("NVN_TRACE_BIND cb=%p vs=%s mask=%#x", cb, key, s ? s->mask : 0);
 }
 static void trace_draw(const void *cb, const char *what, int count) {
     const char *list = getenv("WONDER_TRACE_VS"); if (!list || !*list) return;
     char vs[17] = ""; pthread_mutex_lock(&trace_lock);
     for (int i = 0; i < 64; i++) if (trace_bound[i].cb == cb) { memcpy(vs, trace_bound[i].vs, sizeof vs); break; }
     pthread_mutex_unlock(&trace_lock);
+    { static _Atomic unsigned shown; if (atomic_fetch_add(&shown, 1) < 6) wonder_nvn_report("NVN_TRACE_SEEN cb=%p vs=%s %s", cb, vs, what); }
     int match = 0; for (const char *p = list; *p && !match; ) { size_t n = strcspn(p, ","); match = n && vs[0] && n <= strlen(vs) && !strncmp(p, vs, n); p += n; if (*p == ',') p++; }
     if (!match) return;
     static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) >= 400) return;
