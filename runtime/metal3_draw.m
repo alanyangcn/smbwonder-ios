@@ -682,6 +682,29 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
     NSString *key = @(d->fs_key); if ([done containsObject:key]) return; [done addObject:key];
     NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/TexDump"];
     [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    {   // The draw's data too: each uniform buffer both stages read (vec4 rows) and the first vertices' raw attribute words.
+        NSMutableString *text = [NSMutableString stringWithFormat:@"vs %s fs %s frame %u count %d\n", d->vs_key, d->fs_key, d->frame, d->count];
+        const struct wonder_shader_refl *rf[2] = {d->vr, d->fr};
+        for (int st = 0; st < 2; st++) for (int i = 0; i < rf[st]->ncbuf; i++) {
+            int slot = rf[st]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[st][slot]; if (!u->buffer) continue;
+            const float *f = (const float *)((const uint8_t *)((__bridge id<MTLBuffer>)u->buffer).contents + u->offset);
+            [text appendFormat:@"ubo stage %d slot %d size %zu\n", st, slot, u->size];
+            for (size_t r = 0; r < u->size / 16 && r < 128; r++) [text appendFormat:@"  [%zu] %g %g %g %g\n", r, f[4 * r], f[4 * r + 1], f[4 * r + 2], f[4 * r + 3]];
+        }
+        for (int a = 0; a < d->nattr; a++) {
+            [text appendFormat:@"attr %d (location %d) format %#x offset %u stream %u\n", a, d->vr->attr[a].location, d->attr[a].format, d->attr[a].offset, d->attr[a].stream];
+            if (d->attr[a].stream >= 16 || !(d->stream_mask >> d->attr[a].stream & 1)) continue;
+            const struct wonder_host_span *sp = &d->stream[d->attr[a].stream].span; uint32_t stride = d->stream[d->attr[a].stream].stride;
+            const uint8_t *base = (const uint8_t *)((__bridge id<MTLBuffer>)sp->buffer).contents + sp->offset;
+            for (uint32_t v = 0; v < 8 && (uint64_t)v * stride + d->attr[a].offset + 16 <= sp->size; v++) {
+                const uint32_t *w = (const uint32_t *)(base + (size_t)v * stride + d->attr[a].offset);
+                [text appendFormat:@"  v%u %08x %08x %08x %08x\n", v, w[0], w[1], w[2], w[3]];
+            }
+        }
+        NSString *name = [NSString stringWithFormat:@"%.8s-data.txt", d->fs_key];
+        [text writeToFile:[dir stringByAppendingPathComponent:name] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        fprintf(stderr, "HOST_TEX_DUMP Documents/TexDump/%s data\n", name.UTF8String);
+    }
     for (int i = 0; i < r->ntex; i++) {
         id<MTLTexture> t = textures[i]; int slot = r->tex[i].slot;
         if (!t || t.textureType != MTLTextureType2D || d->tex[1][slot].empty) continue;
