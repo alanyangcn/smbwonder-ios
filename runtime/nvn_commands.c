@@ -114,9 +114,16 @@ void wonder_nvnCommandBufferAddCommandMemory(void *cmdbuf, const void *pool, ptr
     uint8_t *c = cmdbuf_of(cmdbuf, "nvnCommandBufferAddCommandMemory");
     struct wonder_nvn_pool_view view;
     wonder_nvn_pool_check(pool, "nvnCommandBufferAddCommandMemory", &view);
-    if (offset < 0 || (offset & 3) || size < 512 || (size & 3) ||
-        (uint64_t)offset > view.size || size > view.size - (uint64_t)offset)
+    if (offset < 0 || (offset & 3) || size < 512 || (size & 3) || (uint64_t)offset > view.size)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferAddCommandMemory offset=%#tx size=%#zx", offset, size);
+    // The sdk (sdk+0x442f70) does not bound the grant by the pool: round126's game callback handed out 0x200 bytes at
+    // pool offset 0xfe30 of a 0x10000 pool (0x30 past its end, in the game's own memory after it). Accept it for
+    // plain pools, as the console does; virtual pools keep the mapping check below.
+    int past_pool = size > view.size - (uint64_t)offset;
+    if (past_pool) {
+        if (view.flags & 0x200) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferAddCommandMemory virtual pool offset=%#tx size=%#zx past %#llx", offset, size, (unsigned long long)view.size);
+        static int logged; if (logged++ < 4) wonder_nvn_report("NVN_COMMAND_MEMORY_PAST_POOL offset=%#tx size=%#zx pool=%#llx (accepted, as the sdk does)", offset, size, (unsigned long long)view.size);
+    }
     if (view.flags & (1 | 8))
         wonder_nvn_stop("NVN_UNSUPPORTED nvnCommandBufferAddCommandMemory inaccessible pool flags=%#x", view.flags);
     uint8_t *cursor = command_field(c, 0), *segment_start = command_field(c, 0x40);
@@ -134,8 +141,11 @@ void wonder_nvnCommandBufferAddCommandMemory(void *cmdbuf, const void *pool, ptr
         }
     } else if (cursor != segment_start)
         wonder_nvn_stop("NVN_INVALID_STATE nvnCommandBufferAddCommandMemory unrecorded bytes outside a recording");
-    wonder_nvn_pool_span(pool, (uint64_t)offset, size, &view);
-    if (view.size != size) wonder_nvn_stop("NVN_UNSUPPORTED command memory crosses physical mapping boundary");
+    if (past_pool) view.memory += offset, view.size = size;   // plain pool: guest memory continues past the pool
+    else {
+        wonder_nvn_pool_span(pool, (uint64_t)offset, size, &view);
+        if (view.size != size) wonder_nvn_stop("NVN_UNSUPPORTED command memory crosses physical mapping boundary");
+    }
     // Host GPU addresses are resource-address tokens equal to CPU addresses, never Metal GPU addresses.
     command_pointer(c, 0, view.memory);
     command_pointer(c, 8, view.memory + (size < 0x7ffffc ? size : 0x7ffffc));

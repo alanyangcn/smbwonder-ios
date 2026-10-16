@@ -386,7 +386,12 @@ int main(void) {
     memcpy(&raw_pointer, cmdbuf + 0x58, sizeof raw_pointer); assert(raw_pointer == descriptor_memory);
     EXPECT_STOP(add_command(cmdbuf, memory_pool, 2, 512), "NVN_INVALID_ARGUMENT");
     EXPECT_STOP(add_command(cmdbuf, memory_pool, 0, 128), "NVN_INVALID_ARGUMENT");
-    EXPECT_STOP(add_command(cmdbuf, memory_pool, pool_size, 512), "NVN_INVALID_ARGUMENT");
+    // Like the sdk (sdk+0x442f70), a plain-pool grant may run past the pool's end (round126: 0x200 at 0xfe30 of 0x10000).
+    add_command(cmdbuf, memory_pool, pool_size - 0x30, 512);
+    memcpy(&raw_pointer, cmdbuf, sizeof raw_pointer); assert(raw_pointer == descriptor_memory + pool_size - 0x30);
+    memcpy(&raw_pointer, cmdbuf + 0x18, sizeof raw_pointer); assert(raw_pointer == descriptor_memory + pool_size - 0x30 + 512);
+    EXPECT_STOP(add_command(cmdbuf, memory_pool, pool_size + 4, 512), "NVN_INVALID_ARGUMENT");
+    add_command(cmdbuf, memory_pool, 0, 0x1000);
     {   // Outside a recording, bytes between the segment start and the cursor would be lost: refuse.
         uintptr_t saved, moved; memcpy(&saved, cmdbuf, sizeof saved); moved = saved + 8; memcpy(cmdbuf, &moved, sizeof moved);
         EXPECT_STOP(add_command(cmdbuf, memory_pool, 0, 512), "NVN_INVALID_STATE");

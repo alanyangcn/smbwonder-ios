@@ -137,6 +137,14 @@ int wonder_nvnTextureBuilderGetStorageClass(const void *builder) {
 }
 
 // ---------- Textures ----------
+// Diagnostic (round126: text never drawn): the first R8 pitch-linear texture is the font glyph cache (2048x8192);
+// wonder_nvn_glyph_cache_nonzero samples its storage so the log tells whether glyphs are rasterized at all.
+static const uint8_t *glyph_cache; static uint64_t glyph_cache_size, glyph_cache_serial;
+size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial) {
+    size_t n = 0; if (serial) *serial = glyph_cache_serial;
+    for (uint64_t i = 0; glyph_cache && i < glyph_cache_size; i += 64) n += glyph_cache[i] != 0;
+    return n;
+}
 static int display_format(int format) { return format == 0x25 || format == 0x38 || format == 0x9A || format == 0x9C; }  // RGBA8(_SRGB), BGRA8(_SRGB)
 uint32_t wonder_nvnTextureInitialize(void *texture, const void *builder) {
     const struct texture_builder *b = tbuilder_of((void *)builder, "nvnTextureInitialize");
@@ -155,6 +163,9 @@ uint32_t wonder_nvnTextureInitialize(void *texture, const void *builder) {
             wonder_nvn_stop("NVN_UNSUPPORTED nvnTextureInitialize display texture target=%d levels=%u format=%#x", b->desc.target, b->desc.levels, (unsigned)b->desc.format);
         host = wonder_host_display_texture(b->desc.width, b->desc.height, b->desc.format);
         if (!host) wonder_nvn_stop("NVN_HOST_TEXTURE_FAILED nvnTextureInitialize %ux%u format=%#x", b->desc.width, b->desc.height, (unsigned)b->desc.format);
+    }
+    if (b->desc.format == 0x1 && (b->desc.flags & 0x10) && !(view.flags & 0x200)) {   // diagnostic: font glyph cache storage
+        glyph_cache = view.memory + b->offset; glyph_cache_size = L.size; glyph_cache_serial = atomic_load(&next_serial);
     }
     struct wonder_nvn_texture *t = texture;
     memset(t, 0, sizeof *t);
