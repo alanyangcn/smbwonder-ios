@@ -17,6 +17,15 @@
   - 文字：字体是矢量字体（bfttf/bfotf）运行时光栅化到 2048×8192 R8 线性字形缓存（swizzle 1,1,1,R），文字着色器以 2D 数组指令采样 2D 纹理（Maxwell 读第 0 层）→ 反射记录着色器声明类型、绑定 1 层 2D 数组视图。线性单层纹理改为内存池 MTLBuffer 上的零拷贝纹理（原先每次文字 draw 对 16 MiB 算哈希，选存档起明显卡顿，已改善）。**文字仍未显示**：UV 指向的行（≈7250）确有字形，常量/混合/顶点色正常，round133 起抓取文字目标纹理 `Documents/Text/` 继续查。
   - 新实现：多边形偏移（depth bias）、采样器 LOD bias 与 reduction（iOS 26+ `lodBias`/`reductionMode`）、GPU 纹理间 `CopyTextureToTexture`（blit）。
   - 诊断：`KERNEL_WAIT`（每 ~30 s 列出阻塞 ≥5 s 的客体线程及等待起点调用栈）、`NVN_NULL_POOL_DIAG`、`HOST_TEXT_DRAW`、`HOST_GLYPH_CACHE`。
+- round134–136（2026-10-16）：选人后停在加载页 / 闪退。
+  - round134（脚本按键）：选完角色后读完开场关卡 Course900 资源（present≈2300）就再无文件读取，加载画面持续 1 万多帧，`KERNEL_WAIT` 无阻塞线程。用户手动那次（round135-user）是**宿主代码**段错误（`SDK_HOST_ABORT_OBSERVER: fatal signal`，无位置）。`crash_report.c` 现在对宿主代码的故障也记 `HOST_FAULT`（符号 + 镜像偏移 + 帧链）后再交回原处理。
+  - round135 定位真正的停点：加载页第一次 **DispatchCompute**（submit 1113），回放当时不支持计算着色器。本轮实现计算派发：
+    - `BindProgram` 按 sdk+0x4672f0 语义：`stageBits & 程序阶段` 含计算位（bit 5，阶段位 = `1 << NVNshaderStage`）只换计算阶段，否则换整个图形部分；旧的 `0x11` 检查是错的（游戏一直传 0x1f 才没暴露）。
+    - `BindImage` 记录；派发按反射解析 uniform（`cbuf`，以及经 c[0][0x210+16r] 地址读的 `uptr`）、存储缓冲（c[0][0x310+16r]）、纹理、图像（c[2][0x120+8r]，sdk+0x46a280）；Metal 计算编码器派发，图像为带 ShaderWrite 的 GPU 纹理（`NVN_TEXTURE_FLAGS_IMAGE`）。CPU 内容尚未上传的图像被读、渲染关闭时的派发、线程组尺寸与控制段不符等都按名停止。
+    - 控制段（Lib/agl、Lib/gsys、Effect 共 58 个计算着色器普查）：线程组 x/y/z 在 +0x748，共享内存字节数在 +0x710；计算代码区没有 0x30 头 / SPH，翻译器从第 0 字节解码（与 D2R 一致）。普查目录 `DrawCensus/cs-<key>/`。
+    - 着色器积攒问题顺带修：片元/计算阶段 buffer 号可用 0..30（15、16..30 只对顶点阶段保留）；未启用的顶点属性按 float 声明（运行时给 (0,0,0,1)）。构建 135/138（原 130），剩 3 个片元着色器普查时纹理槽未绑定。
+  - 脚本按键后 1.5 s 自动截图（`Documents/Present/present-<帧>.png`，日志 `HOST_PRESENT_CAPTURE ... requested`）。
+  - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
 
 ## 首帧推进（2026-10-15，持续进行）

@@ -18,7 +18,8 @@ extern const uint64_t wonder_nvn_unimpl_stubs[WONDER_NVN_NAME_COUNT];
 
 // Per-call NVN reports are rate limited (log_throttle.h); WONDER_NVN_VERBOSE=1 prints every line.
 void wonder_nvn_report(const char *format, ...) {
-    char line[1024]; va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
+    static _Thread_local char line[2048];   // off the caller's stack: guest threads may run on small stacks
+    va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
     static int verbose = -1; if (verbose < 0) { const char *v = getenv("WONDER_NVN_VERBOSE"); verbose = v && *v && strcmp(v, "0"); }
     unsigned long count = 0;
     if (verbose || wonder_log_throttle(line, &count)) {
@@ -49,7 +50,7 @@ void wonder_nvn_diag_null_pool(void) {
     for (unsigned depth = 0; depth < 16 && fp && !(fp & 15) && guest_read(fp, frame, sizeof frame); depth++) {
         module_t *m = module_of((void *)frame[1]);
         if (m && !strcmp(m->name, "main") && frame[1] - (uint64_t)m->base == 0x10cfae0) {
-            uint64_t holder = 0, obj[0x30] = {0};
+            uint64_t holder = 0, obj[0x190 / 8] = {0};   // object +0x100 .. +0x290 (flag at +0x288)
             if (!guest_read(fp + 0x28, &holder, 8) || !holder) { LOG("NVN_NULL_POOL_DIAG no saved x21 at fp=%#llx", (unsigned long long)fp); return; }
             uint64_t object = holder - 0x178; int ok = guest_read(object + 0x100, obj, 0x190);
             uint64_t address = obj[0], allocator = obj[1], base = 0, size = 0, info = 0, info_base = 0;

@@ -59,6 +59,10 @@ int main(void) {
     assert(parse("stage ps\nlocal 1 1 1\n", &r, err) && strstr(err, "local"));          // compute-only lines
     assert(parse("stage cs\nlocal 1 1 1\nimg 0 1 2d x\n", &r, err) && strstr(err, "img"));
     assert(parse("stage cs\nlocal 1 1 1\nshared 40000\n", &r, err) && strstr(err, "shared"));
+    assert(!parse("stage cs\nlocal 1 1 1\ndrv 0 19\n", &r, err) && r.drv0_buffer == 19 && !r.drv_read);   // c[0] tables filled by the host
+    assert(!parse("stage ps\ndrv 2\n", &r, err) && r.drv_read == 4 && r.drv0_buffer == -1);              // c[2] at run time: not fillable
+    assert(parse("stage ps\ndrv 2 3\n", &r, err) && strstr(err, "drv"));
+    assert(parse("stage vs\ndrv 0 15\n", &r, err) && strstr(err, "drv"));                                 // vertex buffers 0..14
     puts("shader_library OK");
     return 0;
 }

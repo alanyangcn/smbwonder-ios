@@ -992,7 +992,7 @@ int main(void) {
               free(json); assert(census_count > files && host_dispatches == dispatches);
               snprintf(cs_file, sizeof cs_file, "%s/stage-0.control.bin", cs_dir); assert(census_file(cs_file, &n) && n == 0x880);
               // Translated: buffers / textures of stage 5 reach the host dispatch, and the graphics program still draws.
-              cs_available = 1; const char *cs_refl = "stage cs\nlocal 64 1 1\nshared 0\ncbuf 0 1\nsbuf 1 2 rw\ntex 0 3 0 2d\n";
+              cs_available = 1; const char *cs_refl = "stage cs\nlocal 64 1 1\nshared 0\ncbuf 0 1\nsbuf 1 2 rw\ntex 0 3 0 2d\ndrv 0 19\nuptr 0 20\n";
               assert(!wonder_shader_refl_parse(cs_refl, strlen(cs_refl), &fake_cs_refl, err, sizeof err) && fake_cs_refl.stage == 5);
               unsigned draws_before = host_draws;
               rbegin(dcb); bind(dcb, cs_program, 0x20); bind_ubo(dcb, 5, 0, (uintptr_t)(cb_memory + 0x9100), 0x100);
@@ -1003,6 +1003,11 @@ int main(void) {
               assert(x->cs == (void *)0xf005 && x->groups[0] == 4 && x->groups[1] == 2 && x->groups[2] == 1 && !x->indirect);
               assert(x->ubo[0].size == 0x100 && x->ubo[0].buffer && x->sbuf[1].size == 0x80 && x->sbuf[1].buffer);
               assert((x->res.tex_mask[0] & 1) && x->res.tex[0][0].texture.texture.desc.width == 128 && x->res.tex[0][0].sampler.valid);
+              // c[0] address tables: compute storage slot 1 at 0x310 + 16, uniform slot 0 at 0x210 (u64 address, u32 size).
+              uint64_t a64; uint32_t n32; memcpy(&a64, x->res.drv0 + 0x320, 8); memcpy(&n32, x->res.drv0 + 0x328, 4);
+              assert(a64 == (uintptr_t)(cb_memory + 0x9000) && n32 == 0x80);
+              memcpy(&a64, x->res.drv0 + 0x210, 8); memcpy(&n32, x->res.drv0 + 0x218, 4); assert(a64 == (uintptr_t)(cb_memory + 0x9100) && n32 == 0x100);
+              assert(x->uptr[0].size == 0x100 && x->uptr[0].buffer && fake_cs_refl.drv0_buffer == 19 && !fake_cs_refl.drv_read);
               // An empty grid runs nothing; a kernel built for another threadgroup size, an unbound image: stop by name.
               rbegin(dcb); disp(dcb, 0, 1, 1); h = rend(dcb); dsubmit(queue, 1, &h); assert(host_dispatches == dispatches + 1);
               fake_cs_refl.local[0] = 32; rbegin(dcb); disp(dcb, 1, 1, 1); h = rend(dcb); EXPECT_STOP(dsubmit(queue, 1, &h), "built for threadgroup 32x1x1");

@@ -160,6 +160,24 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
         out->tex[out_stage][slot].storage_buffer = v.host_buffer; out->tex[out_stage][slot].storage_buffer_offset = v.host_offset;
     }
 }
+// Driver constant segment c[0] as the NVN driver lays it out for the translated shaders' address arithmetic: per stage
+// its storage table (vertex 0x110, compute 0x310, fragment 0x510; 16 bytes per slot: u64 GPU address, u32 size) and the
+// compute uniform address table at 0x210 (wonder_shader_build.py check_driver_c0 limits reads to these tables).
+static void driver_c0(uint8_t out[0x700], int compute) {
+    memset(out, 0, 0x700);
+    static const struct { int stage, base; } storage[] = {{0, 0x110}, {5, 0x310}, {1, 0x510}};
+    for (unsigned t = 0; t < 3; t++) {
+        if ((storage[t].stage == 5) != compute) continue;
+        for (int r = 0; r < 16; r++) {
+            uint64_t a = draw_state.storage_buffer[storage[t].stage][r].address; uint32_t n = (uint32_t)draw_state.storage_buffer[storage[t].stage][r].size;
+            memcpy(out + storage[t].base + 16 * r, &a, 8); memcpy(out + storage[t].base + 16 * r + 8, &n, 4);
+        }
+    }
+    if (compute) for (int r = 0; r < 14; r++) {
+        uint64_t a = draw_state.uniform_buffer[5][r].address; uint32_t n = (uint32_t)draw_state.uniform_buffer[5][r].size;
+        memcpy(out + 0x210 + 16 * r, &a, 8); memcpy(out + 0x210 + 16 * r + 8, &n, 4);
+    }
+}
 // A program without translated shaders: noted once in the missing list (census written by the caller).
 static void note_missing(const char *pair) {
     for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) return;
@@ -207,6 +225,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         replay_stop(opcode, why);
     }
     d.vs = wonder_host_shader_function(d.vs_key, 0); d.fs = wonder_host_shader_function(d.fs_key, 1);
+    if (d.vr->drv0_buffer >= 0 || d.fr->drv0_buffer >= 0) driver_c0(d.drv0, 0);
     const struct wonder_shader_refl *refl[2] = {d.vr, d.fr};
     for (int stage = 0; stage < 2; stage++) {
         const struct wonder_shader_refl *r = refl[stage];
@@ -304,7 +323,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         if (n < 6) {
             uint64_t sa = draw_state.storage_buffer[0][0].address, ss = draw_state.storage_buffer[0][0].size;
             uint64_t ua = draw_state.uniform_buffer[0][0].address, us = draw_state.uniform_buffer[0][0].size;
-            char line[900]; int k = snprintf(line, sizeof line, "HOST_TEXT_DRAW #%d %s-%s prim=%d count=%d first=%d instances=%d base_instance=%d sbuf=%#llx+%#llx c3=%#llx+%#llx",
+            char line[1600]; int k = snprintf(line, sizeof line, "HOST_TEXT_DRAW #%d %s-%s prim=%d count=%d first=%d instances=%d base_instance=%d sbuf=%#llx+%#llx c3=%#llx+%#llx",
                 n, d.vs_key, d.fs_key, call.primitive, call.count, call.first, call.instances, call.base_instance,
                 (unsigned long long)sa, (unsigned long long)ss, (unsigned long long)ua, (unsigned long long)us);
             if (sa && ss >= 64) { make_cpu_visible(sa, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(sa, 64, &v); const float *f = (const float *)v.memory; const int32_t *iv = (const int32_t *)v.memory;
@@ -326,6 +345,8 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             k += snprintf(line + k, sizeof line - k, " blend_en=%#x blend0=%u/%u/%u %u/%u/%u mask=%#x depth=%u/%u/%u", d.color.blend_en, d.blend[0].src_rgb, d.blend[0].dst_rgb, d.blend[0].eq_rgb,
                           d.blend[0].src_a, d.blend[0].dst_a, d.blend[0].eq_a, d.channel_mask.mask, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df);
             if (n < 3 && d.targets[0].valid && text_pending < 3) text_targets[text_pending++] = d.targets[0];
+            k += snprintf(line + k, sizeof line - k, " vp=%s%g,%g %gx%g sc=%s%d,%d %dx%d dr=%g..%g", d.viewport_set ? "" : "(unset)", d.viewport[0], d.viewport[1], d.viewport[2], d.viewport[3],
+                          d.scissor_set ? "" : "(unset)", d.scissor[0], d.scissor[1], d.scissor[2], d.scissor[3], d.depth_range[0], d.depth_range[1]);
             for (int i = 0; i < d.color_count && i < 1; i++) if (d.targets[i].valid)
                 k += snprintf(line + k, sizeof line - k, " rt0=%llu:%ux%u fmt=%#x", (unsigned long long)d.targets[i].texture.serial, d.targets[i].texture.desc.width, d.targets[i].texture.desc.height, d.targets[i].texture.desc.format);
             wonder_nvn_report("%s", line);
@@ -393,6 +414,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
     }
     if (r->drv_read) { snprintf(why, sizeof why, "compute reads a driver constant segment (c0/c2 mask %#x) at run time", r->drv_read); replay_stop(opcode, why); }
     x.cs = wonder_host_shader_function(x.key, 5);
+    if (r->drv0_buffer >= 0) driver_c0(x.res.drv0, 1);
     for (int i = 0; i < r->ncbuf; i++) {
         int slot = r->cbuf[i].slot;
         if (!draw_state.uniform_buffer[5][slot].address) { snprintf(why, sizeof why, "unbound uniform buffer compute slot %d", slot); replay_stop(opcode, why); }

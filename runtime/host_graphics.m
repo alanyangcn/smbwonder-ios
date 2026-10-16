@@ -224,13 +224,13 @@ static int present_setup(void){
 // Requested captures (scripted input asks for one 1.5 s after each press, host_input.m): the next present is saved.
 static _Atomic int capture_requested;
 void wonder_host_request_present_capture(void){ atomic_store(&capture_requested,1); }
-static void capture_present(id<MTLTexture> t){
+static void capture_present(id<MTLTexture> t,const int crop[4]){   // saved as the crop rectangle (what the screen shows)
  static unsigned presents, saved, every, limit; unsigned n=++presents;
  if(atomic_exchange(&capture_requested,0)){
   NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
   [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
   NSString *path=[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]];
-  int r=wonder_host_readback_png((__bridge void*)t,0,0,path.fileSystemRepresentation);
+  int r=wonder_host_readback_png_rect((__bridge void*)t,0,0,crop,path.fileSystemRepresentation);
   fprintf(stderr,"HOST_PRESENT_CAPTURE Documents/Present/present-%u.png requested result=%d\n",n,r);
   return;
  }
@@ -240,12 +240,12 @@ static void capture_present(id<MTLTexture> t){
  if(!(n<=5||(saved<limit&&n%every==0)||n%1800==0)) return;
  NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
  [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
- if(!wonder_host_readback_png((__bridge void*)t,0,0,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]].fileSystemRepresentation)) saved++;
+ if(!wonder_host_readback_png_rect((__bridge void*)t,0,0,crop,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]].fileSystemRepresentation)) saved++;
 }
 int wonder_host_present(void *texture,const int crop[4],int interval){
  (void)interval;
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t||!device||!surface) return EINVAL;
- capture_present(t);
+ capture_present(t,crop);
  static unsigned presents; if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
   task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; uint64_t footprint=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0;
   pthread_mutex_lock(&replay_mutex); unsigned targets=wonder_storage_count(); pthread_mutex_unlock(&replay_mutex);

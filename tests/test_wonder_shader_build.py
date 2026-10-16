@@ -83,6 +83,13 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(build.image_slot(0x120 // 4, 2), 0); self.assertEqual(build.image_slot(0x138 // 4, -1), 3)
         for bad in (0x118 // 4, 0x160 // 4):
             with self.assertRaises(ValueError): build.image_slot(bad, -1)
+    def test_driver_c0_reads(self):
+        # round136 cs-1fb9d970e6bbceb8 reads c[0] at 0x290 / 0x2e0 (uniform address table) and 0x310 / 0x350 (storage table).
+        msl = 'kernel void main0(constant _16& cp_c0 [[buffer(19)]])\n x = cp_c0._m0[41].x + cp_c0._m0[49].y + cp_c0._m0[53].x;'
+        build.check_driver_c0(msl, 19, 'cs')
+        with self.assertRaises(ValueError): build.check_driver_c0(msl.replace('[41]', '[20]'), 19, 'cs')   # 0x140: not a table
+        with self.assertRaises(ValueError): build.check_driver_c0(msl, 19, 'ps')                           # fragment table is 0x510
+        with self.assertRaises(ValueError): build.check_driver_c0(msl + ' wonder_cb(cp_c0._m0, i)', 19, 'cs')
     def test_image_formats(self):
         self.assertEqual(build.image_format(0x25), 'R8G8B8A8Unorm'); self.assertEqual(build.image_format(0x29), 'R16G16B16A16Float')
         self.assertEqual(build.image_format(0xa), 'R32Float'); self.assertEqual(build.image_format(0x3f), 'R11G11B10Float')

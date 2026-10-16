@@ -11,7 +11,7 @@ static int texture_type_of(const char *s) {
 }
 static int hex_value(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *r, char *err, size_t n) {
-    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1; r->depth_minus_one = -1;
+    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
     size_t at = 0; unsigned line_no = 0;
     while (at < size) {
         size_t end = at; while (end < size && text[end] != '\n') end++;
@@ -70,8 +70,12 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             if (sscanf(line, "depth %15s", word) != 1 || (strcmp(word, "minus_one") && strcmp(word, "zero"))) return fail(err, n, "depth line %u: minus_one or zero", line_no);
             r->depth_minus_one = !strcmp(word, "minus_one");
         } else if (!strcmp(kind, "drv")) {
-            if (sscanf(line, "drv %d", &a) != 1 || (a != 0 && a != 2)) return fail(err, n, "drv line %u: bank must be 0 or 2", line_no);
-            r->drv_read |= (uint8_t)(1u << a);
+            int got = sscanf(line, "drv %d %d", &a, &b);
+            if (got < 1 || (a != 0 && a != 2)) return fail(err, n, "drv line %u: bank must be 0 or 2", line_no);
+            if (got == 2) {   // c[0] whose reads the build proved to lie in the buffer address tables: the host fills it
+                if (a != 0 || b < 0 || b >= buffers) return fail(err, n, "drv line %u: only c[0] takes a buffer, within the stage's bindings", line_no);
+                r->drv0_buffer = b;
+            } else r->drv_read |= (uint8_t)(1u << a);
         } else if (!strcmp(kind, "tex")) {
             if (sscanf(line, "tex %d %d %d %15s", &a, &b, &c, word) != 4 || a < 0 || a > 31 || b < 0 || b > 95 || c < 0 || c > 15 || r->ntex >= 40)
                 return fail(err, n, "tex line %u: slot 0..31, texture 0..95, sampler 0..15", line_no);

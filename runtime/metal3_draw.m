@@ -511,7 +511,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // Resolve every resource before taking the replay lock: texture lookups and render-target creation take the same
     // (non-recursive) lock in host_graphics.m (round55 deadlocked at the first draw).
     const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
-    id<MTLTexture> textures[2][40]; id<MTLSamplerState> sampler_states[2][40]; id<MTLBuffer> c1_buffers[2] = {nil, nil};
+    id<MTLTexture> textures[2][40]; id<MTLSamplerState> sampler_states[2][40]; id<MTLBuffer> c1_buffers[2] = {nil, nil}, drv0_buffers[2] = {nil, nil};
     for (int stage = 0; stage < 2; stage++) {
         const struct wonder_shader_refl *r = refl[stage];
         for (int i = 0; i < r->ntex; i++) {
@@ -528,6 +528,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
             c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
         }
+        if (r->drv0_buffer >= 0) { drv0_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(drv0_buffers[stage].contents, d->drv0, sizeof d->drv0); }
         if (r->support >= 0 && !support_buffer) {   // Ryujinx support buffer (layout per D2R nvn_mtl.m): render_scale[0..72].x = 1, everything else 0
             support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
             for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
@@ -593,6 +594,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         for (int i = 0; i < r->ncbuf; i++) buffer(ubo_copies[stage][r->cbuf[i].slot], 0, r->cbuf[i].buffer);
         for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][r->sbuf[i].slot]; buffer((__bridge id<MTLBuffer>)sb->buffer, sb->offset, r->sbuf[i].buffer); }
         if (r->c1_buffer >= 0) buffer(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
+        if (r->drv0_buffer >= 0) buffer(drv0_buffers[stage], 0, (NSUInteger)r->drv0_buffer);
         if (r->support >= 0) buffer(support_buffer, 0, (NSUInteger)r->support);
         for (int i = 0; i < r->ntex; i++) {
             if (stage) { [e setFragmentTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setFragmentSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
@@ -680,8 +682,9 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
                   : [t newTextureViewWithPixelFormat:t.pixelFormat textureType:type levels:NSMakeRange(level, 1) slices:range];
         if (!images[i]) unsupported(d, "image view creation, serial", (long)s->texture.serial);
     }
-    id<MTLBuffer> c1_buffer = nil;
+    id<MTLBuffer> c1_buffer = nil, drv0_buffer = nil;
     if (r->c1_buffer >= 0) { c1_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffer.contents, r->c1, r->c1_len); }
+    if (r->drv0_buffer >= 0) { drv0_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(drv0_buffer.contents, d->drv0, sizeof d->drv0); }
     if (r->support >= 0 && !support_buffer) {
         support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
         for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
@@ -710,6 +713,7 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
     for (int i = 0; i < r->nuptr; i++) { const struct wonder_host_span *u = &x->uptr[r->uptr[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)u->buffer offset:u->offset atIndex:r->uptr[i].buffer]; }
     for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &x->sbuf[r->sbuf[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)sb->buffer offset:sb->offset atIndex:r->sbuf[i].buffer]; }
     if (c1_buffer) [e setBuffer:c1_buffer offset:0 atIndex:(NSUInteger)r->c1_buffer];
+    if (drv0_buffer) [e setBuffer:drv0_buffer offset:0 atIndex:(NSUInteger)r->drv0_buffer];
     if (r->support >= 0) [e setBuffer:support_buffer offset:0 atIndex:(NSUInteger)r->support];
     for (int i = 0; i < r->ntex; i++) { [e setTexture:textures[i] atIndex:r->tex[i].texture]; [e setSamplerState:sampler_states[i] atIndex:r->tex[i].sampler]; }
     for (int i = 0; i < r->nimg; i++) [e setTexture:images[i] atIndex:r->img[i].texture];
@@ -864,19 +868,26 @@ int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, in
 }
 
 // ---------- Render target readback (evidence) ----------
-int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) {
+int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) { return wonder_host_readback_png_rect(texture, level, slice, NULL, path_c); }
+// rect {x, y, w, h} within the level (NULL = the whole level): presents are saved as their crop rectangle, as displayed.
+int wonder_host_readback_png_rect(void *texture, int level, int slice, const int rect[4], const char *path_c) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
     if (!t || !device || !path_c) return 1;
     MTLPixelFormat f = t.pixelFormat;
     int bgra = f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB;
     if (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB) return 2;
-    NSUInteger w = MAX((NSUInteger)1, t.width >> level), h = MAX((NSUInteger)1, t.height >> level), pitch = w * 4;
+    NSUInteger lw = MAX((NSUInteger)1, t.width >> level), lh = MAX((NSUInteger)1, t.height >> level), x0 = 0, y0 = 0, w = lw, h = lh;
+    if (rect) {
+        if (rect[0] < 0 || rect[1] < 0 || rect[2] <= 0 || rect[3] <= 0 || (NSUInteger)rect[0] + (NSUInteger)rect[2] > lw || (NSUInteger)rect[1] + (NSUInteger)rect[3] > lh) return 3;
+        x0 = (NSUInteger)rect[0]; y0 = (NSUInteger)rect[1]; w = (NSUInteger)rect[2]; h = (NSUInteger)rect[3];
+    }
+    NSUInteger pitch = w * 4;
     id<MTLBuffer> out = [device newBufferWithLength:pitch * h options:MTLResourceStorageModeShared];
     NSString *path = [NSString stringWithUTF8String:path_c];
     wonder_host_replay_lock();
     id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
-    [b copyFromTexture:t sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+    [b copyFromTexture:t sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level sourceOrigin:MTLOriginMake(x0, y0, 0) sourceSize:MTLSizeMake(w, h, 1)
               toBuffer:out destinationOffset:0 destinationBytesPerRow:pitch destinationBytesPerImage:pitch * h];
     [b endEncoding];
     [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {

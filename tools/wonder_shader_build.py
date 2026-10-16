@@ -8,6 +8,7 @@ formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl
 Wonder SDK conventions (verified in sdk, not D2R's): uniform buffer r = c[3 + r] (BindUniformBuffer sdk+0x467950 writes
 slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x468840 writes at r * 8 + 0x20).
 .refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
+             drv 0 <buffer> (c[0] read only inside the buffer address tables, filled by the host);
              tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>;
              compute: local <x> <y> <z>; shared <bytes>; uptr <r> <buffer> (uniform slot r read through its address in
              c[0][0x210 + 16r]); img <r> <texture> <type> r|w|rw (image slot r = handle at c[2][0x120 + 8r]).
@@ -80,6 +81,22 @@ def storage_slot(cb_offset_words, stage):
     if offset < 0 or offset % 16 or offset // 16 > 15: raise ValueError(f'storage buffer address at c[0] word {cb_offset_words} is outside the {stage} table')
     return offset // 16
 
+def driver_c0_ranges(stage):
+    """Byte ranges of driver constant segment c[0] the host fills (nvn_queue.c driver_c0): the stage's storage buffer
+    table (base + 16 r: u64 GPU address, u32 size) and, for compute, the uniform address table at 0x210 + 16 r."""
+    ranges = [(STORAGE_BASE[stage], STORAGE_BASE[stage] + 0x100)]
+    if stage == 'cs': ranges.append((UNIFORM_POINTER_BASE, UNIFORM_POINTER_BASE + 0x100))
+    return ranges
+def check_driver_c0(msl, binding, stage):
+    """Reads of c[0] (the translator's global-to-storage rewrite subtracts buffer base addresses read from c[0]) must be
+    constant offsets inside the tables the host fills; anything else would read zeros where Maxwell has driver data."""
+    m = re.search(rf'constant \w+& (\w+) \[\[buffer\({binding}\)\]\]', msl)
+    if not m: raise ValueError(f'c[0] binding {binding} missing from the MSL entry')
+    name = m.group(1)
+    if re.search(rf'wonder_cb\({name}\._m0,', msl): raise ValueError('c[0] read with a dynamic index')
+    offsets = {int(i) * 16 for i in re.findall(rf'\b{name}\._m0\[(\d+)u?\]', msl)}
+    bad = sorted(o for o in offsets if not any(lo <= o < hi for lo, hi in driver_c0_ranges(stage)))
+    if bad: raise ValueError(f'c[0] read at {", ".join(hex(o) for o in bad)} outside the storage/uniform address tables')
 def cbuf_kind(slot):
     if 3 <= slot <= 16: return ('cbuf', slot - 3)
     if slot == 1: return ('c1', None)
@@ -172,7 +189,9 @@ def reflect(census, stage_entry, job, res, msl, c1):
     for cb in res['cbufs']:
         kind, r = cbuf_kind(cb['slot'])
         if cb['binding'] not in buffers: raise ValueError(f"cbuf c[{cb['slot']}] binding {cb['binding']} missing from the MSL entry")
-        lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
+        if kind == 'drv' and r == 0:
+            check_driver_c0(msl, cb['binding'], job['stage']); lines.append(f"drv 0 {cb['binding']}")
+        else: lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
         used.add(cb['binding'])
     if res['images'] and job['stage'] != 'cs': raise ValueError('images outside compute are not built yet')
     images_bound = {i['index'] for i in census.get('images', []) if i['stage'] == stage_no and i['texture']}
@@ -236,12 +255,15 @@ def stage_job(directory, census, entry, tmp):
     code = (directory / f"stage-{entry['index']}.code.bin").read_bytes()
     if sha(control[:0x880])[:16] != key: raise ValueError(f'{key}: control bytes do not hash to the census key')
     # Graphics code = NVN header 0x30 (magic 78563412) + SPH 0x50 + instructions; the translator takes SPH + instructions.
-    # Compute code has neither (no headed code area in Lib/agl carries a compute SPH; D2R dmsh_build passes compute
-    # code from its first byte): the translator decodes from offset 0.
+    # Compute code = a 0x100-byte header (magic 79563412, the rest zero) + instructions (round136 cs-1fb9d970e6bbceb8:
+    # instructions 0x4000 bytes from +0x100, c1 at +0x4100; the 58 compute controls in Lib/agl, Lib/gsys and Effect all
+    # put c1 at align(0x100 + instruction bytes, 0x100)); the translator takes the instructions.
     if len(code) != entry['code_size']: raise ValueError(f'{key}: code size differs from the census')
-    headed = code[:4] == bytes.fromhex('78563412')
-    if headed == (entry['stage'] == 5): raise ValueError(f"{key}: {'compute code starts with' if headed else 'graphics code lacks'} the NVN code header (first bytes {code[:16].hex()})")
-    sph = tmp / f'{key}.sph'; sph.write_bytes(code if entry['stage'] == 5 else code[0x30:])
+    compute = entry['stage'] == 5
+    if compute and (code[:4] != bytes.fromhex('79563412') or any(code[4:0x100])):
+        raise ValueError(f'{key}: compute code does not start with the 0x100-byte NVN compute header (first bytes {code[:16].hex()})')
+    if not compute and code[:4] != bytes.fromhex('78563412'): raise ValueError(f'{key}: graphics code lacks the NVN code header (first bytes {code[:16].hex()})')
+    sph = tmp / f'{key}.sph'; sph.write_bytes(code[0x100:entry['c1_offset']] if compute else code[0x30:])
     job = job_for(census, entry, sph); job['c1'] = code[entry['c1_offset']:entry['code_size']].hex()
     return job
 

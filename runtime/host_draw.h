@@ -26,6 +26,10 @@ struct wonder_host_draw {
     float viewport[4]; int viewport_set; float depth_range[2]; int scissor[4]; int scissor_set;
     int depth_mode, window_origin;
     int depth_bias_enabled; float depth_bias, depth_bias_slope, depth_bias_clamp;   // NVN polygon offset (units, factor, clamp)
+    // Driver constant segment c[0] (bytes 0..0x700) for stages whose reflection has "drv 0 <buffer>": buffer address
+    // tables (storage vertex 0x110 / compute 0x310 / fragment 0x510, compute uniforms 0x210; 16 bytes per slot:
+    // u64 NVN GPU address, u32 size), filled by the replay from the bound buffers.
+    uint8_t drv0[0x700];
 };
 // One compute dispatch, resolved by the replay like a draw. Textures and samplers are in res.tex[0][slot] (res is the
 // texture context sampled_texture() reads; res.vs_key holds the compute key for messages). Images are GPU-resident
@@ -58,6 +62,7 @@ void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t); //
 // Evidence: after the submit holding the first executed draw, its first colour target is written as a PNG once the GPU
 // is done (host_graphics.m: Documents/FirstDraw/target-0.png). RGBA8/BGRA8 (+sRGB) only; other formats return non-zero.
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path);
+int wonder_host_readback_png_rect(void *texture, int level, int slice, const int rect[4], const char *path);   // rect NULL = whole level
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target);
 int wonder_host_gpu_error(char *out, size_t size);
 void wonder_host_note_submit(unsigned submit);
