@@ -666,6 +666,31 @@ void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes) { *draws = 
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
 static id<MTLBuffer> support_buffer;
+// Diagnostic (WONDER_TEX_DUMP_FS=<fragment key prefix>[,<prefix>...]): the first draw of each listed fragment shader
+// saves every 2D texture it samples, each mip level, as Documents/TexDump/<fs>-s<slot>-t<serial>-f<format>-l<level>.png
+// (round155b: terrain masks that turn far hills blue).
+int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c);
+static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shader_refl *r, __strong id<MTLTexture> *textures) {
+    static const char *list = (const char *)1; static NSMutableSet<NSString *> *done;
+    if (list == (const char *)1) list = getenv("WONDER_TEX_DUMP_FS");
+    if (!list || !*list) return;
+    int match = 0; for (const char *p = list; *p && !match; ) { size_t n = strcspn(p, ","); match = n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n); p += n; if (*p == ',') p++; }
+    if (!match) return;
+    if (!done) done = [NSMutableSet set];
+    NSString *key = @(d->fs_key); if ([done containsObject:key]) return; [done addObject:key];
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/TexDump"];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    for (int i = 0; i < r->ntex; i++) {
+        id<MTLTexture> t = textures[i]; int slot = r->tex[i].slot;
+        if (!t || t.textureType != MTLTextureType2D || d->tex[1][slot].empty) continue;
+        for (NSUInteger level = 0; level < t.mipmapLevelCount && level < 13; level++) {
+            NSString *name = [NSString stringWithFormat:@"%.8s-s%d-t%llu-f%x-l%lu.png", d->fs_key, slot, (unsigned long long)d->tex[1][slot].texture.texture.serial,
+                              d->tex[1][slot].texture.texture.desc.format, (unsigned long)level];
+            int rc = wonder_host_readback_png((__bridge void *)t, (int)level, 0, [dir stringByAppendingPathComponent:name].fileSystemRepresentation);
+            fprintf(stderr, "HOST_TEX_DUMP Documents/TexDump/%s %lux%lu result=%d\n", name.UTF8String, (unsigned long)MAX(1u, t.width >> level), (unsigned long)MAX(1u, t.height >> level), rc);
+        }
+    }
+}
 int wonder_host_draw(const struct wonder_host_draw *d) {
     if (!device) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED no Metal device (vs=%s fs=%s)", d->vs_key, d->fs_key);
     // Fixed-function checks that need shader-side emulation are refused, not approximated.
@@ -780,6 +805,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
                 if (!textures[stage][i]) unsupported(d, "first layer of a 2D array as a 2D view, serial", (long)d->tex[stage][slot].texture.texture.serial);
             }
         }
+        if (stage == 1) tex_dump(d, r, textures[1]);
         if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
             c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
         }
@@ -1195,7 +1221,8 @@ int wonder_host_readback_png(void *texture, int level, int slice, const char *pa
 static NSString *const readback_source = @"#include <metal_stdlib>\nusing namespace metal;\n"
     "struct V { float4 p [[position]]; float2 uv; };\n"
     "vertex V rb_vs(uint id [[vertex_id]]) { float2 c = float2(id & 1, id >> 1); V o; o.p = float4(c.x * 2 - 1, 1 - c.y * 2, 0, 1); o.uv = c; return o; }\n"
-    "fragment float4 rb_color(V i [[stage_in]], texture2d<float> t [[texture(0)]]) { uint2 q = uint2(i.uv * float2(t.get_width(), t.get_height())); return float4(saturate(t.read(q).rgb), 1); }\n"
+    "constexpr sampler rb_s(filter::nearest, coord::normalized, address::clamp_to_edge);\n"
+    "fragment float4 rb_color(V i [[stage_in]], texture2d<float> t [[texture(0)]]) { return float4(saturate(t.sample(rb_s, i.uv).rgb), 1); }\n"
     "fragment float4 rb_depth(V i [[stage_in]], depth2d<float> t [[texture(0)]]) { uint2 q = uint2(i.uv * float2(t.get_width(), t.get_height())); float d = t.read(q); return float4(d, d, d, 1); }\n";
 static id<MTLTexture> readback_convert(id<MTLTexture> t, int level, int slice) {
     static id<MTLRenderPipelineState> color, depth;
