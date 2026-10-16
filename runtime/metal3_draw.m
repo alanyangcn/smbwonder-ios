@@ -680,10 +680,17 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
     if (!list || !*list) return;
     static int after = -1; if (after < 0) { const char *e = getenv("WONDER_TEX_DUMP_AFTER"); after = e ? atoi(e) : 0; }
     if (d->frame < (unsigned)after) return;
-    int match = 0; for (const char *p = list; *p && !match; ) { size_t n = strcspn(p, ","); match = n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n); p += n; if (*p == ',') p++; }
+    // Entries are a fragment key prefix, or "<vs prefix>-<fs prefix>" for one program (round170: prepass vs 1451a723).
+    int match = 0; for (const char *p = list; *p && !match; ) {
+        size_t n = strcspn(p, ","); const char *dash = memchr(p, '-', n);
+        if (dash) { size_t nv = (size_t)(dash - p), nf = n - nv - 1;
+            match = nv && nf && nv <= 16 && nf <= 16 && !strncmp(p, d->vs_key, nv) && !strncmp(dash + 1, d->fs_key, nf); }
+        else match = n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n);
+        p += n; if (*p == ',') p++;
+    }
     if (!match) return;
     if (!done) done = [NSMutableSet set];
-    NSString *key = @(d->fs_key); if ([done containsObject:key]) return; [done addObject:key];
+    NSString *key = [NSString stringWithFormat:@"%s-%s", d->vs_key, d->fs_key]; if ([done containsObject:key]) return; [done addObject:key];
     NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/TexDump"];
     [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     {   // The draw's data too: each uniform buffer both stages read (vec4 rows) and the first vertices' raw attribute words.
@@ -705,7 +712,7 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
                 [text appendFormat:@"  v%u %08x %08x %08x %08x\n", v, w[0], w[1], w[2], w[3]];
             }
         }
-        NSString *name = [NSString stringWithFormat:@"%.8s-data.txt", d->fs_key];
+        NSString *name = [NSString stringWithFormat:@"%.8s-%.8s-data.txt", d->vs_key, d->fs_key];
         [text writeToFile:[dir stringByAppendingPathComponent:name] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         fprintf(stderr, "HOST_TEX_DUMP Documents/TexDump/%s data\n", name.UTF8String);
     }
