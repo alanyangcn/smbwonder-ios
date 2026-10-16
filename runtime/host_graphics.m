@@ -224,7 +224,9 @@ static int present_setup(void){
 static void capture_present(id<MTLTexture> t){
  static unsigned presents, saved, every, limit; unsigned n=++presents;
  if(!every){ const char *e=getenv("WONDER_PRESENT_EVERY"); every=e&&atoi(e)>0?(unsigned)atoi(e):60; limit=e?60:20; }
- if(saved>=limit||!(n<=5||n%every==0)) return;
+ // The first frames and every `every` presents up to the limit, then one every 1800 presents (~30 s) for the rest of
+ // the run (a long scripted round shows where it got to).
+ if(!(n<=5||(saved<limit&&n%every==0)||n%1800==0)) return;
  NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
  [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
  if(!wonder_host_readback_png((__bridge void*)t,0,0,[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]].fileSystemRepresentation)) saved++;

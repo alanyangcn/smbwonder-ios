@@ -317,6 +317,10 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                 k += snprintf(line + k, sizeof line - k, " fs_c3[4..7]=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]", f[16], f[17], f[18], f[19], f[20], f[21], f[22], f[23], f[24], f[25], f[26], f[27], f[28], f[29], f[30], f[31]); }
             uint64_t fb = draw_state.uniform_buffer[1][1].address;
             if (fb) { make_cpu_visible(fb, 4); struct wonder_nvn_pool_view v; wonder_nvn_address_span(fb, 4, &v); k += snprintf(line + k, sizeof line - k, " fs_c4.x=%#x", *(const uint32_t *)v.memory); }
+            { const struct wonder_nvn_sampler_state *m = &d.tex[1][0].sampler; const struct wonder_nvn_texture_registration *r = &d.tex[1][0].texture;
+              wonder_nvn_report("HOST_TEXT_SAMPLER #%d smp=min%u mag%u wrap%u/%u/%u cmp%u/%u lod%g..%g bias%g aniso%g red%u tex=%llu view=%d lv=%d/%d", n,
+                            m->min, m->mag, m->wrap_s, m->wrap_t, m->wrap_r, m->compare_mode, m->compare_func, m->lod_min, m->lod_max, m->lod_bias, m->anisotropy,
+                            m->reduction, (unsigned long long)r->texture.serial, r->has_view, r->view.set_levels ? r->view.base_level : -1, r->view.set_levels ? r->view.levels : -1); }
             k += snprintf(line + k, sizeof line - k, " blend_en=%#x blend0=%u/%u/%u %u/%u/%u mask=%#x depth=%u/%u/%u", d.color.blend_en, d.blend[0].src_rgb, d.blend[0].dst_rgb, d.blend[0].eq_rgb,
                           d.blend[0].src_a, d.blend[0].dst_a, d.blend[0].eq_a, d.channel_mask.mask, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df);
             if (n < 3 && d.targets[0].valid && text_pending < 3) text_targets[text_pending++] = d.targets[0];
