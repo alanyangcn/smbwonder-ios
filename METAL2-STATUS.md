@@ -51,6 +51,13 @@
     - 诊断工具：WONDER_FRAME_DUMP_EVERY / WONDER_DRAW_DUMP（逐程序画面+深度）/ WONDER_TEX_DUMP_FS（贴图各级+alpha+常量与顶点数据）/ WONDER_DIAG_NODEPTH_FS / WONDER_SKIP_CS / WONDER_TRACE_VS（记录时绑定调用链、回放绑定/绘制）/ NVN_RENDER_ENABLE 计数。
     - **仍未解决：关卡前景灌木、斜坡草、音符块所在区域显示为清屏蓝色**。已确认：深度预通道（如 1451a723-2e8b0a9c，写深度+ID）每帧都画，同一网格的颜色通道（7c598128-571c2316，EQUAL）与低分辨率层通道（bc0e5f06-0f000c1e）**游戏根本没录制**（记录时追踪 0 次；round136 首次进关时曾录制）。排除：采样器上限、D24 精度（EQUAL→LEQUAL 无效）、CPU/GPU 竞争（SUBMIT_SYNC 无效）、条件渲染（0 次跳过绘制）、计算着色器 cs-45bc61e5。所有绘制都经 main+0x16b8fc→main+0x77b8d4（绑定材质程序）；渲染主循环 main+0x1108a0 按层调用 main+0x16b1f0 画各层清单——灌木颜色没进任何层的清单，下一步逆向分类/剔除逻辑。
     - 已知：从桌面切走后有时被系统以 signal 15 结束（另一个项目 zelda-la-mobile 同机安装/启动 App 时也会挤掉本 App）。
+  - round181–191（2026-10-17，**前景灌木/斜坡草/音符块变蓝的根因找到：着色器键撞车**）：
+    - 逐层真机采样（LLDB 附加运行中的游戏，不重启）：渲染主循环的层名为 Model(ZPrePass)/Model(Opa+AlphaMask)/AfterDepthSilhouette/Xlu/XluAfterDOF/DrawGIMapOpa，**没有整层被跳过**；main+0x77b810 按通道掩码 `[item+8]` 筛模型，预通道画过的每个模型都在 Opa 或 0x3 通道再画；main+0x1e555a0 → 0xe5fe0（选程序）全部返回成功。之前“颜色通道没录制”的结论错误（按 vs 名对不上，颜色通道用另一组 vs 变体）。
+    - 逐绘制日志（WONDER_DRAW_LOG 的帧界可由调试器改写；新增清屏颜色、写掩码、混合、深度、剔除、绕向）：场景缓冲 R11G11B10F 清成 (0.2, 0.3, 1.0)——蓝色是游戏自己的清屏色；前景剪影预通道 `*-f183cb0b` 写掩码 0、深度 LESS；**按索引数配对，每个前景预通道网格都有同网格的 EQUAL 颜色绘制**，但灌木处一像素未写。
+    - 对颜色着色器关深度+剔除（运行时 setenv WONDER_DIAG_NODEPTH_FS）灌木出现；只关深度（round188 WONDER_DEPTH_EQUAL_AS=always）或只关剔除（WONDER_DIAG_NOCULL_FS）都不出现 → 颜色绘制的几何与预通道不一致。常量转储（运行时改写 tex_dump 名单）：前景大面片预通道 b4c6c67e 与颜色 fbadfa4c-fb314975 的顶点、常量完全相同，但翻译出的 b4c6c67e 用 `-c4[8].y`（-19.5），颜色用 `+c4[8].x`（-746）；**原始 Maxwell 代码三处都是 `FADD …, c[0x4][0x80]`**，翻译结果不是这份代码。
+    - **根因**：着色器键只取控制段 sha256(control[0:0x880])；SecredUber 的 6494 个控制段里 **1395 个被代码不同的阶段共用（多出 2552 份代码）**（b4c6c67e 2 份、e50bb0ac 6 份、1451a723 4 份）。离线提取/普查对同一键只留第一份代码，运行时按键取 Metal 函数，于是这些阶段跑的是别的变体的代码。
+    - **修复**：键 = sha256(control[0:0x880] ‖ code[0:len])，len 为 control+0x704 的 u32（与设备普查字节核对：设备上的 e50bb0ac 代码与 6 份变体中恰好一份一致）。宿主在 nvnProgramSetShaders 时算一次存入程序快照（读不出代码按名停），回放绑定程序时随阶段拷贝；extract_shaders.py / wonder_shader_build.py 从字节重算键（旧普查目录名里的旧键不再采信）。新增回归测试：同控制段不同代码 → 不同键。宿主测试 113 项通过（2 项跳过）。
+    - 待真机：全量重新提取+构建着色器后装 round192，看灌木、斜坡草、音符块。
 
 ## 首帧推进（2026-10-15，持续进行）
 
