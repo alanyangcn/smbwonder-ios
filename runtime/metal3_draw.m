@@ -807,6 +807,11 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     }
     MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
     if ((d->states_set & 4) && d->depth_stencil.dt && pd.depthAttachmentPixelFormat) { dd.depthCompareFunction = compare(d, d->depth_stencil.df); dd.depthWriteEnabled = d->depth_stencil.dw; }
+    {   // Diagnostic (WONDER_DEPTH_EQUAL_LEQUAL=1): EQUAL without depth writes tested as LEQUAL (round164: are D24 depth
+        // pre-pass + EQUAL colour passes failing on Depth32Float?)
+        static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_LEQUAL"); on = e && *e == '1'; }
+        if (on && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled) dd.depthCompareFunction = MTLCompareFunctionLessEqual;
+    }
     NSData *ds_key = [NSData dataWithBytes:(uint32_t[]){(uint32_t)dd.depthCompareFunction, dd.depthWriteEnabled} length:8];
     id<MTLDepthStencilState> dss = depth_states[ds_key];
     if (!dss) { dss = [device newDepthStencilStateWithDescriptor:dd]; depth_states[ds_key] = dss; }
