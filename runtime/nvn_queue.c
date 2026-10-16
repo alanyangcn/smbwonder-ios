@@ -43,7 +43,7 @@ static void make_cpu_visible(uint64_t address, uint64_t size) {
     ubo_update_count = 0; ubo_update_overflow = 0;
 }
 // Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
-static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages;
+static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width;
                 float offset_factor, offset_units, offset_clamp; }
     raster = {.sample_mask = 0xffffffffu, .line_width = 1.0f};
 // Census-only: after the first draw whose program has no translated shaders, the rest of the submit only tracks state and
@@ -131,16 +131,52 @@ static void sync_draw_state(void) {
 static struct wonder_host_span span_of(unsigned opcode, uint64_t address, uint64_t size) {
     struct wonder_host_span s = {0}; host_span(address, size, opcode, &s.buffer, &s.offset); s.size = (size_t)size; return s;
 }
+// Texture slot (or bindless handle) of NVN stage `stage` read by reflection entry rt -> out->tex[out_stage][slot]: the pool
+// registration, its sampler and, for textures without a host GPU copy, the pool storage they are uploaded from.
+static void resolve_texture(unsigned opcode, int stage, const struct wonder_shader_tex *rt, struct wonder_host_draw *out, int out_stage) {
+    char why[320]; int slot = rt->slot; uint64_t h;
+    if (rt->bindless) {   // combined handle stored by the game in a uniform buffer (round86)
+        uint64_t base = draw_state.uniform_buffer[stage][rt->ubo_slot].address, size = draw_state.uniform_buffer[stage][rt->ubo_slot].size;
+        if (!base || rt->offset + 4u > size) { snprintf(why, sizeof why, "bindless texture handle: uniform slot %d not bound or too small (offset %#x)", rt->ubo_slot, rt->offset); replay_stop(opcode, why); }
+        make_cpu_visible(base + rt->offset, 4);   // round87: the handle was written by UpdateUniformBuffer in this submit
+        struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + rt->offset, 4, &v); uint32_t raw; memcpy(&raw, v.memory, 4); h = raw;
+    } else h = draw_state.texture_handle[stage][slot];
+    const struct wonder_nvn_texture_registration *t = h && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)(h & 0xfffff)) : NULL;
+    const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
+    if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
+    // NVN target (1D 0, 2D 1, 3D 2, 1D_ARRAY 3, 2D_ARRAY 4, 2DMS 5, 2DMS_ARRAY 6, RECTANGLE 7, CUBE 8, CUBE_ARRAY 9, BUFFER 10) -> reflection type.
+    static const int target_type[11] = {WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
+        WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER};
+    int target = t->has_view && t->view.set_target ? t->view.target : t->texture.desc.target;
+    int as_layer = (target == 1 || target == 7) && rt->type == WONDER_SHADER_TEX_2D_ARRAY;   // 2D sampled as a 1-layer array (Maxwell)
+    if (target < 0 || target > 10 || (target_type[target] != rt->type && !as_layer)) {
+        snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, rt->type); replay_stop(opcode, why);
+    }
+    out->tex[out_stage][slot].texture = *t; out->tex[out_stage][slot].sampler = *m; out->tex_mask[out_stage] |= 1ull << slot;
+    if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
+        struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
+        if (v.size < t->texture.size || !v.memory) { snprintf(why, sizeof why, "texture stage %d slot %d storage is not CPU-resolvable", stage, slot); replay_stop(opcode, why); }
+        out->tex[out_stage][slot].storage = v.memory; out->tex[out_stage][slot].storage_size = t->texture.size;
+        out->tex[out_stage][slot].storage_buffer = v.host_buffer; out->tex[out_stage][slot].storage_buffer_offset = v.host_offset;
+    }
+}
+// A program without translated shaders: noted once in the missing list (census written by the caller).
+static void note_missing(const char *pair) {
+    for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) return;
+    if (missing_programs < 256) snprintf(missing_pairs[missing_programs], sizeof missing_pairs[0], "%s", pair);
+    size_t used = strlen(missing_list);
+    if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
+    missing_programs++;
+}
 static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     call.name = wonder_nvn_command_name(opcode);
     sync_draw_state();
     char why[320], summary[160];
-    if (!draw_state.has_program || (draw_state.program.mask & 3) != 3 || (draw_state.program.mask & ~3u)) {
+    if ((draw_state.program.mask & 0x1f) != 3) {   // graphics stages: vertex + fragment only (a bound compute shader is not part of draws)
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
-        snprintf(why, sizeof why, "draw needs a vertex+fragment program (stages %#x); %s", draw_state.has_program ? draw_state.program.mask : 0, summary);
+        snprintf(why, sizeof why, "draw needs a vertex+fragment program (stages %#x); %s", draw_state.program.mask, summary);
         replay_stop(opcode, why);
     }
-    if ((raster.program_stages & 0x11) != 0x11) { snprintf(why, sizeof why, "program stage bits %#x do not bind both vertex and fragment", raster.program_stages); replay_stop(opcode, why); }
     if (raster.rasterizer_discard) replay_stop(opcode, "rasterizer discard is enabled (not executed yet)");
     if (raster.depth_clamp) replay_stop(opcode, "depth clamp is enabled (not executed yet)");
     if (raster.sample_mask != 0xffffffffu) { snprintf(why, sizeof why, "sample mask %#x is not all samples", raster.sample_mask); replay_stop(opcode, why); }
@@ -155,15 +191,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     wonder_nvn_shader_key(draw_state.program.control[0], d.vs_key); wonder_nvn_shader_key(draw_state.program.control[1], d.fs_key);
     if (!wonder_host_shader_available(d.vs_key) || !wonder_host_shader_available(d.fs_key)) {
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
-        char pair[40]; snprintf(pair, sizeof pair, "%s-%s", d.vs_key, d.fs_key);
-        int seen = 0;
-        for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) { seen = 1; break; }
-        if (!seen) {
-            if (missing_programs < 256) snprintf(missing_pairs[missing_programs], sizeof missing_pairs[0], "%s", pair);
-            size_t used = strlen(missing_list);
-            if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
-            missing_programs++;
-        }
+        char pair[40]; snprintf(pair, sizeof pair, "%s-%s", d.vs_key, d.fs_key); note_missing(pair);
         if (census_sweep()) { sweep_skipped++; return; }   // only this draw is left out
         if (!census_only) wonder_nvn_report("NVN_CENSUS_ONLY from command %u of submit %u: %s", state.commands, state.submits, summary);
         census_only = 1;
@@ -194,33 +222,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                 snprintf(why, sizeof why, "unbound storage buffer stage %d slot %d", stage, slot); replay_stop(opcode, why); }
             d.sbuf[stage][slot] = span_of(opcode, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
         }
-        for (int i = 0; i < r->ntex; i++) {
-            int slot = r->tex[i].slot; uint64_t h;
-            if (r->tex[i].bindless) {   // combined handle stored by the game in a uniform buffer (round86)
-                uint64_t base = draw_state.uniform_buffer[stage][r->tex[i].ubo_slot].address, size = draw_state.uniform_buffer[stage][r->tex[i].ubo_slot].size;
-                if (!base || r->tex[i].offset + 4u > size) { snprintf(why, sizeof why, "bindless texture handle: uniform slot %d not bound or too small (offset %#x)", r->tex[i].ubo_slot, r->tex[i].offset); replay_stop(opcode, why); }
-                make_cpu_visible(base + r->tex[i].offset, 4);   // round87: the handle was written by UpdateUniformBuffer in this submit
-                struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + r->tex[i].offset, 4, &v); uint32_t raw; memcpy(&raw, v.memory, 4); h = raw;
-            } else h = draw_state.texture_handle[stage][slot];
-            const struct wonder_nvn_texture_registration *t = h && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)(h & 0xfffff)) : NULL;
-            const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
-            if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
-            // NVN target (1D 0, 2D 1, 3D 2, 1D_ARRAY 3, 2D_ARRAY 4, 2DMS 5, 2DMS_ARRAY 6, RECTANGLE 7, CUBE 8, CUBE_ARRAY 9, BUFFER 10) -> reflection type.
-            static const int target_type[11] = {WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
-                WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER};
-            int target = t->has_view && t->view.set_target ? t->view.target : t->texture.desc.target;
-            int as_layer = (target == 1 || target == 7) && r->tex[i].type == WONDER_SHADER_TEX_2D_ARRAY;   // 2D sampled as a 1-layer array (Maxwell)
-            if (target < 0 || target > 10 || (target_type[target] != r->tex[i].type && !as_layer)) {
-                snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, r->tex[i].type); replay_stop(opcode, why);
-            }
-            d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1ull << slot;
-            if (!t->texture.host) {   // display textures are GPU-only; others are uploaded from their pool storage
-                struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
-                if (v.size < t->texture.size || !v.memory) { snprintf(why, sizeof why, "texture stage %d slot %d storage is not CPU-resolvable", stage, slot); replay_stop(opcode, why); }
-                d.tex[stage][slot].storage = v.memory; d.tex[stage][slot].storage_size = t->texture.size;
-                d.tex[stage][slot].storage_buffer = v.host_buffer; d.tex[stage][slot].storage_buffer_offset = v.host_offset;
-            }
-        }
+        for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, stage, &r->tex[i], &d, stage);
     }
     for (int i = 0; i < d.vr->nattr; i++) {
         int a = d.vr->attr[i].nvn;
@@ -359,6 +361,82 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     static _Atomic unsigned logged;
     if (atomic_fetch_add(&logged, 1) < 16)
         wonder_nvn_report("NVN_DRAW_EXECUTED %s vs=%s fs=%s count=%d instances=%d (submit %u command %u)", call.name, d.vs_key, d.fs_key, call.count, call.instances, state.submits, state.commands);
+}
+// Compute dispatches: the bound compute stage (BindProgram with the compute bit) resolved to its translated kernel and
+// every buffer / texture / image its reflection reads, like a draw. A kernel without a translation writes its census.
+static unsigned submit_dispatches;
+static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
+    struct wonder_nvn_draw_call call = {.name = wonder_nvn_command_name(opcode), .compute = 1, .index_type = -1};
+    if (opcode == WONDER_NVN_CMD_DISPATCH) { call.groups[0] = (int)c->a[0]; call.groups[1] = (int)c->a[1]; call.groups[2] = (int)c->a[2]; }
+    else call.indirect_address = c->a[0];
+    char why[320], summary[160];
+    if (!(draw_state.program.mask & 0x20)) {
+        snprintf(why, sizeof why, "dispatch without a bound compute shader (stages %#x)", draw_state.program.mask); replay_stop(opcode, why);
+    }
+    static struct wonder_host_dispatch x; memset(&x, 0, sizeof x);
+    wonder_nvn_shader_key(draw_state.program.control[5], x.key);
+    if (!wonder_host_shader_available(x.key)) {
+        wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
+        char pair[40]; snprintf(pair, sizeof pair, "cs-%s", x.key); note_missing(pair);
+        if (census_sweep()) { sweep_skipped++; return; }   // only this dispatch is left out
+        if (!census_only) wonder_nvn_report("NVN_CENSUS_ONLY from command %u of submit %u: %s", state.commands, state.submits, summary);
+        census_only = 1;
+        return;
+    }
+    if (census_only) return;
+    const struct wonder_shader_refl *r = x.r = wonder_host_shader_refl(x.key);
+    if (r->stage != 5) replay_stop(opcode, "shader reflection stage does not match the compute stage");
+    uint32_t local[3]; memcpy(local, (const uint8_t *)draw_state.program.control[5] + WONDER_NVN_CONTROL_LOCAL_SIZE, 12);
+    if (memcmp(local, r->local, 12)) {
+        snprintf(why, sizeof why, "kernel %s built for threadgroup %ux%ux%u, control says %ux%ux%u", x.key, r->local[0], r->local[1], r->local[2], local[0], local[1], local[2]);
+        replay_stop(opcode, why);
+    }
+    if (r->drv_read) { snprintf(why, sizeof why, "compute reads a driver constant segment (c0/c2 mask %#x) at run time", r->drv_read); replay_stop(opcode, why); }
+    x.cs = wonder_host_shader_function(x.key, 5);
+    for (int i = 0; i < r->ncbuf; i++) {
+        int slot = r->cbuf[i].slot;
+        if (!draw_state.uniform_buffer[5][slot].address) { snprintf(why, sizeof why, "unbound uniform buffer compute slot %d", slot); replay_stop(opcode, why); }
+        x.ubo[slot] = span_of(opcode, draw_state.uniform_buffer[5][slot].address, draw_state.uniform_buffer[5][slot].size);
+    }
+    for (int i = 0; i < r->nuptr; i++) {
+        int slot = r->uptr[i].slot;
+        if (!draw_state.uniform_buffer[5][slot].address) { snprintf(why, sizeof why, "unbound uniform buffer compute slot %d (read by address)", slot); replay_stop(opcode, why); }
+        x.uptr[slot] = span_of(opcode, draw_state.uniform_buffer[5][slot].address, draw_state.uniform_buffer[5][slot].size);
+    }
+    for (int i = 0; i < r->nsbuf; i++) {
+        int slot = r->sbuf[i].slot;
+        if (!draw_state.storage_buffer[5][slot].address || !draw_state.storage_buffer[5][slot].size) {
+            snprintf(why, sizeof why, "unbound storage buffer compute slot %d", slot); replay_stop(opcode, why); }
+        x.sbuf[slot] = span_of(opcode, draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
+    }
+    memcpy(x.res.vs_key, x.key, sizeof x.key); memcpy(x.res.fs_key, "-", 2);
+    for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, 5, &r->tex[i], &x.res, 0);
+    for (int i = 0; i < r->nimg; i++) {
+        int slot = r->img[i].slot; uint64_t h = draw_state.image_handle[5][slot];
+        const struct wonder_nvn_texture_registration *t = h && h < (1u << 20) && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)h) : NULL;
+        if (!t || !t->valid) { snprintf(why, sizeof why, "unbound image compute slot %d (handle %#llx)", slot, (unsigned long long)h); replay_stop(opcode, why); }
+        if (!(t->texture.desc.flags & 0x4)) { snprintf(why, sizeof why, "image slot %d texture serial %llu lacks NVN_TEXTURE_FLAGS_IMAGE", slot, (unsigned long long)t->texture.serial); replay_stop(opcode, why); }
+        if (t->has_view && (t->view.set_format || t->view.set_target || t->view.set_swizzle || (t->view.set_levels && t->view.levels > 1))) {
+            snprintf(why, sizeof why, "image slot %d: texture view other than one level / a layer range (serial %llu)", slot, (unsigned long long)t->texture.serial); replay_stop(opcode, why); }
+        // Images live on the GPU (they are written there). Reading one whose contents exist only in pool memory would need
+        // an upload into the writable texture first: refused until a kernel does it.
+        if ((r->img[i].access & 1) && !wonder_host_render_target_existing(&t->texture)) {
+            snprintf(why, sizeof why, "image slot %d read before the GPU wrote texture serial %llu (CPU-to-image upload not implemented)", slot, (unsigned long long)t->texture.serial); replay_stop(opcode, why); }
+        x.img[slot].image = (struct wonder_nvn_texture_snapshot){.texture = t->texture, .view = t->view, .has_view = t->has_view, .valid = 1};
+        x.img[slot].host = target_texture(&x.img[slot].image, opcode); x.img_mask |= (uint8_t)(1u << slot);
+    }
+    if (call.indirect_address) { x.indirect = 1; x.indirect_span = span_of(opcode, call.indirect_address, 12);
+                                 if (call.indirect_address & 3) replay_stop(opcode, "indirect dispatch arguments not 4-byte aligned"); }
+    else {
+        memcpy(x.groups, call.groups, sizeof x.groups);
+        if (!x.groups[0] || !x.groups[1] || !x.groups[2]) return;   // an empty grid runs nothing
+    }
+    if (wonder_host_dispatch(&x)) replay_stop(opcode, "host compute encoding failed");
+    submit_dispatches++;
+    static _Atomic unsigned logged;
+    if (atomic_fetch_add(&logged, 1) < 16)
+        wonder_nvn_report("NVN_DISPATCH_EXECUTED %s cs=%s groups=%d,%d,%d%s local=%ux%ux%u (submit %u command %u)", call.name, x.key, x.groups[0], x.groups[1], x.groups[2],
+                          x.indirect ? " (indirect)" : "", r->local[0], r->local[1], r->local[2], state.submits, state.commands);
 }
 static void replay_visit(unsigned opcode, const void *payload, size_t size, void *context);
 static void replay_handle(uint64_t handle, unsigned depth) {
@@ -502,11 +580,22 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
     case WONDER_NVN_CMD_RESET_COUNTER: replay_stop(opcode, "counter reset (occlusion/statistics counters not implemented)");
     // Draw state (snapshotted at record time; kept for draws and the census).
-    case WONDER_NVN_CMD_BIND_PROGRAM:
-        raster.program_stages = (unsigned)c->a[0];
-        draw_state.has_program = c->a[1] != 0;
-        memcpy(&draw_state.program, blob, sizeof draw_state.program);
+    case WONDER_NVN_CMD_BIND_PROGRAM: {
+        // SDK nvnCommandBufferBindProgram (sdk+0x4672f0): when stageBits & the program's stages include COMPUTE (bit 5;
+        // stage bits are 1 << NVNshaderStage) only the compute stage is bound; otherwise the program's whole graphics part
+        // replaces the graphics stages. Either way the other part stays bound. A NULL program unbinds the stages in stageBits.
+        struct wonder_nvn_program_shaders p; memcpy(&p, blob, sizeof p);
+        unsigned bits = (unsigned)c->a[0], take;
+        if (!c->a[1]) { p.mask = 0; take = bits & 0x3f; }
+        else take = (bits & p.mask & 0x20) ? 0x20 : 0x1f;
+        for (unsigned st = 0; st < 6; st++) if (take >> st & 1) {
+            if (p.mask >> st & 1) { draw_state.program.code[st] = p.code[st]; draw_state.program.control[st] = p.control[st];
+                                    draw_state.program.extra[st] = p.extra[st]; draw_state.program.mask |= 1u << st; }
+            else { draw_state.program.code[st] = 0; draw_state.program.control[st] = NULL; draw_state.program.extra[st] = 0; draw_state.program.mask &= ~(1u << st); }
+        }
+        draw_state.program.serial = p.serial; draw_state.has_program = draw_state.program.mask != 0;
         break;
+    }
     case WONDER_NVN_CMD_BIND_VERTEX_ATTRIB:
         draw_state.nattrib = (int)c->a[0]; memcpy(draw_state.attrib, blob, (size_t)draw_state.nattrib * 4); break;
     case WONDER_NVN_CMD_BIND_VERTEX_STREAM:
@@ -530,8 +619,8 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_BIND_MULTISAMPLE: memcpy(&draw_state.multisample, blob, sizeof draw_state.multisample); draw_state.states_set |= 16; break;
     case WONDER_NVN_CMD_BIND_STORAGE_BUFFER:
         draw_state.storage_buffer[c->a[0]][c->a[1]].address = c->a[2]; draw_state.storage_buffer[c->a[0]][c->a[1]].size = c->a[3]; break;
+    case WONDER_NVN_CMD_BIND_IMAGE: draw_state.image_handle[c->a[0]][c->a[1]] = c->a[2]; break;
     // Pure state not consumed by draws yet.
-    case WONDER_NVN_CMD_BIND_IMAGE:
     case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
     case WONDER_NVN_CMD_SET_DEPTH_BOUNDS:
     case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
@@ -559,7 +648,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         break;
     }
     case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT:
-        replay_stop(opcode, "compute execution needs translated shaders");
+        // Whether NVN's render enable (conditional rendering) also discards dispatches is not established: stop by name.
+        if (!state.render_enable) replay_stop(opcode, "dispatch while rendering is disabled (render enable semantics for compute not established)");
+        dispatch(opcode, c);
+        break;
     case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE: {
         struct { struct wonder_nvn_texture_snapshot s, d; struct wonder_nvn_copy_region sr, dr; } blob;
         if (c->blob_size != sizeof blob) replay_stop(opcode, "malformed copy record");
@@ -624,9 +716,9 @@ static void submit_on_replay_stack(void *arg) {
     atomic_store(&replay_owner, (pthread_t *)NULL);
     wonder_host_note_submit(submits);
     if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
-        wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u programs=%s", queue, submits, count, commands, clears,
-                          submit_draws, submit_programs[0] ? submit_programs : "-");
-    submit_draws = 0; submit_programs[0] = 0;
+        wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u dispatches=%u programs=%s", queue, submits, count, commands, clears,
+                          submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");
+    submit_draws = 0; submit_dispatches = 0; submit_programs[0] = 0;
 }
 void wonder_nvnQueueFlush(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFlush"); wonder_host_flush(); }
 void wonder_nvnQueueFinish(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFinish"); wonder_host_finish(); }

@@ -7,8 +7,10 @@ formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl
 
 Wonder SDK conventions (verified in sdk, not D2R's): uniform buffer r = c[3 + r] (BindUniformBuffer sdk+0x467950 writes
 slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x468840 writes at r * 8 + 0x20).
-.refl lines: stage vs|ps; depth minus_one|zero (vertex); cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
-             tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>.
+.refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
+             tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>;
+             compute: local <x> <y> <z>; shared <bytes>; uptr <r> <buffer> (uniform slot r read through its address in
+             c[0][0x210 + 16r]); img <r> <texture> <type> r|w|rw (image slot r = handle at c[2][0x120 + 8r]).
 Usage: wonder_shader_build.py <census dir>... --out <dir>
 """
 import argparse, hashlib, json, os, re, subprocess, tempfile
@@ -20,8 +22,9 @@ CROSS = ROOT / 'work/tools/spirv-cross/spirv-cross'
 NVN_H = ROOT / 'vendor/d2r-mobile/dm/gfx/nvn/include/nvn.h'
 CROSS_FLAGS = ['--msl', '--msl-ios', '--msl-version', '30200', '--msl-decoration-binding']
 TEX_TABLE, TEX_SLOTS = 0x20, 32
+IMG_TABLE, IMG_SLOTS = 0x120, 8   # nvnCommandBufferBindImage sdk+0x46a280: slot r at c[2][0x120 + 8r]
 TARGETS = {0: '1d', 1: '2d', 2: '3d', 3: '1darray', 4: '2darray', 5: '2dms', 6: '2dmsarray', 7: '2d', 8: 'cube', 9: 'cubearray', 10: 'buffer'}
-STAGES = {0: 'vs', 1: 'ps'}   # census stage → translator stage; others stop until a draw needs them
+STAGES = {0: 'vs', 1: 'ps', 5: 'cs'}   # census stage → translator stage; others stop until a draw needs them
 
 def sha(data): return hashlib.sha256(data).hexdigest()
 _formats = None
@@ -36,6 +39,23 @@ def component_type(fmt):
 def texture_type(target):
     if target not in TARGETS: raise ValueError(f'NVN texture target {target} unknown')
     return TARGETS[target]
+def image_slot(handle_word, cbuf_slot):
+    """Translator image handle (word offset into c[2]) → NVN image slot."""
+    if cbuf_slot not in (-1, 2): raise ValueError(f'image handle read from c[{cbuf_slot}], not c[2]')
+    offset = handle_word * 4 - IMG_TABLE
+    if offset < 0 or offset % 8 or offset // 8 >= IMG_SLOTS: raise ValueError(f'image handle word {handle_word} is outside c[2][0x120..0x160)')
+    return offset // 8
+def image_format(fmt):
+    """NVN format → Ryujinx TextureFormat name for image load/store (R8 → R8Unorm, RGBA16F → R16G16B16A16Float, ...)."""
+    global _formats
+    if _formats is None: component_type(1)
+    name = _formats.get(fmt, '')
+    special = {'RGB10A2': 'R10G10B10A2Unorm', 'RGB10A2UI': 'R10G10B10A2Uint', 'R11G11B10F': 'R11G11B10Float'}
+    if name in special: return special[name]
+    m = re.fullmatch(r'(R|RG|RGBA)(8|16|32)(SN|UI|I|F)?', name)
+    if not m: raise ValueError(f'NVN format {name or fmt} has no image format')
+    comps, bits, kind = m.group(1), m.group(2), m.group(3) or ''
+    return ''.join(f'{c}{bits}' for c in ('R', 'G', 'B', 'A')[:{'R': 1, 'RG': 2, 'RGBA': 4}[comps]]) + {'': 'Unorm', 'SN': 'Snorm', 'UI': 'Uint', 'I': 'Sint', 'F': 'Float'}[kind]
 def texture_slot(handle_word, cbuf_slot):
     """Translator texture handle (32-bit word offset into the bindless constant buffer) → NVN texture slot."""
     if cbuf_slot not in (-1, 2): raise ValueError(f'texture handle read from c[{cbuf_slot}], not c[2]')
@@ -48,7 +68,12 @@ def sampler_type_name(t):
     if not base: raise ValueError(f'sampler type {t:#x} unknown')
     return base + ('ms' if t & 0x200 else '') + ('array' if t & 0x100 else '')
 
-STORAGE_BASE = {'vs': 0x110, 'ps': 0x510}   # Wonder SDK BindStorageBuffer table sdk+0xac558c (x16 bytes)
+STORAGE_BASE = {'vs': 0x110, 'cs': 0x310, 'ps': 0x510}   # Wonder SDK BindStorageBuffer table sdk+0xac558c (x16 bytes); compute per D2R dmsh_build
+UNIFORM_POINTER_BASE = 0x210   # compute: uniform slot r is read through global memory at the address in c[0][0x210 + 16 r] (D2R dmsh_build)
+def uniform_pointer_slot(cb_offset_words, stage):
+    """Compute storage-style read whose address word lies in the uniform pointer table -> NVN uniform slot, else None."""
+    offset = cb_offset_words * 4 - UNIFORM_POINTER_BASE
+    return offset // 16 if stage == 'cs' and 0 <= offset < 0x100 and offset % 16 == 0 else None
 def storage_slot(cb_offset_words, stage):
     """Storage buffer address word in c[0] -> NVN storage slot (c[0][base + 16 r])."""
     offset = cb_offset_words * 4 - STORAGE_BASE[stage]
@@ -85,7 +110,7 @@ def guard_cbuf_indices(msl):
 def support_bindings(msl):
     """[[buffer(n)]] entry parameters whose type is Ryujinx's support buffer (the struct holding render_scale float[73])."""
     structs = {m.group(1) for m in re.finditer(r'struct (\w+)\n\{[^}]*\bfloat4? _m\d+\[73\];[^}]*\}', msl)}   # float[73], or float4[73] when read
-    m = re.search(r'^(?:vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
+    m = re.search(r'^(?:vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
     if not m or not structs: return set()
     return {int(b) for t, b in re.findall(r'constant (\w+)& \w+ \[\[buffer\((\d+)\)\]\]', m.group(1)) if t in structs}
 
@@ -107,8 +132,8 @@ def pad_vertex_outputs(msl, wanted):
 
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
-    m = re.search(r'^(vertex|fragment) \w+ main0\((.*)\)$', msl, re.M)
-    if not m: raise ValueError('no vertex/fragment main0 entry in MSL')
+    m = re.search(r'^(vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
+    if not m: raise ValueError('no vertex/fragment/kernel main0 entry in MSL')
     params = m.group(2)
     return ({int(b) for b in re.findall(r'\[\[buffer\((\d+)\)\]\]', params)},
             {int(b) for b in re.findall(r'\[\[texture\((\d+)\)\]\]', params)},
@@ -122,7 +147,16 @@ def job_for(census, stage_entry, code_path):
            'debug': False, 'reduced': False, 'depth_minus_one': census['depth_mode'] in (0, -1)}   # -1 = never set: NVN default NEAR_IS_MINUS_W
     for t in census['textures']:
         if t['stage'] == stage_no and t['texture']: job['tex'][str(t['index'])] = texture_type(t['texture']['target'])
-    if stage == 'vs':
+    if stage == 'cs':
+        d = census.get('dispatch')
+        if not d: raise ValueError('compute stage without a dispatch census')
+        job['local'] = d['local']; job['shared'] = d['shared']; del job['depth_minus_one']
+        if not all(1 <= x <= 1024 for x in d['local']) or d['local'][0] * d['local'][1] * d['local'][2] > 1024: raise ValueError(f"threadgroup size {d['local']} beyond Metal's 1024 threads")
+        if d['shared'] > 32768: raise ValueError(f"shared memory {d['shared']} bytes beyond Metal's 32 KiB threadgroup memory")
+        for i in census.get('images', []):
+            if i['stage'] == stage_no and i['texture']:
+                job['img'][str(i['index'])] = {'type': texture_type(i['texture']['target']), 'fmt': image_format(i['texture']['format'])}
+    elif stage == 'vs':
         for a in census['attribs']:
             if a['format']: job['attr'][str(a['location'])] = component_type(a['format'])
     else:
@@ -134,15 +168,31 @@ def reflect(census, stage_entry, job, res, msl, c1):
     buffers, textures, samplers, attributes = entry_bindings(msl)
     stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set()
     if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
+    if job['stage'] == 'cs': lines += ['local ' + ' '.join(map(str, job['local'])), f"shared {job['shared']}"]
     for cb in res['cbufs']:
         kind, r = cbuf_kind(cb['slot'])
         if cb['binding'] not in buffers: raise ValueError(f"cbuf c[{cb['slot']}] binding {cb['binding']} missing from the MSL entry")
         lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
         used.add(cb['binding'])
-    if res['images']: raise ValueError('images are not built yet')
+    if res['images'] and job['stage'] != 'cs': raise ValueError('images outside compute are not built yet')
+    images_bound = {i['index'] for i in census.get('images', []) if i['stage'] == stage_no and i['texture']}
+    for t in res['images']:
+        r = image_slot(t['handle'], t['cbuf_slot'])
+        if r not in images_bound: raise ValueError(f"image slot {r} is used but not bound to a registered texture in the census")
+        if t['binding'] not in textures: raise ValueError(f"image binding {t['binding']} missing from the MSL entry")
+        decl = re.search(rf'texture\w+<\w+(?:, access::(\w+))?> \w+ \[\[texture\({t["binding"]}\)\]\]', msl)
+        if not decl: raise ValueError(f"image binding {t['binding']} has no texture declaration")
+        access = {'read': 'r', 'write': 'w', 'read_write': 'rw'}.get(decl.group(1))
+        if not access: raise ValueError(f"image binding {t['binding']} access {decl.group(1)}")
+        declared = sampler_type_name(t['type'])
+        if declared != job['img'][str(r)]['type']: raise ValueError(f"image slot {r}: shader declares {declared}, census bound {job['img'][str(r)]['type']}")
+        lines.append(f"img {r} {t['binding']} {declared} {access}")
     for b in res['sbufs']:
         if b['cb_slot'] != 0: raise ValueError(f"storage buffer address in c[{b['cb_slot']}], not c[0]")
         if b['binding'] not in buffers: raise ValueError(f"storage binding {b['binding']} missing from the MSL entry")
+        u = uniform_pointer_slot(b['cb_offset'], job['stage'])
+        if u is not None:
+            lines.append(f"uptr {u} {b['binding']}"); used.add(b['binding']); continue
         writes = re.search(rf'device \w+& \w+ \[\[buffer\({b["binding"]}\)\]\]', msl) and not re.search(rf'const device \w+& \w+ \[\[buffer\({b["binding"]}\)\]\]', msl)
         lines.append(f"sbuf {storage_slot(b['cb_offset'], job['stage'])} {b['binding']} {'rw' if writes else 'r'}"); used.add(b['binding'])
     bound = {t['index'] for t in census['textures'] if t['stage'] == stage_no and t['texture']}
@@ -166,33 +216,51 @@ def reflect(census, stage_entry, job, res, msl, c1):
         lines.append(f'support {b}'); used.add(b)   # host fills it per D2R nvn_mtl.m (render_scale 1.0, BGRA flags 0)
     for b in sorted(buffers - used):
         raise ValueError(f'buffer({b}) in the MSL entry has no reflection (unknown binding)')
-    if any(b >= 15 for b in buffers): raise ValueError('buffer index >= 15 collides with the default-attribute buffer (15) / vertex streams 16..30')
+    # Buffer 15 (disabled-attribute defaults) and 16..30 (vertex streams) are vertex-stage bindings; other stages have 0..30.
+    if job['stage'] == 'vs' and any(b >= 15 for b in buffers): raise ValueError('buffer index >= 15 collides with the default-attribute buffer (15) / vertex streams 16..30')
+    if any(b > 30 for b in buffers): raise ValueError('buffer index beyond Metal [[buffer(30)]]')
     for a in attributes:
-        if str(a) not in job['attr']: raise ValueError(f'attribute {a} is read but has no format in the census')
-        lines.append(f"attr {a} {a} {job['attr'][str(a)]}")
+        # An attribute outside the census's vertex attribute state is disabled: Maxwell reads (0,0,0,1), which the host
+        # supplies from the zero default buffer (round92); the translator answered its type as float.
+        lines.append(f"attr {a} {a} {job['attr'].get(str(a), 'float')}")
     for color in range(8):
         if res['frag_out_map'] >> (4 * color) & 15:
             # An output without a bound target is discarded by NVN; it still needs a declared type (float when unbound).
             lines.append(f"fout {color} {job['fout'].get(str(color), 'float')}")
     return '\n'.join(lines) + '\n'
 
+def stage_job(directory, census, entry, tmp):
+    """Census stage -> translator job (code written to tmp); ValueError when the stage cannot be built faithfully."""
+    key = entry['key']
+    control = (directory / f"stage-{entry['index']}.control.bin").read_bytes()
+    code = (directory / f"stage-{entry['index']}.code.bin").read_bytes()
+    if sha(control[:0x880])[:16] != key: raise ValueError(f'{key}: control bytes do not hash to the census key')
+    # Graphics code = NVN header 0x30 (magic 78563412) + SPH 0x50 + instructions; the translator takes SPH + instructions.
+    # Compute code has neither (no headed code area in Lib/agl carries a compute SPH; D2R dmsh_build passes compute
+    # code from its first byte): the translator decodes from offset 0.
+    if len(code) != entry['code_size']: raise ValueError(f'{key}: code size differs from the census')
+    headed = code[:4] == bytes.fromhex('78563412')
+    if headed == (entry['stage'] == 5): raise ValueError(f"{key}: {'compute code starts with' if headed else 'graphics code lacks'} the NVN code header (first bytes {code[:16].hex()})")
+    sph = tmp / f'{key}.sph'; sph.write_bytes(code if entry['stage'] == 5 else code[0x30:])
+    job = job_for(census, entry, sph); job['c1'] = code[entry['c1_offset']:entry['code_size']].hex()
+    return job
+
 def build(census_dirs, out):
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, 'DOTNET_ROOT': str(ROOT / 'work/tools/dotnet')}
-    jobs, sources, censuses = [], {}, []
+    jobs, sources, censuses, early_failed = [], {}, [], {}
     with tempfile.TemporaryDirectory(prefix='wonder-shaders-') as tmp:
         tmp = Path(tmp)
         for directory in map(Path, census_dirs):
             raw = (directory / 'draw.json').read_bytes(); census = json.loads(raw); censuses.append(census)
             for entry in census['program']['stages']:
                 key = entry['key']
-                if key in sources: continue
-                control = (directory / f"stage-{entry['index']}.control.bin").read_bytes()
-                code = (directory / f"stage-{entry['index']}.code.bin").read_bytes()
-                if sha(control[:0x880])[:16] != key: raise ValueError(f'{key}: control bytes do not hash to the census key')
-                if len(code) != entry['code_size'] or code[:4] != bytes.fromhex('78563412'): raise ValueError(f'{key}: code is not a full NVN graphics stage')
-                sph = tmp / f'{key}.sph'; sph.write_bytes(code[0x30:])   # translator input: 0x50-byte SPH + instructions
-                job = job_for(census, entry, sph); job['c1'] = code[entry['c1_offset']:entry['code_size']].hex()
+                if key in sources or key in early_failed: continue
+                try:
+                    job = stage_job(directory, census, entry, tmp)
+                except ValueError as error:   # recorded per key like translation failures; the rest of the build goes on
+                    early_failed[key] = {'stage': STAGES.get(entry['stage'], str(entry['stage'])), 'reason': str(error)[:300], 'census_sha256': sha(raw)}
+                    continue
                 jobs.append(job); sources[key] = (census, entry, sha(raw))
         (tmp / 'jobs.json').write_text(json.dumps(jobs))
         subprocess.run([str(XLATE), str(tmp / 'jobs.json'), str(tmp)], env=env)   # failures are retried / reported per key
@@ -206,7 +274,7 @@ def build(census_dirs, out):
         manifest = {'scope': 'Wonder draw-census shader build (MSL 3.2, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
                     'translator_source_sha': subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip(),
                     'keys': {}}
-        manifest['failed'] = {}; built = {}
+        manifest['failed'] = dict(early_failed); built = {}
         for job in jobs:
             key = job['key']; census, entry, census_sha = sources[key]
             # A stage that cannot be built faithfully is left out (with its reason): its program then stops by name on device.

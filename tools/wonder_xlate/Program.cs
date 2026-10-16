@@ -1,5 +1,6 @@
 // Wonder copy of vendor/d2r-mobile/dm/gfx/tools/dmsh_xlate/Program.cs (D2R). Changes: job field "depth_minus_one"
-// (Wonder sets NVN NEAR_IS_MINUS_W) turns on Ryujinx's vertex depth remap; the c[2] texture handle table starts at 0x20.
+// (Wonder sets NVN NEAR_IS_MINUS_W) turns on Ryujinx's vertex depth remap; the c[2] texture handle table starts at 0x20,
+// the image handle table at 0x120 (separate slot numbers: job "img" slots are image slots).
 // Switch 原版着色器（Maxwell 机器码）→ SPIR-V（Ryujinx.Graphics.Shader 翻译器），供 B 路线离线出 metallib。
 // 与 Ryujinx.ShaderTools 的区别：翻译器的「查询」按真实情况作答，而不是一律缺省值——
 //   贴图类型 / 图像格式 / 顶点属性类型 / 片元输出类型 / 计算线程组大小取自作业文件（由映射表配对的 PC 反射给出，同槽号 = 同资源）；
@@ -32,7 +33,8 @@ static class SwshXlate
 {
     // Wonder SDK: nvnCommandBufferBindTexture (sdk+0x468840) writes texture slot r's combined handle at c[2][0x20 + 8r]
     // (32 slots, table ends at 0x120). D2R's SDK used 0x168 / separate samplers at 0x568; Wonder binds combined handles.
-    const int TexBase = 0x20, SampBase = 0x120;
+    // Image slot r (nvnCommandBufferBindImage sdk+0x46a280 writes slot r's handle at c[2][0x120 + 8r], 8 slots, ends at 0x160).
+    const int TexBase = 0x20, SampBase = 0x120, ImgBase = 0x120, ImgEnd = 0x160;
 
     sealed class Accessor : IGpuAccessor
     {
@@ -54,16 +56,20 @@ static class SwshXlate
         public int QueryTextureArrayLengthFromPool() => 32;
 
         string Get(string table, int slot) => _job[table] is JsonObject t && t[slot.ToString()] is JsonNode n ? (n is JsonObject o ? (string)o["type"] : (string)n) : null;
-        int TexSlot(int handle, int cbufSlot)
+        // Handle word in c[2] -> (table, slot): the texture table c[2][0x20 + 8r] or the image table c[2][0x120 + 8r].
+        (string, int) Slot(int handle, int cbufSlot)
         {
             (int off0, _, _) = TextureHandle.UnpackOffsets(handle);
             int bytes = off0 * 4;
-            return (cbufSlot < 0 || (cbufSlot & 0xffff) == 2) && bytes >= TexBase && bytes < SampBase && (bytes - TexBase) % 8 == 0 ? (bytes - TexBase) / 8 : -1;
+            if (!(cbufSlot < 0 || (cbufSlot & 0xffff) == 2) || bytes % 8 != 0) return (null, -1);
+            if (bytes >= TexBase && bytes < SampBase) return ("tex", (bytes - TexBase) / 8);
+            if (bytes >= ImgBase && bytes < ImgEnd) return ("img", (bytes - ImgBase) / 8);
+            return (null, -1);
         }
         public SamplerType QuerySamplerType(int handle, int cbufSlot = -1)
         {
-            int slot = TexSlot(handle, cbufSlot);
-            string t = slot >= 0 ? Get("tex", slot) ?? Get("img", slot) : null;
+            (string table, int slot) = Slot(handle, cbufSlot);
+            string t = table != null ? Get(table, slot) : null;
             if (t == null) { Notes.Add($"贴图句柄 {handle:X}（常量段 {cbufSlot}，槽 {slot}）无 PC 类型，按 2D"); return SamplerType.Texture2D; }
             return t switch
             {
@@ -76,8 +82,8 @@ static class SwshXlate
         }
         public TextureFormat QueryTextureFormat(int handle, int cbufSlot = -1)
         {
-            int slot = TexSlot(handle, cbufSlot);
-            string f = _job["img"] is JsonObject t && slot >= 0 && t[slot.ToString()] is JsonObject o ? (string)o["fmt"] : null;
+            (string table, int slot) = Slot(handle, cbufSlot);
+            string f = table == "img" && _job["img"] is JsonObject t && t[slot.ToString()] is JsonObject o ? (string)o["fmt"] : null;
             if (f == null) { Notes.Add($"图像句柄 {handle:X} 槽 {slot} 无 PC 格式，按 R8G8B8A8Unorm"); return TextureFormat.R8G8B8A8Unorm; }
             return Enum.TryParse(f, true, out TextureFormat tf) ? tf : TextureFormat.R8G8B8A8Unorm;
         }

@@ -59,7 +59,10 @@ class TextureTableTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('wonder_shader_build', ROOT / 'tools/wonder_shader_build.py')
         build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
         source = (ROOT / 'tools/wonder_xlate/Program.cs').read_text()
-        base, end = (int(x, 16) for x in re.search(r'const int TexBase = (0x[0-9a-fA-F]+), SampBase = (0x[0-9a-fA-F]+);', source).groups())
+        base, end, img, img_end = (int(x, 16) for x in re.search(
+            r'const int TexBase = (0x[0-9a-fA-F]+), SampBase = (0x[0-9a-fA-F]+), ImgBase = (0x[0-9a-fA-F]+), ImgEnd = (0x[0-9a-fA-F]+);', source).groups())
         self.assertEqual(base, build.TEX_TABLE); self.assertEqual(end, build.TEX_TABLE + 8 * build.TEX_SLOTS)
+        # BindImage (sdk+0x46a280) writes image slot r at c[2][0x120 + 8r].
+        self.assertEqual(img, build.IMG_TABLE); self.assertEqual(img_end, build.IMG_TABLE + 8 * build.IMG_SLOTS)
 
 if __name__ == '__main__': unittest.main()

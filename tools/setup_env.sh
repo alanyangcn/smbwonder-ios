@@ -87,7 +87,11 @@ if ! have "$TOOLS/dotnet/dotnet"; then
 fi
 
 say "wonder_xlate（着色器翻译前端）"
-if ! have "$TOOLS/wonder_xlate/wonder_xlate"; then
+# 源码（Program.cs + csproj）变了就重编：二进制内嵌的 --source-sha 与当前源码的 sha256 前 16 位比对
+# Rebuild when the source changed: the binary's embedded --source-sha against the first 16 hex digits of sha256(Program.cs + csproj)
+xlate_src_sha=$(cat "$REPO/tools/wonder_xlate/Program.cs" "$REPO/tools/wonder_xlate/wonder_xlate.csproj" | shasum -a 256 | cut -c1-16)
+xlate_bin_sha=$(DOTNET_ROOT="$TOOLS/dotnet" "$TOOLS/wonder_xlate/wonder_xlate" --source-sha 2>/dev/null || true)
+if ! have "$TOOLS/wonder_xlate/wonder_xlate" || [ "$xlate_src_sha" != "$xlate_bin_sha" ]; then
   rm -rf "$TOOLS/wonder_xlate"
   DOTNET_ROOT="$TOOLS/dotnet" DOTNET_CLI_HOME="$TOOLS/dotnet-home" NUGET_PACKAGES="$TOOLS/nuget" DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     "$TOOLS/dotnet/dotnet" publish "$REPO/tools/wonder_xlate/wonder_xlate.csproj" -c Release -o "$TOOLS/wonder_xlate" > "$TOOLS/wonder_xlate-build.log" 2>&1 \

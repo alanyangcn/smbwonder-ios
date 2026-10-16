@@ -39,19 +39,26 @@ static int write_stage(const char *dir, unsigned index, const char *kind, const 
 static char written_dirs[256][40]; static unsigned written_count;
 static int already_written(const char *dir) { for (unsigned i = 0; i < written_count; i++) if (!strcmp(written_dirs[i], dir)) return 1; return 0; }
 int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct wonder_nvn_draw_call *d, char *summary, size_t summary_size) {
-    if (!s->has_program || !s->program.mask) { snprintf(summary, summary_size, "census=none (no program bound)"); return 0; }
+    unsigned mask = s->has_program ? s->program.mask & (d->compute ? 0x20u : 0x1fu) : 0;   // a draw's graphics stages, or a dispatch's compute stage
+    if (!mask) { snprintf(summary, summary_size, "census=none (no %s program bound)", d->compute ? "compute" : "graphics"); return 0; }
     char keys[6][17] = {{0}}, dir[40];
-    for (unsigned stage = 0; stage < 6; stage++) if (s->program.mask & (1u << stage)) wonder_nvn_shader_key(s->program.control[stage], keys[stage]);
-    snprintf(dir, sizeof dir, "%s-%s", keys[0][0] ? keys[0] : "none", keys[1][0] ? keys[1] : "none");
+    for (unsigned stage = 0; stage < 6; stage++) if (mask & (1u << stage)) wonder_nvn_shader_key(s->program.control[stage], keys[stage]);
+    if (d->compute) snprintf(dir, sizeof dir, "cs-%s", keys[5]);
+    else snprintf(dir, sizeof dir, "%s-%s", keys[0][0] ? keys[0] : "none", keys[1][0] ? keys[1] : "none");
     if (already_written(dir)) { snprintf(summary, summary_size, "census=DrawCensus/%s (written earlier this run)", dir); return 0; }
     struct out o = {0}; int failed = 0; unsigned index = 0;
     put(&o, "{\"draw\":{\"name\":\"%s\",\"primitive\":%d,\"index_type\":%d,\"count\":%d,\"first\":%d,\"base_vertex\":%d,\"instances\":%d,\"base_instance\":%d,\"index_address\":%llu,\"indirect_address\":%llu},",
         d->name, d->primitive, d->index_type, d->count, d->first, d->base_vertex, d->instances, d->base_instance,
         (unsigned long long)d->index_address, (unsigned long long)d->indirect_address);
+    if (d->compute) {
+        const uint8_t *control = s->program.control[5]; uint32_t local[3], shared;
+        memcpy(local, control + WONDER_NVN_CONTROL_LOCAL_SIZE, 12); memcpy(&shared, control + WONDER_NVN_CONTROL_SHARED_SIZE, 4);
+        put(&o, "\"dispatch\":{\"groups\":[%d,%d,%d],\"local\":[%u,%u,%u],\"shared\":%u},", d->groups[0], d->groups[1], d->groups[2], local[0], local[1], local[2], shared);
+    }
     int depth_mode, window_origin; wonder_nvn_device_modes(&depth_mode, &window_origin);
     put(&o, "\"depth_mode\":%d,\"window_origin\":%d,\"program\":{\"serial\":%llu,\"stages\":[", depth_mode, window_origin, (unsigned long long)s->program.serial);
     for (unsigned stage = 0; stage < 6; stage++) {
-        if (!(s->program.mask & (1u << stage))) continue;
+        if (!(mask & (1u << stage))) continue;
         const uint8_t *control = s->program.control[stage]; uint32_t length, c1_offset;
         memcpy(&c1_offset, control + 0x700, 4); memcpy(&length, control + 0x704, 4);
         struct wonder_nvn_pool_view view = {0};
@@ -86,6 +93,13 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
                                m->anisotropy, m->border[0], m->border[1], m->border[2], m->border[3]);
         else put(&o, ",\"sampler\":null}");
     }
+    put(&o, "],\"images\":["); first = 1;
+    for (int stage = 0; stage < 6; stage++) for (int i = 0; i < 8; i++) if (s->image_handle[stage][i]) {
+        uint64_t h = s->image_handle[stage][i];
+        put(&o, "%s{\"stage\":%d,\"index\":%d,\"image_id\":%llu", first ? "" : ",", stage, i, (unsigned long long)h); first = 0;
+        const struct wonder_nvn_texture_registration *r = s->texture_pool && h < (1u << 20) ? wonder_nvn_texture_lookup(s->texture_pool, (int)h) : NULL;
+        if (r && r->valid) { put(&o, ",\"texture\":"); texture_json(&o, &r->texture, &r->view, r->has_view); put(&o, "}"); } else put(&o, ",\"texture\":null}");
+    }
     put(&o, "],\"targets\":{\"colors\":[");
     for (int i = 0; s->has_targets && i < s->color_count; i++) {
         put(&o, "%s", i ? "," : "");
@@ -119,7 +133,8 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
         static char index[256 * 41 + 1]; size_t at = 0;   // (static: off the caller's stack) index.txt: every census directory of this run, one per line (device fetch)
         for (unsigned i = 0; i < written_count; i++) at += (size_t)snprintf(index + at, sizeof index - at, "%s\n", written_dirs[i]);
         wonder_host_census_write("index.txt", index, at);
-        snprintf(summary, summary_size, "census=DrawCensus/%s vs=%s fs=%s", dir, keys[0][0] ? keys[0] : "-", keys[1][0] ? keys[1] : "-");
+        if (d->compute) snprintf(summary, summary_size, "census=DrawCensus/%s cs=%s", dir, keys[5]);
+        else snprintf(summary, summary_size, "census=DrawCensus/%s vs=%s fs=%s", dir, keys[0][0] ? keys[0] : "-", keys[1][0] ? keys[1] : "-");
         free(o.data); return 1;
     }
     free(o.data);

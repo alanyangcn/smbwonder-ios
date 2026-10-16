@@ -27,8 +27,19 @@ struct wonder_host_draw {
     int depth_mode, window_origin;
     int depth_bias_enabled; float depth_bias, depth_bias_slope, depth_bias_clamp;   // NVN polygon offset (units, factor, clamp)
 };
+// One compute dispatch, resolved by the replay like a draw. Textures and samplers are in res.tex[0][slot] (res is the
+// texture context sampled_texture() reads; res.vs_key holds the compute key for messages). Images are GPU-resident
+// textures (host: id<MTLTexture>, created with shader-write usage for NVN_TEXTURE_FLAGS_IMAGE textures).
+struct wonder_host_dispatch {
+    void *cs; const struct wonder_shader_refl *r; char key[17];
+    int groups[3]; int indirect; struct wonder_host_span indirect_span;    // indirect: the GPU reads the 3 group counts
+    struct wonder_host_span ubo[14], uptr[14], sbuf[16];                  // [NVN uniform / storage slot], read slots only
+    struct wonder_host_draw res;
+    struct { struct wonder_nvn_texture_snapshot image; void *host; } img[8]; uint8_t img_mask;
+};
+int wonder_host_dispatch(const struct wonder_host_dispatch *x);            // 0 = encoded; unsupported state stops by name
 int wonder_host_shader_available(const char key[17]);                       // 1 = in the bundled shader build
-void *wonder_host_shader_function(const char key[17], int stage);           // id<MTLFunction>; stops by name on failure
+void *wonder_host_shader_function(const char key[17], int stage);           // id<MTLFunction> (stage 0 vertex, 1 fragment, 5 kernel); stops by name on failure
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 int wonder_host_draw(const struct wonder_host_draw *d);                     // 0 = encoded; unsupported state stops by name
 uint32_t wonder_host_vertex_format(int nvn_format);

@@ -48,6 +48,17 @@ int main(void) {
     assert(parse(many, &r, err) && strstr(err, "attr"));
     char cbufs[2048] = "stage vs\n"; for (int i = 0; i < 15; i++) snprintf(cbufs + strlen(cbufs), sizeof cbufs - strlen(cbufs), "cbuf %d %d\n", i % 14, i % 14);
     assert(parse(cbufs, &r, err) && strstr(err, "cbuf"));
+    // Compute (round135): threadgroup size, shared memory, uniforms read by address, images.
+    assert(!parse("stage cs\nlocal 8 8 1\nshared 1024\ncbuf 0 1\nuptr 2 3\nsbuf 1 4 rw\nimg 0 5 2d w\nimg 1 6 3d rw\n", &r, err));
+    assert(r.stage == 5 && r.local[0] == 8 && r.local[1] == 8 && r.local[2] == 1 && r.shared == 1024);
+    assert(r.nuptr == 1 && r.uptr[0].slot == 2 && r.uptr[0].buffer == 3 && r.nsbuf == 1 && r.sbuf[0].write);
+    assert(r.nimg == 2 && r.img[0].slot == 0 && r.img[0].texture == 5 && r.img[0].type == WONDER_SHADER_TEX_2D && r.img[0].access == 2);
+    assert(r.img[1].type == WONDER_SHADER_TEX_3D && r.img[1].access == 3);
+    assert(parse("stage cs\nshared 0\n", &r, err) && strstr(err, "local"));            // a kernel needs its threadgroup size
+    assert(parse("stage cs\nlocal 64 32 1\n", &r, err) && strstr(err, "local"));        // 2048 threads > 1024
+    assert(parse("stage ps\nlocal 1 1 1\n", &r, err) && strstr(err, "local"));          // compute-only lines
+    assert(parse("stage cs\nlocal 1 1 1\nimg 0 1 2d x\n", &r, err) && strstr(err, "img"));
+    assert(parse("stage cs\nlocal 1 1 1\nshared 40000\n", &r, err) && strstr(err, "shared"));
     puts("shader_library OK");
     return 0;
 }

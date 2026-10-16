@@ -5,6 +5,7 @@
 #include "nvn_texture.h"
 #include "nvn_commands.h"
 #include "host_draw.h"
+#include "nvn_draw_census.h"
 #include <assert.h>
 #include <setjmp.h>
 #include <stdarg.h>
@@ -60,10 +61,14 @@ void wonder_host_unreserve(void *memory, size_t size) { (void)memory; (void)size
 void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_program_shaders *shaders) { (void)program; (void)shaders; captured_programs++; }
 // Fake translated-shader library and draw backend: the vertex key gets fake_refl[0], every other key fake_refl[1].
 static struct wonder_shader_refl fake_refl[2]; static char fake_vs_key[17]; static int shaders_available; static unsigned host_draws; static struct wonder_host_draw last_draw;
-int wonder_host_shader_available(const char key[17]) { (void)key; return shaders_available; }
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
-const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
+// Compute: fake_cs_key gets fake_cs_refl and is available only while cs_available is set.
+static struct wonder_shader_refl fake_cs_refl; static char fake_cs_key[17]; static int cs_available; static unsigned host_dispatches; static struct wonder_host_dispatch last_dispatch;
+int wonder_host_shader_available(const char key[17]) { return shaders_available && (strcmp(key, fake_cs_key) || cs_available); }
+const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]) { return !strcmp(key, fake_cs_key) ? &fake_cs_refl : !strcmp(key, fake_vs_key) ? &fake_refl[0] : &fake_refl[1]; }
 int wonder_host_draw(const struct wonder_host_draw *d) { last_draw = *d; host_draws++; return 0; }
+int wonder_host_dispatch(const struct wonder_host_dispatch *x) { last_dispatch = *x; host_dispatches++; return 0; }
+void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { (void)t; return NULL; }   // no GPU-written textures here
 static unsigned host_depth_clear_rects;
 int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, int clear_depth, float depth, int clear_stencil, uint32_t stencil, uint32_t stencil_mask, const int rect[4]) {
     (void)texture; (void)level; (void)slice; (void)clear_depth; (void)depth; (void)clear_stencil; (void)stencil; (void)stencil_mask; (void)rect; host_depth_clear_rects++; return 0; }
@@ -962,6 +967,52 @@ int main(void) {
             #define REVIEW_STOP(setup, expect) do { uint64_t h_ = REVIEW_RECORD(setup); EXPECT_STOP(dsubmit(queue, 1, &h_), expect); } while (0)
             #define REVIEW_OK(setup) do { uint64_t h_ = REVIEW_RECORD(setup); unsigned n_ = host_draws; dsubmit(queue, 1, &h_); assert(host_draws == n_ + 1); } while (0)
             REVIEW_OK((void)0);   // baseline still executes
+            // ---- Compute (round135): a compute bind leaves the graphics program bound; dispatches resolve like draws ----
+            { static _Alignas(16) unsigned char cs_program[0x90]; static _Alignas(8) unsigned char cs_control[0x880];
+              memcpy(cs_control, vs_control, 0x880); uint32_t five = 5, local[3] = {64, 1, 1};
+              memcpy(cs_control + 0x714, &five, 4); memcpy(cs_control + 0x748, local, 12); cs_control[0x100] = 0x3c;   // own key
+              assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(cs_program, device) == 1);
+              struct { uint64_t code; const void *control; } cst[1] = {{code, cs_control}};
+              assert(set_shaders(cs_program, 1, cst) == 1);
+              wonder_nvn_shader_key(cs_control, fake_cs_key);
+              void (*bind)(void *, const void *, int) = slot("nvnCommandBufferBindProgram");
+              void (*disp)(void *, int, int, int) = slot("nvnCommandBufferDispatchCompute");
+              void (*bind_ubo)(void *, int, int, uint64_t, size_t) = slot("nvnCommandBufferBindUniformBuffer");
+              void (*bind_sbuf)(void *, int, int, uint64_t, size_t) = slot("nvnCommandBufferBindStorageBuffer");
+              void (*bind_tex)(void *, int, int, uint64_t) = slot("nvnCommandBufferBindTexture");
+              // Kernel not translated: census cs-<key> (grid, threadgroup size from control +0x748), the submit stops at its end.
+              cs_available = 0; unsigned files = census_count, dispatches = host_dispatches;
+              rbegin(dcb); bind(dcb, cs_program, 0x20); disp(dcb, 4, 2, 1); uint64_t h = rend(dcb);
+              EXPECT_STOP(dsubmit(queue, 1, &h), "NVN_SHADER_MISSING");
+              char cs_dir[40], cs_file[96]; snprintf(cs_dir, sizeof cs_dir, "cs-%s", fake_cs_key); assert(strstr(last_stop, cs_dir));
+              snprintf(cs_file, sizeof cs_file, "%s/draw.json", cs_dir); size_t n; const unsigned char *bytes = census_file(cs_file, &n); assert(bytes);
+              char *json = calloc(1, n + 1); memcpy(json, bytes, n);
+              assert(strstr(json, "\"dispatch\":{\"groups\":[4,2,1],\"local\":[64,1,1],\"shared\":0}") && strstr(json, "\"stage\":5,\"name\":\"cs\""));
+              assert(!strstr(json, "\"name\":\"vs\""));   // the graphics stages are not part of a dispatch census
+              free(json); assert(census_count > files && host_dispatches == dispatches);
+              snprintf(cs_file, sizeof cs_file, "%s/stage-0.control.bin", cs_dir); assert(census_file(cs_file, &n) && n == 0x880);
+              // Translated: buffers / textures of stage 5 reach the host dispatch, and the graphics program still draws.
+              cs_available = 1; const char *cs_refl = "stage cs\nlocal 64 1 1\nshared 0\ncbuf 0 1\nsbuf 1 2 rw\ntex 0 3 0 2d\n";
+              assert(!wonder_shader_refl_parse(cs_refl, strlen(cs_refl), &fake_cs_refl, err, sizeof err) && fake_cs_refl.stage == 5);
+              unsigned draws_before = host_draws;
+              rbegin(dcb); bind(dcb, cs_program, 0x20); bind_ubo(dcb, 5, 0, (uintptr_t)(cb_memory + 0x9100), 0x100);
+              bind_sbuf(dcb, 5, 1, (uintptr_t)(cb_memory + 0x9000), 0x80); bind_tex(dcb, 5, 0, handle); disp(dcb, 4, 2, 1);
+              rdraw(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200)); h = rend(dcb);
+              dsubmit(queue, 1, &h); assert(host_dispatches == dispatches + 1 && host_draws == draws_before + 1);
+              const struct wonder_host_dispatch *x = &last_dispatch;
+              assert(x->cs == (void *)0xf005 && x->groups[0] == 4 && x->groups[1] == 2 && x->groups[2] == 1 && !x->indirect);
+              assert(x->ubo[0].size == 0x100 && x->ubo[0].buffer && x->sbuf[1].size == 0x80 && x->sbuf[1].buffer);
+              assert((x->res.tex_mask[0] & 1) && x->res.tex[0][0].texture.texture.desc.width == 128 && x->res.tex[0][0].sampler.valid);
+              // An empty grid runs nothing; a kernel built for another threadgroup size, an unbound image: stop by name.
+              rbegin(dcb); disp(dcb, 0, 1, 1); h = rend(dcb); dsubmit(queue, 1, &h); assert(host_dispatches == dispatches + 1);
+              fake_cs_refl.local[0] = 32; rbegin(dcb); disp(dcb, 1, 1, 1); h = rend(dcb); EXPECT_STOP(dsubmit(queue, 1, &h), "built for threadgroup 32x1x1");
+              const char *cs_img = "stage cs\nlocal 64 1 1\nimg 0 2 2d w\n";
+              assert(!wonder_shader_refl_parse(cs_img, strlen(cs_img), &fake_cs_refl, err, sizeof err));
+              rbegin(dcb); disp(dcb, 1, 1, 1); h = rend(dcb); EXPECT_STOP(dsubmit(queue, 1, &h), "unbound image compute slot 0");
+              // A NULL compute bind unbinds the kernel; the graphics program remains.
+              rbegin(dcb); bind(dcb, NULL, 0x20); disp(dcb, 1, 1, 1); h = rend(dcb); EXPECT_STOP(dsubmit(queue, 1, &h), "without a bound compute shader");
+              REVIEW_OK((void)0);
+              ((void (*)(void *))slot("nvnProgramFinalize"))(cs_program); }
             // Depth mode must match the build (NVN default NEAR_IS_MINUS_W when never set).
             const char *vs_zero = "stage vs\ndepth zero\nattr 0 0 float\n";
             assert(!wonder_shader_refl_parse(vs_zero, strlen(vs_zero), &fake_refl[0], err, sizeof err));
@@ -973,7 +1024,8 @@ int main(void) {
             // Window origin other than UPPER_LEFT.
             wonder_nvnDeviceSetWindowOriginMode(device, 0); REVIEW_STOP((void)0, "window origin"); wonder_nvnDeviceSetWindowOriginMode(device, 1);
             // Program bound for a subset of stages.
-            REVIEW_STOP(((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x1), "program stage bits");
+            // Any graphics stage bit binds the program's whole graphics part (SDK sdk+0x4672f0).
+            REVIEW_OK(((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x1));
             ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
             ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
             uint64_t rebind = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb); dsubmit(queue, 1, &rebind);

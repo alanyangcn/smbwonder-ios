@@ -46,7 +46,7 @@ static NSData *verified(NSString *key, NSString *suffix, NSString *hash_field, i
     }
     NSDictionary *entry = manifest[@"keys"][key];
     if (!entry) wonder_nvn_stop("NVN_SHADER_MISSING key=%s (not in the shader build; run tools/wonder_shader_build.py on its draw census)", key.UTF8String);
-    if (stage >= 0 && [entry[@"stage"] isEqual:@"ps"] != (stage == 1))
+    if (stage >= 0 && ![entry[@"stage"] isEqual:stage == 5 ? @"cs" : stage == 1 ? @"ps" : @"vs"])
         wonder_nvn_stop("NVN_SHADER_STAGE key=%s built as %s, bound as stage %d", key.UTF8String, [entry[@"stage"] UTF8String], stage);
     NSData *data = [NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:[key stringByAppendingPathExtension:suffix]]];
     if (!data) wonder_nvn_stop("NVN_SHADER_MISSING key=%s: no %s file", key.UTF8String, suffix.UTF8String);
@@ -70,6 +70,7 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
     pthread_mutex_lock(&lock);
     NSString *key = [NSString stringWithUTF8String:key_c];
     id<MTLFunction> f = functions[key];
+    MTLFunctionType want = stage == 5 ? MTLFunctionTypeKernel : stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex;
     if (!f) {
         NSData *source = verified(key, @"metal", @"msl_sha256", stage);
         if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
@@ -84,10 +85,9 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
             wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s error=%s", key_c, first.UTF8String);
         }
         f = [library newFunctionWithName:@"main0"];
-        MTLFunctionType want = stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex;
-        if (!f || f.functionType != want) wonder_nvn_stop("NVN_SHADER_STAGE key=%s: main0 is not a %s function", key_c, stage ? "fragment" : "vertex");
+        if (!f || f.functionType != want) wonder_nvn_stop("NVN_SHADER_STAGE key=%s: main0 is not a %s function", key_c, stage == 5 ? "kernel" : stage ? "fragment" : "vertex");
         f.label = key; functions[key] = f;
-    } else if (f.functionType != (stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex))
+    } else if (f.functionType != want)
         wonder_nvn_stop("NVN_SHADER_STAGE key=%s bound as stage %d", key_c, stage);
     pthread_mutex_unlock(&lock);
     return (__bridge void *)f;
@@ -626,6 +626,101 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     return 0;
 }
 
+// ---------- Compute dispatch encoding ----------
+// One compute encoder per dispatch, appended to the replay's pending command buffer after the draws before it (Metal
+// orders the encoders and tracks hazards on the pool buffers and textures). Bindings follow the kernel's reflection:
+// uniform buffers as zero-padded 64 KiB copies (as for draws), uniforms read by address and storage buffers as pool
+// spans, textures + samplers, images as GPU textures (a mip level / layer range of the bound view).
+static NSMutableDictionary<NSValue *, id<MTLComputePipelineState>> *compute_pipelines;
+int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
+    const struct wonder_host_draw *d = &x->res; const struct wonder_shader_refl *r = x->r;
+    if (!device) wonder_nvn_stop("NVN_DISPATCH_UNSUPPORTED no Metal device (cs=%s)", x->key);
+    if (!compute_pipelines) compute_pipelines = [NSMutableDictionary dictionary];
+    NSValue *pk = [NSValue valueWithPointer:x->cs];
+    id<MTLComputePipelineState> pso = compute_pipelines[pk];
+    if (!pso) {
+        __block NSError *error = nil; __block id<MTLComputePipelineState> built = nil;
+        on_host_stack(^{ NSError *e = nil; built = [device newComputePipelineStateWithFunction:(__bridge id<MTLFunction>)x->cs error:&e]; error = e; }); pso = built;
+        if (!pso) wonder_nvn_stop("NVN_DISPATCH_PIPELINE_FAILED cs=%s: %s", x->key, error.localizedDescription.UTF8String);
+        compute_pipelines[pk] = pso;
+    }
+    NSUInteger threads = (NSUInteger)r->local[0] * r->local[1] * r->local[2];
+    if (threads > pso.maxTotalThreadsPerThreadgroup)
+        wonder_nvn_stop("NVN_DISPATCH_UNSUPPORTED cs=%s threadgroup %u x %u x %u exceeds the pipeline's %lu threads", x->key, r->local[0], r->local[1], r->local[2], (unsigned long)pso.maxTotalThreadsPerThreadgroup);
+    // Resolve textures before the replay lock (sampled_texture / render targets take host_graphics.m's lock).
+    id<MTLTexture> textures[40]; id<MTLSamplerState> sampler_states[40]; id<MTLTexture> images[8];
+    for (int i = 0; i < r->ntex; i++) {
+        int slot = r->tex[i].slot;
+        textures[i] = sampled_texture(d, 0, slot); sampler_states[i] = sampler_state(d, &d->tex[0][slot].sampler);
+        if (r->tex[i].type == WONDER_SHADER_TEX_2D_ARRAY && textures[i].textureType == MTLTextureType2D) {
+            id<MTLTexture> t2 = textures[i];
+            textures[i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+            if (!textures[i]) unsupported(d, "2D texture as a 2D-array view, serial", (long)d->tex[0][slot].texture.texture.serial);
+        }
+    }
+    for (int i = 0; i < r->nimg; i++) {
+        int slot = r->img[i].slot; const struct wonder_nvn_texture_snapshot *s = &x->img[slot].image;
+        id<MTLTexture> t = (__bridge id<MTLTexture>)x->img[slot].host;
+        if (!t || !(t.usage & MTLTextureUsageShaderWrite)) unsupported(d, "image texture without shader-write usage, serial", (long)s->texture.serial);
+        NSUInteger level = s->has_view && s->view.set_levels ? s->view.base_level : 0;
+        NSRange all = wonder_host_view_slices(t.textureType, t.arrayLength, 0, 0), range = all;
+        if (s->has_view && s->view.set_layers) range = wonder_host_view_slices(t.textureType, t.arrayLength, (NSUInteger)MAX(0, s->view.min_layer), (NSUInteger)MAX(0, s->view.layers));
+        if (level >= t.mipmapLevelCount || !range.length) unsupported(d, "image view outside the texture, serial", (long)s->texture.serial);
+        // The kernel declares the image type; a single layer of an array bound to a 2D image is a 2D view of that layer.
+        MTLTextureType type = t.textureType;
+        if (r->img[i].type == WONDER_SHADER_TEX_2D && (type == MTLTextureType2DArray || type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray)) {
+            if (range.length != all.length && range.length != 1) unsupported(d, "2D image over several layers, serial", (long)s->texture.serial);
+            if (range.length == all.length && all.length != 1) unsupported(d, "2D image over a layered texture, serial", (long)s->texture.serial);
+            type = MTLTextureType2D;
+        }
+        static const MTLTextureType declared[10] = {MTLTextureType1D, MTLTextureType2D, MTLTextureType3D, MTLTextureType1DArray, MTLTextureType2DArray,
+            MTLTextureType2DMultisample, MTLTextureType2DMultisampleArray, MTLTextureTypeCube, MTLTextureTypeCubeArray, MTLTextureTypeTextureBuffer};
+        if (r->img[i].type >= 10 || declared[r->img[i].type] != type) unsupported(d, "image type differs from the kernel's declaration, serial", (long)s->texture.serial);
+        images[i] = level == 0 && t.mipmapLevelCount == 1 && range.location == 0 && range.length == all.length && type == t.textureType ? t
+                  : [t newTextureViewWithPixelFormat:t.pixelFormat textureType:type levels:NSMakeRange(level, 1) slices:range];
+        if (!images[i]) unsupported(d, "image view creation, serial", (long)s->texture.serial);
+    }
+    id<MTLBuffer> c1_buffer = nil;
+    if (r->c1_buffer >= 0) { c1_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffer.contents, r->c1, r->c1_len); }
+    if (r->support >= 0 && !support_buffer) {
+        support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
+        for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
+    }
+    wonder_host_replay_lock();
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
+    id<MTLBuffer> ubo_copies[14] = {nil};
+    if (r->ncbuf) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        for (int i = 0; i < r->ncbuf; i++) {
+            int slot = r->cbuf[i].slot; const struct wonder_host_span *u = &x->ubo[slot];
+            id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
+            if (!src || u->offset + n > src.length) { [blit endEncoding]; wonder_host_replay_unlock(); unsupported(d, "uniform buffer span outside its pool buffer, compute slot", slot); }
+            id<MTLBuffer> copy = [device newBufferWithLength:0x10000 options:MTLResourceStorageModePrivate];
+            [blit fillBuffer:copy range:NSMakeRange(0, 0x10000) value:0];
+            if (n) [blit copyFromBuffer:src sourceOffset:u->offset toBuffer:copy destinationOffset:0 size:n];
+            ubo_copies[slot] = copy;
+        }
+        [blit endEncoding];
+    }
+    id<MTLComputeCommandEncoder> e = [cb computeCommandEncoder];
+    if (!e) { wonder_host_replay_unlock(); unsupported(d, "compute encoder creation", 0); }
+    e.label = [NSString stringWithFormat:@"NVN dispatch cs=%s", x->key];
+    [e setComputePipelineState:pso];
+    for (int i = 0; i < r->ncbuf; i++) [e setBuffer:ubo_copies[r->cbuf[i].slot] offset:0 atIndex:r->cbuf[i].buffer];
+    for (int i = 0; i < r->nuptr; i++) { const struct wonder_host_span *u = &x->uptr[r->uptr[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)u->buffer offset:u->offset atIndex:r->uptr[i].buffer]; }
+    for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &x->sbuf[r->sbuf[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)sb->buffer offset:sb->offset atIndex:r->sbuf[i].buffer]; }
+    if (c1_buffer) [e setBuffer:c1_buffer offset:0 atIndex:(NSUInteger)r->c1_buffer];
+    if (r->support >= 0) [e setBuffer:support_buffer offset:0 atIndex:(NSUInteger)r->support];
+    for (int i = 0; i < r->ntex; i++) { [e setTexture:textures[i] atIndex:r->tex[i].texture]; [e setSamplerState:sampler_states[i] atIndex:r->tex[i].sampler]; }
+    for (int i = 0; i < r->nimg; i++) [e setTexture:images[i] atIndex:r->img[i].texture];
+    MTLSize local = MTLSizeMake(r->local[0], r->local[1], r->local[2]);
+    if (x->indirect) [e dispatchThreadgroupsWithIndirectBuffer:(__bridge id<MTLBuffer>)x->indirect_span.buffer indirectBufferOffset:x->indirect_span.offset threadsPerThreadgroup:local];
+    else [e dispatchThreadgroups:MTLSizeMake((NSUInteger)x->groups[0], (NSUInteger)x->groups[1], (NSUInteger)x->groups[2]) threadsPerThreadgroup:local];
+    [e endEncoding];
+    wonder_host_replay_unlock();
+    return 0;
+}
+
 NSRange wonder_host_view_slices(MTLTextureType type, NSUInteger array_length, NSUInteger first, NSUInteger count) {
     int cube = type == MTLTextureTypeCube || type == MTLTextureTypeCubeArray;
     NSUInteger total = type == MTLTextureTypeCube ? 6 : type == MTLTextureTypeCubeArray ? 6 * array_length : type == MTLTextureType2DArray ? array_length : 1;
@@ -647,6 +742,7 @@ MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t,
     }
     d.pixelFormat = format; d.width = t->width; d.height = t->height; d.mipmapLevelCount = t->levels ? t->levels : 1;
     d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; d.storageMode = MTLStorageModePrivate;
+    if (t->flags & 0x4) d.usage |= MTLTextureUsageShaderWrite;   // NVN_TEXTURE_FLAGS_IMAGE: compute kernels store into it
     return d;
 }
 // ---------- Scissored / masked colour clears ----------

@@ -74,6 +74,20 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(build.storage_slot(68, 'vs'), 0); self.assertEqual(build.storage_slot(0x520 // 4, 'ps'), 1)
         with self.assertRaises(ValueError): build.storage_slot(70, 'vs')
         with self.assertRaises(ValueError): build.storage_slot(0x100 // 4, 'vs')
+    def test_compute_slots(self):
+        # Compute (round135): storage table at c[0][0x310 + 16 r]; uniform slot r read by address at c[0][0x210 + 16 r]
+        # (D2R dmsh_build); image slot r at c[2][0x120 + 8 r] (BindImage sdk+0x46a280).
+        self.assertEqual(build.storage_slot(0x320 // 4, 'cs'), 1)
+        self.assertEqual(build.uniform_pointer_slot(0x230 // 4, 'cs'), 2); self.assertIsNone(build.uniform_pointer_slot(0x310 // 4, 'cs'))
+        self.assertIsNone(build.uniform_pointer_slot(0x230 // 4, 'ps'))
+        self.assertEqual(build.image_slot(0x120 // 4, 2), 0); self.assertEqual(build.image_slot(0x138 // 4, -1), 3)
+        for bad in (0x118 // 4, 0x160 // 4):
+            with self.assertRaises(ValueError): build.image_slot(bad, -1)
+    def test_image_formats(self):
+        self.assertEqual(build.image_format(0x25), 'R8G8B8A8Unorm'); self.assertEqual(build.image_format(0x29), 'R16G16B16A16Float')
+        self.assertEqual(build.image_format(0xa), 'R32Float'); self.assertEqual(build.image_format(0x3f), 'R11G11B10Float')
+        self.assertEqual(build.image_format(0x17), 'R32G32Uint'); self.assertEqual(build.image_format(0x2), 'R8Snorm')
+        with self.assertRaises(ValueError): build.image_format(0x38)   # RGBA8_SRGB has no image format
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 

@@ -19,22 +19,45 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
         if (len >= sizeof line) return fail(err, n, "line %u too long", line_no);
         memcpy(line, text + at, len); line[len] = 0; at = end + 1;
         if (!len) continue;
+        // Buffer bindings: the vertex stage keeps 15 (disabled-attribute defaults) and 16..30 (streams); other stages use 0..30.
+        int buffers = r->stage == 0 ? WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER : 31;
         char kind[16] = "", word[8200] = ""; int a = -1, b = -1, c = -1;
         if (sscanf(line, "%15s", kind) != 1) return fail(err, n, "line %u empty", line_no);
         if (r->stage < 0 && strcmp(kind, "stage")) return fail(err, n, "line %u: stage line must come first", line_no);
         if (!strcmp(kind, "stage")) {
-            if (sscanf(line, "stage %15s", word) != 1 || (strcmp(word, "vs") && strcmp(word, "ps"))) return fail(err, n, "unsupported stage '%s'", word);
-            r->stage = !strcmp(word, "ps");
+            if (sscanf(line, "stage %15s", word) != 1 || (strcmp(word, "vs") && strcmp(word, "ps") && strcmp(word, "cs"))) return fail(err, n, "unsupported stage '%s'", word);
+            r->stage = !strcmp(word, "ps") ? 1 : !strcmp(word, "cs") ? 5 : 0;
+        } else if (!strcmp(kind, "local")) {
+            unsigned x, y, z;
+            if (r->stage != 5 || sscanf(line, "local %u %u %u", &x, &y, &z) != 3 || !x || !y || !z || (uint64_t)x * y * z > 1024)
+                return fail(err, n, "local line %u: compute threadgroup x y z, 1..1024 threads", line_no);
+            r->local[0] = x; r->local[1] = y; r->local[2] = z;
+        } else if (!strcmp(kind, "shared")) {
+            unsigned bytes;
+            if (r->stage != 5 || sscanf(line, "shared %u", &bytes) != 1 || bytes > 32768) return fail(err, n, "shared line %u: compute, at most 32 KiB", line_no);
+            r->shared = bytes;
+        } else if (!strcmp(kind, "uptr")) {
+            if (r->stage != 5 || sscanf(line, "uptr %d %d", &a, &b) != 2 || a < 0 || a > 13 || b < 0 || b >= buffers || r->nuptr >= 14)
+                return fail(err, n, "uptr line %u: compute, uniform slot 0..13, buffer 0..14", line_no);
+            r->uptr[r->nuptr].slot = (uint8_t)a; r->uptr[r->nuptr++].buffer = (uint8_t)b;
+        } else if (!strcmp(kind, "img")) {
+            char access[8] = "";
+            if (r->stage != 5 || sscanf(line, "img %d %d %15s %7s", &a, &b, word, access) != 4 || a < 0 || a > 7 || b < 0 || b > 95 || r->nimg >= 8)
+                return fail(err, n, "img line %u: compute, image slot 0..7, texture 0..95, type, r|w|rw", line_no);
+            int t = texture_type_of(word); if (t < 0) return fail(err, n, "img line %u: unknown texture type '%s'", line_no, word);
+            int acc = !strcmp(access, "r") ? 1 : !strcmp(access, "w") ? 2 : !strcmp(access, "rw") ? 3 : 0;
+            if (!acc) return fail(err, n, "img line %u: access must be r, w or rw", line_no);
+            r->img[r->nimg].slot = (uint8_t)a; r->img[r->nimg].texture = (uint8_t)b; r->img[r->nimg].type = (uint8_t)t; r->img[r->nimg++].access = (uint8_t)acc;
         } else if (!strcmp(kind, "cbuf")) {
             if (sscanf(line, "cbuf %d %d", &a, &b) != 2 || a < 0 || a > 13) return fail(err, n, "cbuf line %u: NVN uniform slot must be 0..13", line_no);
-            if (b < 0 || b >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "cbuf line %u: buffer %d collides with vertex streams", line_no, b);
+            if (b < 0 || b >= buffers) return fail(err, n, "cbuf line %u: buffer %d beyond the stage's buffer bindings (vertex 0..14, others 0..30)", line_no, b);
             if (r->ncbuf >= 14) return fail(err, n, "cbuf line %u: more than 14 uniform buffers", line_no);
             r->cbuf[r->ncbuf].slot = (uint8_t)a; r->cbuf[r->ncbuf++].buffer = (uint8_t)b;
         } else if (!strcmp(kind, "support")) {
-            if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "support line %u: bad buffer", line_no);
+            if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= buffers) return fail(err, n, "support line %u: bad buffer", line_no);
             r->support = a;
         } else if (!strcmp(kind, "c1")) {
-            if (sscanf(line, "c1 %d %8199s", &a, word) != 2 || a < 0 || a >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER) return fail(err, n, "c1 line %u: bad buffer", line_no);
+            if (sscanf(line, "c1 %d %8199s", &a, word) != 2 || a < 0 || a >= buffers) return fail(err, n, "c1 line %u: bad buffer", line_no);
             size_t hex = strcmp(word, "-") ? strlen(word) : 0;
             if (hex % 2 || hex / 2 > sizeof r->c1) return fail(err, n, "c1 line %u: bad hex length %zu", line_no, hex);
             for (size_t i = 0; i < hex / 2; i++) {
@@ -63,7 +86,7 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "btex line %u: unknown texture type '%s'", line_no, word);
             r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)(32 + bindless), (uint8_t)tx, (uint8_t)sm, (uint8_t)t, 1, (uint8_t)ubo, (uint16_t)offset}; r->ntex++;
         } else if (!strcmp(kind, "sbuf")) {
-            if (sscanf(line, "sbuf %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b >= WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER || r->nsbuf >= 16 ||
+            if (sscanf(line, "sbuf %d %d %15s", &a, &b, word) != 3 || a < 0 || a > 15 || b < 0 || b >= buffers || r->nsbuf >= 16 ||
                 (strcmp(word, "r") && strcmp(word, "rw")))
                 return fail(err, n, "sbuf line %u: storage slot 0..15, buffer 0..15, r or rw", line_no);
             r->sbuf[r->nsbuf].slot = (uint8_t)a; r->sbuf[r->nsbuf].buffer = (uint8_t)b; r->sbuf[r->nsbuf++].write = !strcmp(word, "rw");
@@ -79,5 +102,6 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
         } else return fail(err, n, "line %u: unknown kind '%s'", line_no, kind);
     }
     if (r->stage < 0) return fail(err, n, "no stage line");
+    if (r->stage == 5 && !r->local[0]) return fail(err, n, "compute reflection without a local line");
     return 0;
 }
