@@ -693,7 +693,10 @@ static uint32_t program_set_shaders(void *program, int count, const uint8_t *sta
         if (list && *list && (next.mask & 1)) {
             char vs[17], fs[17] = "-"; wonder_nvn_shader_key(next.control[0], vs); if (next.mask & 2) wonder_nvn_shader_key(next.control[1], fs);
             for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) {
-                wonder_nvn_report("NVN_TRACE_PROGRAM vs=%s fs=%s program=%p serial=%llu", vs, fs, program, (unsigned long long)next.serial); break; }
+                extern void (*wonder_nvn_frames_hook)(uint64_t fp, uint64_t lr, char *out, size_t size);
+                char chain[700] = "";
+                if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), chain, sizeof chain);
+                wonder_nvn_report("NVN_TRACE_PROGRAM vs=%s fs=%s program=%p serial=%llu chain=%s", vs, fs, program, (unsigned long long)next.serial, chain); break; }
                 q += n; if (*q == ',') q++; }
         }
     }
