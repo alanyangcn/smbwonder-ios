@@ -952,7 +952,14 @@ int main(void) {
             EXPECT_STOP(dsubmit(queue, 1, &draw), "unbound uniform buffer stage 1 slot 5");
             const char *fs_tex = "stage ps\ntex 7 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_tex, strlen(fs_tex), &fake_refl[1], err, sizeof err));
-            EXPECT_STOP(dsubmit(queue, 1, &draw), "unbound texture stage 1 slot 7");
+            // Handle 0 (round151) is NVN's reserved empty descriptor: the draw runs with the slot marked empty (reads 0).
+            { unsigned n_ = host_draws; dsubmit(queue, 1, &draw); assert(host_draws == n_ + 1 && last_draw.tex[1][7].empty && (last_draw.tex_mask[1] >> 7 & 1)); }
+            // A non-zero handle naming no registered texture still stops.
+            { void (*rbegin_)(void *) = slot("nvnCommandBufferBeginRecording"); uint64_t (*rend_)(void *) = slot("nvnCommandBufferEndRecording");
+              rbegin_(dcb); ((void (*)(void *, int, int, uint64_t))slot("nvnCommandBufferBindTexture"))(dcb, 1, 7, 0x1003ff);
+              ((void (*)(void *, int, int, int, uint64_t))slot("nvnCommandBufferDrawElements"))(dcb, 4, 1, 6, (uintptr_t)(cb_memory + 0x9200));
+              uint64_t h_ = rend_(dcb); EXPECT_STOP(dsubmit(queue, 1, &h_), "unbound texture stage 1 slot 7");
+              rbegin_(dcb); ((void (*)(void *, int, int, uint64_t))slot("nvnCommandBufferBindTexture"))(dcb, 1, 7, 0); h_ = rend_(dcb); dsubmit(queue, 1, &h_); }
             const char *fs_drv = "stage ps\ndrv 2\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_drv, strlen(fs_drv), &fake_refl[1], err, sizeof err));
             EXPECT_STOP(dsubmit(queue, 1, &draw), "driver constant segment");

@@ -396,6 +396,30 @@ static id<MTLTexture> dummy_texture(void) {
     td.storageMode = CPU_TEXTURE_STORAGE; t = [device newTextureWithDescriptor:td]; uint32_t px = 0xffffffff;
     [t replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:&px bytesPerRow:4]; return t;
 }
+// Handle-0 texture slots (host_draw.h empty): an all-zero 1x1 texture of the shader's declared type (every translated
+// shader samples float textures) and a fixed nearest / clamp sampler.
+static id<MTLTexture> empty_texture(const struct wonder_host_draw *d, int type) {
+    static id<MTLTexture> cache[16]; if (type < 0 || type >= 16) unsupported(d, "empty texture slot of shader type", type);
+    if (cache[type]) return cache[type];
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new]; td.pixelFormat = MTLPixelFormatRGBA8Unorm; td.width = td.height = td.depth = 1;
+    td.storageMode = CPU_TEXTURE_STORAGE; td.usage = MTLTextureUsageShaderRead; NSUInteger slices = 1;
+    switch (type) {
+    case WONDER_SHADER_TEX_2D: td.textureType = MTLTextureType2D; break;
+    case WONDER_SHADER_TEX_2D_ARRAY: td.textureType = MTLTextureType2DArray; break;
+    case WONDER_SHADER_TEX_3D: td.textureType = MTLTextureType3D; break;
+    case WONDER_SHADER_TEX_CUBE: td.textureType = MTLTextureTypeCube; slices = 6; break;
+    case WONDER_SHADER_TEX_CUBE_ARRAY: td.textureType = MTLTextureTypeCubeArray; slices = 6; break;
+    default: unsupported(d, "empty texture slot of shader type", type);
+    }
+    id<MTLTexture> t = [device newTextureWithDescriptor:td]; if (!t) unsupported(d, "empty texture allocation, type", type);
+    uint32_t zero = 0; for (NSUInteger s = 0; s < slices; s++) [t replaceRegion:MTLRegionMake3D(0, 0, 0, 1, 1, 1) mipmapLevel:0 slice:s withBytes:&zero bytesPerRow:4 bytesPerImage:4];
+    t.label = @"NVN empty texture slot (handle 0)"; return cache[type] = t;
+}
+static id<MTLSamplerState> empty_sampler(void) {
+    static id<MTLSamplerState> s; if (s) return s;
+    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.sAddressMode = sd.tAddressMode = sd.rAddressMode = MTLSamplerAddressModeClampToEdge;
+    return s = [device newSamplerStateWithDescriptor:sd];
+}
 static struct wonder_host_span cpu_copy(struct wonder_host_span s) {   // bisect: same bytes in a fresh shared buffer
     id<MTLBuffer> src = (__bridge id<MTLBuffer>)s.buffer; if (!src || !s.size) return s;
     id<MTLBuffer> b = [device newBufferWithBytes:(uint8_t *)src.contents + s.offset length:s.size options:MTLResourceStorageModeShared];
@@ -741,6 +765,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         const struct wonder_shader_refl *r = refl[stage];
         for (int i = 0; i < r->ntex; i++) {
             int slot = r->tex[i].slot;
+            if (d->tex[stage][slot].empty) { textures[stage][i] = empty_texture(d, r->tex[i].type); sampler_states[stage][i] = empty_sampler(); continue; }
             textures[stage][i] = bisect_dummy_textures ? dummy_texture() : sampled_texture(d, stage, slot); sampler_states[stage][i] = sampler_state(d, &d->tex[stage][slot].sampler);
             // Maxwell samples a 2D texture through an array instruction as layer 0 (round127: the font shader fs 929a2e26
             // declares texture2d_array, the glyph cache is 2D); Metal needs the declared type, so bind a 1-layer 2D-array view.
@@ -908,6 +933,7 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
     id<MTLTexture> textures[40]; id<MTLSamplerState> sampler_states[40]; id<MTLTexture> images[8];
     for (int i = 0; i < r->ntex; i++) {
         int slot = r->tex[i].slot;
+        if (d->tex[0][slot].empty) { textures[i] = empty_texture(d, r->tex[i].type); sampler_states[i] = empty_sampler(); continue; }
         textures[i] = sampled_texture(d, 0, slot); sampler_states[i] = sampler_state(d, &d->tex[0][slot].sampler);
         if (r->tex[i].type == WONDER_SHADER_TEX_2D_ARRAY && textures[i].textureType == MTLTextureType2D) {
             id<MTLTexture> t2 = textures[i];

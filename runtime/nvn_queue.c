@@ -146,6 +146,14 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
         make_cpu_visible(base + rt->offset, 4);   // round87: the handle was written by UpdateUniformBuffer in this submit
         struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + rt->offset, 4, &v); uint32_t raw; memcpy(&raw, v.memory, 4); h = raw;
     } else h = draw_state.texture_handle[stage][slot];
+    // Handle 0 names texture and sampler descriptor 0, inside the 256 descriptors NVN reserves for the driver: the game's
+    // "nothing bound" (round151: a fragment shader samples slot 12 after loading a save; D2R nvn_mtl.m binds an all-zero
+    // texture for it too). Sampling it reads zeros; any other unresolvable handle still stops.
+    if (!h) {
+        static unsigned logged; if (logged++ < 16) wonder_nvn_report("NVN_EMPTY_TEXTURE_SLOT stage %d slot %d type %d vs=%s fs=%s (handle 0, reads 0)", stage, slot, rt->type, out->vs_key, out->fs_key);
+        memset(&out->tex[out_stage][slot], 0, sizeof out->tex[out_stage][slot]); out->tex[out_stage][slot].empty = 1; out->tex_mask[out_stage] |= 1ull << slot;
+        return;
+    }
     const struct wonder_nvn_texture_registration *t = h && draw_state.texture_pool ? wonder_nvn_texture_lookup(draw_state.texture_pool, (int)(h & 0xfffff)) : NULL;
     const struct wonder_nvn_sampler_state *m = h && draw_state.sampler_pool ? wonder_nvn_sampler_lookup(draw_state.sampler_pool, (int)((h >> 20) & 0xfff)) : NULL;
     if (!t || !t->valid || !m || !m->valid) { snprintf(why, sizeof why, "unbound texture stage %d slot %d (handle %#llx)", stage, slot, (unsigned long long)h); replay_stop(opcode, why); }
