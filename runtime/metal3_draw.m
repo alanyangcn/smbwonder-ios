@@ -461,7 +461,7 @@ struct draw_encoding {
     NSUInteger index[2][32], offset[2][32]; int nb[2];
     uint8_t tex_index[2][40], smp_index[2][40]; int ntex[2];
     NSUInteger stream_index[16], stream_offset[16]; int nstreams;
-    int index_type, count, first, instances, base_instance, base_vertex, bias, uses_default;
+    int index_type, count, first, instances, base_instance, base_vertex, bias, uses_default, depth_clamp;
     float blend_color[4], bias_units, bias_slope, bias_clamp;
     MTLCullMode cull; MTLWinding winding; MTLViewport viewport; MTLScissorRect scissor; MTLPrimitiveType primitive; MTLIndexType itype; NSUInteger ib_offset;
 };
@@ -729,7 +729,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     }
     x.index_type = d->index_type; x.count = d->count; x.first = d->first; x.instances = d->instances; x.base_instance = d->base_instance; x.base_vertex = d->base_vertex;
     memcpy(x.blend_color, d->blend_color, sizeof x.blend_color);
-    x.bias = d->depth_bias_enabled; x.bias_units = d->depth_bias; x.bias_slope = d->depth_bias_slope; x.bias_clamp = d->depth_bias_clamp;
+    x.depth_clamp = d->depth_clamp; x.bias = d->depth_bias_enabled; x.bias_units = d->depth_bias; x.bias_slope = d->depth_bias_slope; x.bias_clamp = d->depth_bias_clamp;
     x.cull = cull; x.winding = winding; x.viewport = vp; x.scissor = scissor; x.primitive = primitive; x.itype = itype; x.ib_offset = ib_offset; x.uses_default = uses_default;
     NSString *label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
     NSArray *vbufs = bufs[0], *fbufs = bufs[1], *vtex = stage_textures[0], *ftex = stage_textures[1], *vsmp = stage_samplers[0], *fsmp = stage_samplers[1];
@@ -737,7 +737,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         [e pushDebugGroup:label];
         [e setRenderPipelineState:pso]; [e setDepthStencilState:dss];
         [e setBlendColorRed:x.blend_color[0] green:x.blend_color[1] blue:x.blend_color[2] alpha:x.blend_color[3]];
-        [e setCullMode:x.cull]; [e setFrontFacingWinding:x.winding];
+        [e setCullMode:x.cull]; [e setFrontFacingWinding:x.winding]; [e setDepthClipMode:x.depth_clamp ? MTLDepthClipModeClamp : MTLDepthClipModeClip];
         [e setDepthBias:x.bias ? x.bias_units : 0 slopeScale:x.bias ? x.bias_slope : 0 clamp:x.bias ? x.bias_clamp : 0];   // state persists across the batch's draws
         [e setViewport:x.viewport]; [e setScissorRect:x.scissor];
         for (int stage = 0; stage < 2; stage++) for (int i = 0; i < x.nb[stage]; i++) {

@@ -201,7 +201,6 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         replay_stop(opcode, why);
     }
     if (raster.rasterizer_discard) replay_stop(opcode, "rasterizer discard is enabled (not executed yet)");
-    if (raster.depth_clamp) replay_stop(opcode, "depth clamp is enabled (not executed yet)");
     if (raster.sample_mask != 0xffffffffu) { snprintf(why, sizeof why, "sample mask %#x is not all samples", raster.sample_mask); replay_stop(opcode, why); }
     if ((call.primitive == 1 || call.primitive == 2 || call.primitive == 3) && raster.line_width != 1.0f) replay_stop(opcode, "line width other than 1 (Metal draws 1-pixel lines)");
     // Polygon offset: the enable bit of the polygon mode (POINT 1, LINE 2, FILL 4 for modes 0..2) applies to triangles,
@@ -265,7 +264,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     d.nattr = d.vr->nattr;
     d.primitive = call.primitive; d.index_type = call.index_type; d.count = call.count; d.first = call.first;
     d.base_vertex = call.base_vertex; d.instances = call.instances; d.base_instance = call.base_instance;
-    d.depth_bias_enabled = bias; d.depth_bias = raster.offset_units; d.depth_bias_slope = raster.offset_factor; d.depth_bias_clamp = raster.offset_clamp;
+    d.depth_clamp = raster.depth_clamp; d.depth_bias_enabled = bias; d.depth_bias = raster.offset_units; d.depth_bias_slope = raster.offset_factor; d.depth_bias_clamp = raster.offset_clamp;
     if (call.indirect_address) replay_stop(opcode, "indirect draws are not executed yet");
     if (call.index_type >= 0) {
         d.index = span_of(opcode, call.index_address, (uint64_t)call.count << call.index_type);

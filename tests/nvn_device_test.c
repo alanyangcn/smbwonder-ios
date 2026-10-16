@@ -1034,10 +1034,11 @@ int main(void) {
             ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
             ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
             uint64_t rebind = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb); dsubmit(queue, 1, &rebind);
-            // Rasterizer discard, depth clamp, sample mask: recorded and refused. Polygon offset reaches the host draw.
+            // Rasterizer discard, sample mask: recorded and refused. Depth clamp (round150) and polygon offset reach the host draw.
             void (*u32cmd)(void *, uint32_t);
             u32cmd = slot("nvnCommandBufferSetRasterizerDiscard"); REVIEW_STOP(u32cmd(dcb, 1), "rasterizer discard"); REVIEW_OK(u32cmd(dcb, 0));
-            u32cmd = slot("nvnCommandBufferSetDepthClamp"); REVIEW_STOP(u32cmd(dcb, 1), "depth clamp"); REVIEW_OK(u32cmd(dcb, 0));
+            u32cmd = slot("nvnCommandBufferSetDepthClamp"); REVIEW_OK(u32cmd(dcb, 1)); assert(last_draw.depth_clamp);
+            REVIEW_OK(u32cmd(dcb, 0)); assert(!last_draw.depth_clamp);
             void (*mask)(void *, int) = slot("nvnCommandBufferSetSampleMask"); REVIEW_STOP(mask(dcb, 1), "sample mask"); REVIEW_OK(mask(dcb, -1));
             unsigned char poly[4]; ((void (*)(void *))slot("nvnPolygonStateSetDefaults"))(poly);
             ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 4);

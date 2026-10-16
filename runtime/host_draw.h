@@ -26,6 +26,7 @@ struct wonder_host_draw {
     float viewport[4]; int viewport_set; float depth_range[2]; int scissor[4]; int scissor_set;
     int depth_mode, window_origin;
     int depth_bias_enabled; float depth_bias, depth_bias_slope, depth_bias_clamp;   // NVN polygon offset (units, factor, clamp)
+    int depth_clamp;   // nvnCommandBufferSetDepthClamp: no near / far clipping, depth clamped to the range (MTLDepthClipModeClamp)
     // Driver constant segment c[0] (bytes 0..0x700) for stages whose reflection has "drv 0 <buffer>": buffer address
     // tables (storage vertex 0x110 / compute 0x310 / fragment 0x510, compute uniforms 0x210; 16 bytes per slot:
     // u64 NVN GPU address, u32 size), filled by the replay from the bound buffers.
