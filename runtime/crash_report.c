@@ -12,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <mach/mach.h>
+#include <dlfcn.h>
 #include <sys/ucontext.h>
 void wonder_game_report_stop(const char *reason);
 static struct sigaction previous[4];
@@ -22,13 +23,34 @@ static void describe(char *out, size_t n, uint64_t pc) {
     if (m) snprintf(out, n, "%s+%#llx", m->name, (unsigned long long)(pc - (uint64_t)m->base));
     else snprintf(out, n, "%#llx", (unsigned long long)pc);
 }
+static void host_describe(char *out, size_t n, uint64_t pc) {   // guest module offset, else host image symbol
+    if (module_of((void *)pc)) { describe(out, n, pc); return; }
+    Dl_info d;
+    if (dladdr((void *)pc, &d) && d.dli_fname) {
+        const char *base = strrchr(d.dli_fname, '/'); base = base ? base + 1 : d.dli_fname;
+        if (d.dli_sname) snprintf(out, n, "%s+%#llx(%s+%#llx)", base, (unsigned long long)(pc - (uint64_t)d.dli_fbase),
+                                  d.dli_sname, (unsigned long long)(pc - (uint64_t)d.dli_saddr));
+        else snprintf(out, n, "%s+%#llx", base, (unsigned long long)(pc - (uint64_t)d.dli_fbase));
+    } else snprintf(out, n, "%#llx", (unsigned long long)pc);
+}
 static void handler(int sig, siginfo_t *info, void *context) {
     // kill() from the SDK abort observer (sdk_services.c) re-delivers a fault process-wide; the faulting
     // instruction re-executes and reaches this handler on its own thread, so user-sent copies are ignored.
     if (info->si_code == SI_USER) return;
     ucontext_t *uc = context;
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
-    if (!module_of((void *)pc)) {   // not guest code: restore and re-raise
+    if (!module_of((void *)pc)) {   // not guest code: log where (host symbol + frame chain), restore and re-raise
+        static _Atomic int logged;
+        if (!atomic_exchange(&logged, 1)) {
+            char where[160], caller[160]; host_describe(where, sizeof where, pc); host_describe(caller, sizeof caller, lr);
+            LOG("HOST_FAULT signal=%d address=%p pc=%s lr=%s sp=%#llx", sig, info->si_addr, where, caller, (unsigned long long)uc->uc_mcontext->__ss.__sp);
+            for (unsigned depth = 0; fp && !(fp & 7) && depth < 24; depth++) {
+                const uint64_t *frame = (const uint64_t *)fp;
+                char ret[160]; host_describe(ret, sizeof ret, frame[1]); LOG("HOST_FAULT_FRAME depth=%u %s", depth, ret);
+                if (frame[0] <= fp) break;
+                fp = frame[0];
+            }
+        }
         int i = index_of(sig); if (i >= 0) sigaction(sig, &previous[i], NULL);
         return;                     // returning re-executes the faulting instruction under the old handler
     }

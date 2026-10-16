@@ -221,8 +221,19 @@ static int present_setup(void){
 // Evidence of what reaches the screen: the presented texture is saved as Documents/Present/present-<n>.png for the first
 // 5 presents, then every 60th (at most 20 files), before it is drawn to the drawable.
 // WONDER_PRESENT_EVERY=<n> (diagnostic) changes the period and allows 60 files, for animations and loops.
+// Requested captures (scripted input asks for one 1.5 s after each press, host_input.m): the next present is saved.
+static _Atomic int capture_requested;
+void wonder_host_request_present_capture(void){ atomic_store(&capture_requested,1); }
 static void capture_present(id<MTLTexture> t){
  static unsigned presents, saved, every, limit; unsigned n=++presents;
+ if(atomic_exchange(&capture_requested,0)){
+  NSString *dir=[NSHomeDirectory() stringByAppendingPathComponent:@"Documents/Present"];
+  [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+  NSString *path=[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"present-%u.png",n]];
+  int r=wonder_host_readback_png((__bridge void*)t,0,0,path.fileSystemRepresentation);
+  fprintf(stderr,"HOST_PRESENT_CAPTURE Documents/Present/present-%u.png requested result=%d\n",n,r);
+  return;
+ }
  if(!every){ const char *e=getenv("WONDER_PRESENT_EVERY"); every=e&&atoi(e)>0?(unsigned)atoi(e):60; limit=e?60:20; }
  // The first frames and every `every` presents up to the limit, then one every 1800 presents (~30 s) for the rest of
  // the run (a long scripted round shows where it got to).

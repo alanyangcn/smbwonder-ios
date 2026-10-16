@@ -179,6 +179,9 @@ static void start_script(void) {
     dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(timer, ^{
         uint64_t b = wonder_input_script_buttons(&script, CFAbsoluteTimeGetCurrent() - start);
+        if (b & ~script_buttons)   // a scripted press: capture the screen 1.5 s later (what the press led to)
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                extern void wonder_host_request_present_capture(void); wonder_host_request_present_capture(); });
         if (b != script_buttons) { script_buttons = b; publish(); }
     });
     dispatch_resume(timer);
