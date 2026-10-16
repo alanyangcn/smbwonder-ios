@@ -316,8 +316,10 @@ void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target
 // ---------- Host replay thread ----------
 static pthread_mutex_t job_lock=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t job_ready=PTHREAD_COND_INITIALIZER, job_done=PTHREAD_COND_INITIALIZER;
 static void (*job_fn)(void *); static void *job_arg; static int job_pending, job_finished; static pthread_t replay_thread;
+static _Atomic mach_port_t replay_port;
 static void *replay_thread_main(void *unused){
  (void)unused;
+ atomic_store(&replay_port,pthread_mach_thread_np(pthread_self()));
  for(;;){
   pthread_mutex_lock(&job_lock); while(!job_pending) pthread_cond_wait(&job_ready,&job_lock);
   void (*fn)(void *)=job_fn; void *arg=job_arg; job_pending=0; pthread_mutex_unlock(&job_lock);
@@ -339,3 +341,46 @@ void wonder_host_run_on_replay_stack(void (*fn)(void *),void *arg){
  pthread_mutex_unlock(&job_lock);
 }
 
+// ---------- Frame thread time constraints (rt_declare.c) ----------
+// The presenting game thread and the replay thread (it runs every submit while the game thread waits) are declared
+// time-constraint threads: period = constraint = present period (interval x 1/60 s), computation from each thread's own
+// measured CPU per frame. WONDER_RT=0 (diagnostic) leaves both at their QoS; WONDER_RT_COMP=<ms> pins the computation.
+// Every 600 frames the policy is read back; a thread that lost it (e.g. a guest priority change re-set its QoS) is
+// declared again.
+#include "rt_declare.h"
+#include <mach/thread_policy.h>
+#include <mach/mach_time.h>
+static uint64_t thread_cpu_ns(mach_port_t port){
+ thread_basic_info_data_t info; mach_msg_type_number_t n=THREAD_BASIC_INFO_COUNT;
+ if(thread_info(port,THREAD_BASIC_INFO,(thread_info_t)&info,&n)!=KERN_SUCCESS) return 0;
+ return ((uint64_t)info.user_time.seconds+info.system_time.seconds)*1000000000ull+((uint64_t)info.user_time.microseconds+info.system_time.microseconds)*1000ull;
+}
+static int rt_active(mach_port_t port){
+ thread_time_constraint_policy_data_t p; mach_msg_type_number_t n=THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def=FALSE;
+ return thread_policy_get(port,THREAD_TIME_CONSTRAINT_POLICY,(thread_policy_t)&p,&n,&def)==KERN_SUCCESS&&!def;
+}
+static void rt_declare(const char *who,mach_port_t port,uint64_t period_ns,uint64_t comp_ns){
+ static mach_timebase_info_data_t tb; if(!tb.denom) mach_timebase_info(&tb);
+ thread_time_constraint_policy_data_t p={.period=(uint32_t)(period_ns*tb.denom/tb.numer),.computation=(uint32_t)(comp_ns*tb.denom/tb.numer),
+  .constraint=(uint32_t)(period_ns*tb.denom/tb.numer),.preemptible=1};
+ kern_return_t kr=thread_policy_set(port,THREAD_TIME_CONSTRAINT_POLICY,(thread_policy_t)&p,THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+ static _Atomic unsigned logged; if(atomic_fetch_add(&logged,1)<48)
+  fprintf(stderr,"HOST_RT_POLICY thread=%s period_ms=%.3f computation_ms=%.3f result=%d active=%d\n",who,period_ns/1e6,comp_ns/1e6,kr,rt_active(port));
+}
+struct rt_thread { const char *who; mach_port_t port; struct wonder_rt_decl d; };
+static void rt_thread_tick(struct rt_thread *t,mach_port_t port,uint64_t period_ns,uint64_t fixed_ns,int check){
+ if(!port) return;
+ if(t->port!=port){ memset(&t->d,0,sizeof t->d); t->port=port; }   // another thread presents now
+ if(check&&t->d.period_ns&&!rt_active(port)){ fprintf(stderr,"HOST_RT_POLICY thread=%s lost the time constraint, declaring again\n",t->who); t->d.period_ns=0; }
+ uint64_t comp=wonder_rt_tick(&t->d,thread_cpu_ns(port),period_ns,fixed_ns);
+ if(comp) rt_declare(t->who,port,period_ns,comp);
+}
+void wonder_host_frame_threads_tick(int interval){
+ static int mode=-1; static uint64_t fixed_ns; static unsigned frames; static struct rt_thread game={"present"}, replay={"replay"};
+ if(mode<0){ const char *e=getenv("WONDER_RT"); mode=!(e&&!strcmp(e,"0")); const char *c=getenv("WONDER_RT_COMP"); fixed_ns=c&&atoi(c)>0?(uint64_t)atoi(c)*1000000ull:0;
+  fprintf(stderr,"HOST_RT_POLICY mode=%s computation=%s\n",mode?"time-constraint":"off (WONDER_RT=0)",fixed_ns?c:"auto"); }
+ if(!mode) return;
+ uint64_t period_ns=(uint64_t)(interval>0?interval:1)*16666667ull; int check=++frames%600==0;
+ rt_thread_tick(&game,pthread_mach_thread_np(pthread_self()),period_ns,fixed_ns,check);
+ rt_thread_tick(&replay,atomic_load(&replay_port),period_ns,fixed_ns,check);
+}

@@ -117,5 +117,7 @@ void wonder_host_fence(void (*fn)(void *), void *arg);         // same, and comm
 void wonder_host_flush(void);
 void wonder_host_finish(void);
 int wonder_host_present(void *texture, const int crop[4], int interval);
+// Once per acquired frame on the presenting thread: time-constraint declarations of it and the replay thread (WONDER_RT).
+void wonder_host_frame_threads_tick(int interval);
 extern const struct wonder_nvn_entry wonder_nvn_queue_entries[];
 extern const unsigned wonder_nvn_queue_count;

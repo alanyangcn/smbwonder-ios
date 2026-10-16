@@ -107,6 +107,7 @@ void wonder_host_after_gpu(void (*fn)(void *), void *arg) { assert(pending_count
 void wonder_host_flush(void) { apply_pending_writes(); for (unsigned i = 0; i < pending_count; i++) ((void (*)(void *))pending_fn[i])(pending_arg[i]); pending_count = 0; }
 void wonder_host_finish(void) { wonder_host_flush(); }
 void wonder_host_fence(void (*fn)(void *), void *arg) { wonder_host_after_gpu(fn, arg); wonder_host_flush(); }
+void wonder_host_frame_threads_tick(int interval) { (void)interval; }
 int wonder_host_present(void *texture, const int crop[4], int interval) { (void)texture; (void)crop; (void)interval; host_presents++; return 0; }
 void *wonder_nvn_unimplemented_thunk(unsigned index) { assert(index < WONDER_NVN_NAME_COUNT); return (void *)(0x100000 + 8 * (uintptr_t)index); }
 #define EXPECT_STOP(expr, text) do { last_stop[0] = 0; expecting_stop = 1; if (!setjmp(stopped)) { expr; assert(!"expected stop: " text); } expecting_stop = 0; assert(strstr(last_stop, text)); } while (0)

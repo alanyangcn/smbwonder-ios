@@ -97,6 +97,7 @@ int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     if (!index) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnWindowAcquireTexture index=NULL");
     if (w->acquired & (1ull << w->next)) wonder_nvn_stop("NVN_INVALID_STATE nvnWindowAcquireTexture: texture %d still held (acquired without present)", w->next);
     *index = w->next; w->acquired |= 1ull << w->next; w->next = (w->next + 1) % w->active;
+    wonder_host_frame_threads_tick(w->interval);   // the presenting thread, once per frame
     // The texture is available once the GPU work that last presented it has completed. The game reuses the
     // per-frame resources tied to it after this point, so returning early lets the CPU overwrite data the
     // GPU has not read yet (round96/97: random black / blue / half-drawn frames). Blocking here is what a
