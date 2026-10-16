@@ -920,7 +920,7 @@ int main(void) {
             // ---- With translated shaders the replay assembles a host draw from the recorded state ----
             wonder_nvnDeviceSetDepthMode(device, 0);   // NEAR_IS_MINUS_W, as Wonder sets it (round52 log)
             char err[128];
-            const char *vs_refl = "stage vs\ndepth minus_one\nattr 0 0 float\n", *fs_refl = "stage ps\ncbuf 3 1\ntex 0 1 1 2d\nfout 0 float\n";
+            const char *vs_refl = "stage vs\ndepth minus_one\nattr 0 0 uint\n", *fs_refl = "stage ps\ncbuf 3 1\ntex 0 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));
             struct wonder_shader_refl fs_parsed; assert(!wonder_shader_refl_parse(fs_refl, strlen(fs_refl), &fs_parsed, err, sizeof err));
             fake_refl[1] = fs_parsed; shaders_available = 1;
@@ -975,6 +975,11 @@ int main(void) {
             #define REVIEW_STOP(setup, expect) do { uint64_t h_ = REVIEW_RECORD(setup); EXPECT_STOP(dsubmit(queue, 1, &h_), expect); } while (0)
             #define REVIEW_OK(setup) do { uint64_t h_ = REVIEW_RECORD(setup); unsigned n_ = host_draws; dsubmit(queue, 1, &h_); assert(host_draws == n_ + 1); } while (0)
             REVIEW_OK((void)0);   // baseline still executes
+            // Offline-built stages assume float attributes / outputs (round153): a bound integer format stops by name.
+            { const char *vs_float = "stage vs\ndepth minus_one\nattr 0 0 float\n";
+              assert(!wonder_shader_refl_parse(vs_float, strlen(vs_float), &fake_refl[0], err, sizeof err));
+              REVIEW_STOP((void)0, "vertex attribute 0 format 0x2c is uint");
+              assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err)); }
             // ---- Compute (round135): a compute bind leaves the graphics program bound; dispatches resolve like draws ----
             { static _Alignas(16) unsigned char cs_program[0x90]; static _Alignas(8) unsigned char cs_control[0x880];
               memcpy(cs_control, vs_control, 0x880); uint32_t five = 5, local[3] = {64, 1, 1};
@@ -1027,10 +1032,10 @@ int main(void) {
               REVIEW_OK((void)0);
               ((void (*)(void *))slot("nvnProgramFinalize"))(cs_program); }
             // Depth mode must match the build (NVN default NEAR_IS_MINUS_W when never set).
-            const char *vs_zero = "stage vs\ndepth zero\nattr 0 0 float\n";
+            const char *vs_zero = "stage vs\ndepth zero\nattr 0 0 uint\n";
             assert(!wonder_shader_refl_parse(vs_zero, strlen(vs_zero), &fake_refl[0], err, sizeof err));
             REVIEW_STOP((void)0, "depth mode");
-            const char *vs_nodepth = "stage vs\nattr 0 0 float\n";
+            const char *vs_nodepth = "stage vs\nattr 0 0 uint\n";
             assert(!wonder_shader_refl_parse(vs_nodepth, strlen(vs_nodepth), &fake_refl[0], err, sizeof err));
             REVIEW_STOP((void)0, "depth mode");
             assert(!wonder_shader_refl_parse(vs_refl, strlen(vs_refl), &fake_refl[0], err, sizeof err));

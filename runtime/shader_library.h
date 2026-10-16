@@ -31,3 +31,8 @@ struct wonder_shader_refl {
 };
 // 0 = parsed; otherwise non-zero with the reason in err.
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *out, char *err, size_t errlen);
+// Component class a shader reads / writes for an NVN format (vertex attribute or colour target): WONDER_SHADER_UINT for
+// the ...UI formats, WONDER_SHADER_SINT for the ...I formats (nvn.h), WONDER_SHADER_FLOAT otherwise (unorm / snorm /
+// float / sRGB / scaled / compressed). Offline-built stages (tools/extract_shaders.py) assume float; the host compares
+// (round153).
+int wonder_shader_format_class(int nvn_format);

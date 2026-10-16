@@ -263,6 +263,11 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         if (a >= draw_state.nattrib || !draw_state.attrib[a].fmt) {   // disabled: Maxwell reads (0,0,0,1) (round92)
             d.attr[i].format = 0; d.attr[i].offset = 0; d.attr[i].stream = WONDER_HOST_DEFAULT_ATTRIBUTE; continue;
         }
+        if (wonder_shader_format_class((int)draw_state.attrib[a].fmt) != d.vr->attr[i].type) {   // offline-built stages assume float (round153)
+            snprintf(why, sizeof why, "vertex attribute %d format %#x is %s, the vertex shader %s reads it as %s", a, draw_state.attrib[a].fmt,
+                     (const char *[]){"float", "uint", "sint"}[wonder_shader_format_class((int)draw_state.attrib[a].fmt)], d.vs_key, (const char *[]){"float", "uint", "sint"}[d.vr->attr[i].type % 3]);
+            replay_stop(opcode, why);
+        }
         int s = (int)draw_state.attrib[a].stream;
         if (s >= 15) { snprintf(why, sizeof why, "vertex stream %d would need [[buffer(%d)]] (Metal has 0..30)", s, 16 + s); replay_stop(opcode, why); }
         d.attr[i].format = draw_state.attrib[a].fmt; d.attr[i].offset = draw_state.attrib[a].offset; d.attr[i].stream = (uint32_t)s;
@@ -333,6 +338,12 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     }
     for (int i = 0; i < 9; i++) d.targets[i] = draw_state.targets[i];
     d.color_count = draw_state.has_targets ? draw_state.color_count : 0;
+    for (int i = 0; i < d.color_count && i < 8; i++)   // colour outputs: a float output into an integer target (or back) is not a conversion
+        if (d.targets[i].valid && (d.fr->fout_mask >> i & 1) && wonder_shader_format_class(d.targets[i].texture.desc.format) != d.fr->fout_type[i]) {
+            snprintf(why, sizeof why, "colour target %d format %#x is %s, the fragment shader %s writes %s", i, d.targets[i].texture.desc.format,
+                     (const char *[]){"float", "uint", "sint"}[wonder_shader_format_class(d.targets[i].texture.desc.format)], d.fs_key, (const char *[]){"float", "uint", "sint"}[d.fr->fout_type[i] % 3]);
+            replay_stop(opcode, why);
+        }
     memcpy(d.blend, draw_state.blend, sizeof d.blend); d.blend_set = draw_state.blend_set; memcpy(d.blend_color, state.blend_color, sizeof d.blend_color);
     d.color = draw_state.color; d.channel_mask = draw_state.channel_mask; d.depth_stencil = draw_state.depth_stencil;
     d.polygon = draw_state.polygon; d.multisample = draw_state.multisample; d.states_set = draw_state.states_set;

@@ -26,5 +26,9 @@ for key in open(os.path.join(census, 'index.txt')).read().split():
 open(path, 'w').write(' '.join(have) + '\n')
 PY
 fi
-"$WORK/tools/venv/bin/python3" tools/wonder_shader_build.py $(cat "$LIST") --out "$WORK/build/wonder-shaders" 2>&1 | tail -1
+# Every program in RomFS too (tools/extract_shaders.py, round153), after the real censuses so their bound types win.
+OFFLINE=$WORK/build/offline-shaders/census-dirs.txt
+[ -s "$OFFLINE" ] || "$WORK/tools/venv/bin/python3" tools/extract_shaders.py "$WORK/build/wonder-romfs.wrom" --out "$WORK/build/offline-shaders" | tail -1
+"$WORK/tools/venv/bin/python3" tools/wonder_shader_build.py $(cat "$LIST") $(cat "$OFFLINE") --out "$WORK/build/wonder-shaders" 2>&1 | grep -m1 '^built'
+
 WONDER_INTERACTIVE=1 tools/device_round.sh "$NEXT" 2>&1 | tail -1

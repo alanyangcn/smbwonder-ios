@@ -63,6 +63,11 @@ int main(void) {
     assert(!parse("stage ps\ndrv 2\n", &r, err) && r.drv_read == 4 && r.drv0_buffer == -1);              // c[2] at run time: not fillable
     assert(parse("stage ps\ndrv 2 3\n", &r, err) && strstr(err, "drv"));
     assert(parse("stage vs\ndrv 0 15\n", &r, err) && strstr(err, "drv"));                                 // vertex buffers 0..14
+    // NVN format component classes (nvn.h: ...UI uint, ...I sint, everything else float).
+    assert(wonder_shader_format_class(0x27) == WONDER_SHADER_UINT && wonder_shader_format_class(0x3E) == WONDER_SHADER_UINT);   // RGBA8UI, RGB10A2UI
+    assert(wonder_shader_format_class(0x30) == WONDER_SHADER_SINT && wonder_shader_format_class(0x6A) == WONDER_SHADER_SINT);   // RGBA32I, RGB10A2I
+    assert(wonder_shader_format_class(0x25) == WONDER_SHADER_FLOAT && wonder_shader_format_class(0x2E) == WONDER_SHADER_FLOAT);   // RGBA8, RGBA32F
+    assert(wonder_shader_format_class(0x38) == WONDER_SHADER_FLOAT && wonder_shader_format_class(0x3F) == WONDER_SHADER_FLOAT);   // RGBA8_SRGB, R11G11B10F
     puts("shader_library OK");
     return 0;
 }

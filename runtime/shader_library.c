@@ -10,6 +10,15 @@ static int texture_type_of(const char *s) {
     return -1;
 }
 static int hex_value(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+int wonder_shader_format_class(int f) {
+    switch (f) {
+    case 0x3: case 0x8: case 0xB: case 0xF: case 0x14: case 0x17: case 0x1B: case 0x20: case 0x23: case 0x27: case 0x2C: case 0x2F:
+    case 0x3E: case 0x6F: case 0x74: case 0x77: return WONDER_SHADER_UINT;
+    case 0x4: case 0x9: case 0xC: case 0x10: case 0x15: case 0x18: case 0x1C: case 0x21: case 0x24: case 0x28: case 0x2D: case 0x30:
+    case 0x6A: case 0x70: case 0x75: case 0x78: return WONDER_SHADER_SINT;
+    default: return WONDER_SHADER_FLOAT;
+    }
+}
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *r, char *err, size_t n) {
     memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
     size_t at = 0; unsigned line_no = 0;

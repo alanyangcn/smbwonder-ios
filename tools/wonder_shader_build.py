@@ -186,6 +186,9 @@ def job_for(census, stage_entry, code_path):
 
 def reflect(census, stage_entry, job, res, msl, c1):
     buffers, textures, samplers, attributes = entry_bindings(msl)
+    # Metal limits per stage: 31 textures, 16 samplers (round153: 12 offline stages bind samplers past 15).
+    if any(t > 30 for t in textures): raise ValueError(f'texture binding {max(textures)} beyond Metal [[texture(30)]]')
+    if any(s_ > 15 for s_ in samplers): raise ValueError(f'sampler binding {max(samplers)} beyond Metal\'s 16 samplers per stage')
     stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set()
     if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
     if job['stage'] == 'cs': lines += ['local ' + ' '.join(map(str, job['local'])), f"shared {job['shared']}"]
