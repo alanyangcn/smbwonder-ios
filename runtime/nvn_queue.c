@@ -267,7 +267,16 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         // Metal restarts strips on the all-ones index and never restarts lists; NVN restarts on its own index when enabled.
         uint32_t all_ones = call.index_type == 0 ? 0xffu : call.index_type == 1 ? 0xffffu : 0xffffffffu;
         int strip = call.primitive == 3 || call.primitive == 5;
-        if (strip && !(raster.restart && (uint32_t)raster.restart_index == all_ones)) replay_stop(opcode, "strip draw without NVN primitive restart on the all-ones index (Metal always restarts there)");
+        if (strip && !(raster.restart && (uint32_t)raster.restart_index == all_ones)) {
+            // Metal restarts strips at the all-ones index regardless; without NVN restart (or with another restart
+            // index) the draw matches only when that value never occurs (round147: a strip draw with restart off).
+            struct wonder_nvn_pool_view v; wonder_nvn_address_span(call.index_address, (uint64_t)call.count << call.index_type, &v);
+            for (int i = 0; i < call.count; i++) {
+                uint32_t x = call.index_type == 0 ? v.memory[i] : call.index_type == 1 ? ((const uint16_t *)v.memory)[i] : ((const uint32_t *)v.memory)[i];
+                if (x == all_ones) replay_stop(opcode, "strip draw uses the all-ones index without NVN primitive restart on it (Metal would restart there)");
+                if (raster.restart && x == (uint32_t)raster.restart_index) replay_stop(opcode, "strip draw restarts on an index other than all-ones (Metal restarts only there)");
+            }
+        }
         if (!strip && raster.restart) {
             struct wonder_nvn_pool_view v; wonder_nvn_address_span(call.index_address, (uint64_t)call.count << call.index_type, &v);
             for (int i = 0; i < call.count; i++) {

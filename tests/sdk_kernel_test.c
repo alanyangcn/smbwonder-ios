@@ -13,6 +13,15 @@ void *wonder_handle_object(uint32_t h, uint32_t kind) { return h == 0x1234 && ki
 int main(void) {
     uint64_t r[31] = {0};
     wonder_kernel_init(0x5000000);
+    // Alias region (GetInfo 2/3) holds the 1750 MiB VAMM heap plus its separate large-block address regions: it takes
+    // the address space left after the stacks and a 2 GiB heap region, never less than 1792 MiB (round146: 1792 MiB
+    // left ~40 MiB, AllocateAddressRegion(46 MiB) failed with 0x1803). Heap region (GetInfo 4/5) follows it.
+    { uint64_t q[31] = {0}; q[1] = 2; q[2] = 0xffff8001u; assert(wonder_kernel_call(0x29, q) && !q[0]); uint64_t alias = q[1];
+      q[1] = 3; assert(wonder_kernel_call(0x29, q) && !q[0]); uint64_t alias_size = q[1];
+      q[1] = 4; assert(wonder_kernel_call(0x29, q) && !q[0]); uint64_t heap = q[1];
+      q[1] = 5; assert(wonder_kernel_call(0x29, q) && !q[0]); uint64_t heap_size = q[1];
+      assert(alias_size >= (1792ull << 20) && heap == alias + alias_size + (256ull << 20));
+      assert(alias_size == (1792ull << 20) || heap_size >= (2048ull << 20)); }
     r[1]=18; r[2]=0xffff8001u;
     assert(wonder_kernel_call(0x29,r)); assert(!r[0]); assert(r[1]==0x010015100b514000ull);
     r[1]=999; assert(wonder_kernel_call(0x29,r)); assert(r[0]!=0);

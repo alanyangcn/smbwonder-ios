@@ -1053,6 +1053,11 @@ int main(void) {
             for (int i = 0; i < 6; i++) idx[i] = (uint16_t)i;
             void (*restart)(void *, uint32_t, int) = slot("nvnCommandBufferSetPrimitiveRestart");
             REVIEW_STOP(restart(dcb, 1, 5), "primitive restart"); REVIEW_OK(restart(dcb, 1, 0xffff)); REVIEW_OK(restart(dcb, 0, 0));
+            // Triangle strips with restart off (round147): exact while 0xffff never occurs; refused when it does.
+            { unsigned n_ = host_draws; rbegin(dcb); restart(dcb, 0, 0); rdraw(dcb, 5, 1, 6, (uintptr_t)(cb_memory + 0x9200)); uint64_t h_ = rend(dcb);
+              dsubmit(queue, 1, &h_); assert(host_draws == n_ + 1);
+              idx[3] = 0xffff; rbegin(dcb); rdraw(dcb, 5, 1, 6, (uintptr_t)(cb_memory + 0x9200)); h_ = rend(dcb);
+              EXPECT_STOP(dsubmit(queue, 1, &h_), "all-ones index without NVN primitive restart"); idx[3] = 3; }
             memcpy(idx, saved, sizeof saved);
             // Line width other than 1 on line primitives.
             rbegin(dcb); ((void (*)(void *, float))slot("nvnCommandBufferSetLineWidth"))(dcb, 2.0f); rdraw(dcb, 1, 1, 6, (uintptr_t)(cb_memory + 0x9200));

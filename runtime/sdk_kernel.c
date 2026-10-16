@@ -25,10 +25,16 @@ void wonder_kernel_region(uint64_t base, uint64_t size, uint32_t state, uint32_t
     pthread_mutex_unlock(&kernel_lock);
 }
 // Address-space layout (offsets in one host reservation, sized from what iOS grants):
-//   [0, 1792 MiB)      alias region: SDK VammManager maps on demand (MapPhysicalMemory). Wonder reserves
-//                      0x6d600000 (1750 MiB) of virtual-address heap there when VAMM is enabled (main+0x61231c).
-//   [1792, +256 MiB)   stack region (MapMemory)
-//   [2048 MiB, end)    heap region (SetHeapSize)
+//   [0, A)             alias region: SDK VammManager maps on demand (MapPhysicalMemory) and carves every
+//                      nn::os::AllocateAddressRegion from it. Wonder reserves 0x6d600000 (1750 MiB) of virtual-address
+//                      heap there (main+0x61231c), and that heap takes a separate address region for each large block:
+//                      with A = 1792 MiB only ~40 MiB were left, AllocateAddressRegion(46 MiB) failed with 0x1803
+//                      (out of address space) and the 48 MiB far-view model Model/DVHajimariSougen.bfres never loaded
+//                      (round146: black course background, NULL deref at main+0x8f68a8 on the next scene change).
+//                      Horizon's alias region is tens of GiB; here A takes all address space left after the stack
+//                      region and a heap region of WONDER_HEAP_REGION_TARGET (never less than 1792 MiB).
+//   [A, +256 MiB)      stack region (MapMemory)
+//   [A + 256 MiB, end) heap region (SetHeapSize; Wonder asks for pool - VAMM - image, 1444 MiB)
 // Without the extended-virtual-addressing entitlement iOS rejects a 4 GiB reservation (nvn-round12), so the
 // largest grantable size is measured and HOST_VA_HEADROOM is left for Metal and the host itself.
 // Memory is committed lazily by iOS: reported sizes are address space; only touched pages cost RAM.
@@ -36,6 +42,8 @@ void wonder_kernel_region(uint64_t base, uint64_t size, uint32_t state, uint32_t
 #define WONDER_VAMM_RESERVATION 0x6d600000ull    /* main+0x61231c */
 #define HOST_VA_HEADROOM (512ull << 20)
 #define MIN_HEAP_REGION (256ull << 20)
+#define WONDER_HEAP_REGION_TARGET (2048ull << 20)   /* above the 1444 MiB heap Wonder sets */
+#define MIN_ALIAS_REGION (1792ull << 20)            /* the VAMM reservation plus a margin */
 static uint64_t largest_reservation(void) {   // 256 MiB steps between 1 and 8 GiB
     uint64_t lo=0,hi=32;                      // units of 256 MiB
     while(lo<hi){
@@ -48,13 +56,15 @@ static uint64_t largest_reservation(void) {   // 256 MiB steps between 1 and 8 G
 void wonder_kernel_init(uint64_t bytes) {
     if (space) die("SDK kernel initialized twice");
     image_size = bytes;
-    ALIAS_OFFSET=0;ALIAS_SIZE=1792ull<<20;
-    STACK_OFFSET=ALIAS_OFFSET+ALIAS_SIZE;STACK_SIZE=256ull<<20;
-    HEAP_OFFSET=STACK_OFFSET+STACK_SIZE;
     uint64_t largest=largest_reservation();
+    STACK_SIZE=256ull<<20;ALIAS_OFFSET=0;ALIAS_SIZE=MIN_ALIAS_REGION;
+    if(largest>HOST_VA_HEADROOM+STACK_SIZE+WONDER_HEAP_REGION_TARGET+MIN_ALIAS_REGION)
+        ALIAS_SIZE=(largest-HOST_VA_HEADROOM-STACK_SIZE-WONDER_HEAP_REGION_TARGET)&~((1ull<<21)-1);   // 2 MiB aligned
+    STACK_OFFSET=ALIAS_OFFSET+ALIAS_SIZE;
+    HEAP_OFFSET=STACK_OFFSET+STACK_SIZE;
     LOG("SDK_KERNEL largest_reservation=%llu MiB",(unsigned long long)(largest>>20));
     if(largest<HEAP_OFFSET+MIN_HEAP_REGION+HOST_VA_HEADROOM)
-        die("HOST_ADDRESS_SPACE_TOO_SMALL largest=%llu MiB, need %llu MiB (VAMM alias 1792 + stacks 256 + heap 256 + headroom 512); "
+        die("HOST_ADDRESS_SPACE_TOO_SMALL largest=%llu MiB, need %llu MiB (VAMM alias >= 1792 + stacks 256 + heap 256 + headroom 512); "
             "the extended-virtual-addressing entitlement is required",(unsigned long long)(largest>>20),
             (unsigned long long)((HEAP_OFFSET+MIN_HEAP_REGION+HOST_VA_HEADROOM)>>20));
     AS_SIZE=largest-HOST_VA_HEADROOM;
