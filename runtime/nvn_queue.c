@@ -200,7 +200,8 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             static const int target_type[11] = {WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_SHADER_TEX_1D_ARRAY, WONDER_SHADER_TEX_2D_ARRAY,
                 WONDER_SHADER_TEX_2D_MS, WONDER_SHADER_TEX_2D_MS_ARRAY, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_CUBE, WONDER_SHADER_TEX_CUBE_ARRAY, WONDER_SHADER_TEX_BUFFER};
             int target = t->has_view && t->view.set_target ? t->view.target : t->texture.desc.target;
-            if (target < 0 || target > 10 || target_type[target] != r->tex[i].type) {
+            int as_layer = (target == 1 || target == 7) && r->tex[i].type == WONDER_SHADER_TEX_2D_ARRAY;   // 2D sampled as a 1-layer array (Maxwell)
+            if (target < 0 || target > 10 || (target_type[target] != r->tex[i].type && !as_layer)) {
                 snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d", stage, slot, target, r->tex[i].type); replay_stop(opcode, why);
             }
             d.tex[stage][slot].texture = *t; d.tex[stage][slot].sampler = *m; d.tex_mask[stage] |= 1ull << slot;

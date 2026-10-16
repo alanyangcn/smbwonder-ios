@@ -1037,9 +1037,13 @@ int main(void) {
               REVIEW_OK(((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindStorageBuffer"))(dcb, 1, 2, (uintptr_t)(cb_memory + 0x9800), 0x40));
               assert(last_draw.sbuf[1][2].size == 0x40 && last_draw.sbuf[1][2].buffer);
               fake_refl[1] = fs_parsed; }
-            // Shader texture type must match the bound texture's target (texture 300 is 2D).
+            // Shader texture type must match the bound texture's target (texture 300 is 2D), except that a 2D texture
+            // may be sampled through a 2D-array declaration as layer 0, as Maxwell does (round127: the font shader).
             const char *fs_array = "stage ps\ncbuf 3 1\ntex 0 1 1 2darray\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_array, strlen(fs_array), &fake_refl[1], err, sizeof err));
+            REVIEW_OK((void)0);
+            const char *fs_3d = "stage ps\ncbuf 3 1\ntex 0 1 1 3d\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(fs_3d, strlen(fs_3d), &fake_refl[1], err, sizeof err));
             REVIEW_STOP((void)0, "texture type");
             fake_refl[1] = fs_parsed;
             // A failed GPU command buffer stops the next submission by name.

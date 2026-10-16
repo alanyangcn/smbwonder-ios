@@ -156,7 +156,12 @@ def reflect(census, stage_entry, job, res, msl, c1):
         r = texture_slot(t['handle'], t['cbuf_slot'])
         if r not in bound: raise ValueError(f"texture slot {r} is read but not bound to a registered texture in the census")
         if t['binding'] not in textures or t['binding'] not in samplers: raise ValueError(f"texture binding {t['binding']} missing from the MSL entry")
-        lines.append(f"tex {r} {t['binding']} {t['binding']} {job['tex'][str(r)]}")
+        # The type the MSL declares (the translator's SamplerType), not the census target: the font shader samples the
+        # 2D glyph cache with an array instruction (round127). Only that mismatch is accepted (Maxwell reads layer 0).
+        declared, bound_type = sampler_type_name(t['type']), job['tex'][str(r)]
+        if declared != bound_type and not (declared == '2darray' and bound_type == '2d'):
+            raise ValueError(f"texture slot {r}: shader declares {declared}, census bound {bound_type}")
+        lines.append(f"tex {r} {t['binding']} {t['binding']} {declared}")
     for b in sorted(support_bindings(msl) - used):
         lines.append(f'support {b}'); used.add(b)   # host fills it per D2R nvn_mtl.m (render_scale 1.0, BGRA flags 0)
     for b in sorted(buffers - used):

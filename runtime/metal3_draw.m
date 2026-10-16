@@ -478,6 +478,13 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         for (int i = 0; i < r->ntex; i++) {
             int slot = r->tex[i].slot;
             textures[stage][i] = bisect_dummy_textures ? dummy_texture() : sampled_texture(d, stage, slot); sampler_states[stage][i] = sampler_state(d, &d->tex[stage][slot].sampler);
+            // Maxwell samples a 2D texture through an array instruction as layer 0 (round127: the font shader fs 929a2e26
+            // declares texture2d_array, the glyph cache is 2D); Metal needs the declared type, so bind a 1-layer 2D-array view.
+            if (r->tex[i].type == WONDER_SHADER_TEX_2D_ARRAY && textures[stage][i].textureType == MTLTextureType2D) {
+                id<MTLTexture> t2 = textures[stage][i];
+                textures[stage][i] = [t2 newTextureViewWithPixelFormat:t2.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, t2.mipmapLevelCount) slices:NSMakeRange(0, 1)];
+                if (!textures[stage][i]) unsupported(d, "2D texture as a 2D-array view, serial", (long)d->tex[stage][slot].texture.texture.serial);
+            }
         }
         if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
             c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
