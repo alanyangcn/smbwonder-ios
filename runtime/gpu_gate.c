@@ -8,7 +8,11 @@ void wonder_gpu_gate_set(int open) {
     pthread_mutex_lock(&lock); open_ = open != 0; if (open_) pthread_cond_broadcast(&opened); pthread_mutex_unlock(&lock);
 }
 int wonder_gpu_gate_is_open(void) { pthread_mutex_lock(&lock); int o = open_; pthread_mutex_unlock(&lock); return o; }
+#include <stdlib.h>
+#include <string.h>
 uint64_t wonder_gpu_gate_wait(void) {
+    static int off = -1; if (off < 0) { const char *e = getenv("WONDER_GPU_GATE"); off = e && !strcmp(e, "0"); }   // diagnostic: never wait
+    if (off) return 0;
     pthread_mutex_lock(&lock);
     if (open_) { pthread_mutex_unlock(&lock); return 0; }
     uint64_t start = now();
