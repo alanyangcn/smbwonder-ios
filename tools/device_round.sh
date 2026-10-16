@@ -131,6 +131,10 @@ else
   push "$OUT/wonder-romfs.ok" Documents/wonder-romfs.ok || { step "FAILED RomFS marker upload"; exit 1; }
   step "RomFS archive uploaded and marked"
 fi
+# The same settings for home-screen launches (LoaderProbe.m apply_launch_env); an empty file clears them.
+printf '%s\n' ${WONDER_ENVS:-} > "$OUT/launch-env.txt"
+push "$OUT/launch-env.txt" Documents/launch-env.txt || { step "FAILED launch-env upload"; exit 1; }
+step "launch-env: $(tr '\n' ' ' < "$OUT/launch-env.txt")"
 echo "!! 请保持 iPhone 解锁、屏幕常亮：锁屏时 app 在后台启动，CAMetalLayer/GPU 提交不可信"
 # devicectl --console keeps the app attached (foreground) for the whole round and records its stdout/stderr (the host's
 # fprintf(stderr) diagnostics) in console-<attempt>.log. Environment for the app: DEVICECTL_CHILD_<KEY>.

@@ -1,6 +1,17 @@
 #include "hle.h"
 #include "sdk_services.h"
 #include <pthread/qos.h>
+#include <errno.h>
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
+// Whether the calling thread currently runs under THREAD_TIME_CONSTRAINT_POLICY (not the default policy).
+static int time_constraint_thread(void){
+    thread_time_constraint_policy_data_t p; mach_msg_type_number_t n=THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def=0;
+    mach_port_t self=mach_thread_self();
+    kern_return_t kr=thread_policy_get(self,THREAD_TIME_CONSTRAINT_POLICY,(thread_policy_t)&p,&n,&def);
+    mach_port_deallocate(mach_task_self(),self);
+    return kr==KERN_SUCCESS&&!def;
+}
 static void initialize(enum wonder_service service,const char *name) {
     int error=wonder_service_initialize(service);if(error)die("HOST_SERVICE_FAILED %s error=%d",name,error);
     LOG("HOST_SERVICE_READY %s (subsequent unimplemented requests remain fatal)",name);
@@ -15,6 +26,11 @@ HLE_FORCE("_ZN2nn4diag34InitializeApplicationAbortObserverEv","Install fatal-sig
 HLE_FORCE("_ZN2nn2oe15SetCpuBoostModeENS0_12CpuBoostModeE","Map loading CPU request to host thread QoS; Apple controls hardware clocks",void,wonder_cpu_boost,unsigned mode){
     if(!wonder_service_ready(WONDER_OE)||mode>1)die("Invalid CPU boost request %u",mode);
     int rc=pthread_set_qos_class_self_np(mode?QOS_CLASS_USER_INTERACTIVE:QOS_CLASS_USER_INITIATED,0);
+    if(rc==EPERM&&time_constraint_thread()){
+        // round157: the present thread is a declared time-constraint thread (host_graphics.m rt_thread_tick); Darwin
+        // refuses QoS changes on it (EPERM), and its real-time band is above both QoS classes asked for here.
+        LOG("HOST_CPU_BOOST mode=%u kept the time-constraint policy (QoS refused on a real-time thread)",mode);return;
+    }
     if(rc)die("CPU boost QoS request failed %d",rc);
     LOG("HOST_CPU_BOOST mode=%u QoS applied",mode);
 }

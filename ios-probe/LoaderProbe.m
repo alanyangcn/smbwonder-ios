@@ -263,6 +263,19 @@ uint64_t wonder_host_language(void) {
 }
 @end
 
+// Documents/launch-env.txt (written by tools/device_round.sh from WONDER_ENVS): KEY=VALUE lines applied when the app is
+// opened from the home screen too, so it runs with the round's settings (round157: a home-screen launch lacked
+// WONDER_RT=0 and the census sweep). Variables already set by the launcher win.
+static void apply_launch_env(void) {
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/launch-env.txt"];
+    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil]; if (!text) return;
+    for (NSString *line in [text componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]) {
+        NSRange eq = [line rangeOfString:@"="]; if (!line.length || eq.location == NSNotFound || !eq.location) continue;
+        NSString *key = [line substringToIndex:eq.location], *value = [line substringFromIndex:eq.location + 1];
+        if (![key hasPrefix:@"WONDER_"]) continue;
+        if (setenv(key.UTF8String, value.UTF8String, 0) == 0) fprintf(stderr, "HOST_LAUNCH_ENV %s=%s%s\n", key.UTF8String, getenv(key.UTF8String), strcmp(getenv(key.UTF8String), value.UTF8String) ? " (launcher value kept)" : "");
+    }
+}
 int main(int argc, char **argv) {
-    @autoreleasepool { return UIApplicationMain(argc, argv, nil, NSStringFromClass(ProbeDelegate.class)); }
+    @autoreleasepool { apply_launch_env(); return UIApplicationMain(argc, argv, nil, NSStringFromClass(ProbeDelegate.class)); }
 }
