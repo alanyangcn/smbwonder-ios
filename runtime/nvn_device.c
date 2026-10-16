@@ -2,6 +2,7 @@
 // Host objects live inside the guest-owned NVN storage; a magic word guards every use.
 #include <stdatomic.h>
 #include "nvn_device.h"
+#include "command_store.h"
 #include "nvn_names.h"
 #include <stdlib.h>
 #include <string.h>
@@ -268,6 +269,17 @@ void wonder_nvn_pool_span(const void *pool, uint64_t offset, uint64_t size, stru
     *view = (struct wonder_nvn_pool_view){m->memory + offset, size, m->flags, m->host_buffer, m->host_offset + offset};
 }
 
+// The registered pool whose memory holds address (diagnostics; NULL when none).
+const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_t *size) {
+    const struct memory_pool *pool = NULL;
+    pthread_mutex_lock(&pool_registry_lock);
+    for (struct pool_registration *p = pool_registry; p; p = p->next) {
+        uint64_t b = (uintptr_t)p->pool->memory;
+        if (address >= b && address - b < p->pool->size) { pool = p->pool; *base = b; *size = p->pool->size; break; }
+    }
+    pthread_mutex_unlock(&pool_registry_lock);
+    return pool;
+}
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {
     const struct memory_pool *pool = NULL;
     pthread_mutex_lock(&pool_registry_lock);
@@ -606,6 +618,7 @@ void wonder_nvnMemoryPoolFinalize(void *pool) {
         if ((*p)->pool == m) { struct pool_registration *dead = *p; *p = dead->next; free(dead); break; }
     pthread_mutex_unlock(&pool_registry_lock);
     wonder_host_pool_forget(pool);
+    wonder_cmdstore_forget_range((uint64_t)(uintptr_t)m->memory, m->size);   // records of command memory in this pool
     if (m->host_buffer) wonder_host_release(m->host_buffer);
     if (m->flags & 0x200) wonder_host_unreserve(m->memory, m->size);
     free(m->mappings);

@@ -54,6 +54,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/metal3_probe.m'
       - path: '${SMBW_REFERENCE}/runtime/host_input.m'
       - path: '${SMBW_REFERENCE}/runtime/log_throttle.c'
+      - path: '${SMBW_REFERENCE}/runtime/command_store.c'
       - path: '${SMBW_REFERENCE}/runtime/metal3_shader_check.m'
       - path: '${SMBW_REFERENCE}/runtime/metal3_pixels.c'
       - path: '${SMBW_REFERENCE}/runtime/kernel_threads.c'

@@ -240,6 +240,15 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (!range.length) unsupported(d, "texture view layers not representable (cube views need whole cubes), serial", (long)t->serial);
     NSUInteger first = range.location, layers = range.length, slices = all.length;
     const uint8_t *z = v && v->set_swizzle ? v->swizzle : t->swizzle;   // NVN swizzle values equal MTLTextureSwizzle (ZERO 0, ONE 1, R 2, G 3, B 4, A 5)
+    if (t->desc.format == 0x1 && (t->desc.flags & 0x10)) {   // diagnostic: the font glyph cache (2048x8192 R8 linear, round123 serial 38)
+        static _Atomic int logged; int n = atomic_fetch_add(&logged, 1);
+        if (n < 16 || n % 2000 == 0) {
+            size_t nonzero = 0; const uint8_t *st = d->tex[stage][slot].storage;
+            for (size_t i = 0; st && i < d->tex[stage][slot].storage_size; i += 64) nonzero += st[i] != 0;
+            fprintf(stderr, "HOST_GLYPH_SAMPLE #%d vs=%s fs=%s serial=%llu %ux%u stride=%u swizzle=%u,%u,%u,%u view=%d storage=%zu nonzero/64=%zu gpu=%d\n", n, d->vs_key, d->fs_key,
+                    (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.stride, z[0], z[1], z[2], z[3], v != NULL, d->tex[stage][slot].storage_size, nonzero, gpu != nil);
+        }
+    }
     int identity = z[0] == 2 && z[1] == 3 && z[2] == 4 && z[3] == 5, unset = !(z[0] | z[1] | z[2] | z[3]);
     if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
     int whole = base == 0 && count == levels && first == 0 && layers == slices;

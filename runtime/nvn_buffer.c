@@ -36,6 +36,7 @@ void wonder_nvnBufferBuilderSetDefaults(void *builder) {
 // round123: main+0x107fc74 while loading the first course) and the range are checked when the buffer is initialized.
 void wonder_nvnBufferBuilderSetStorage(void *builder, const void *pool, ptrdiff_t offset, size_t size) {
     struct buffer_builder *b = bbuilder_of(builder, "nvnBufferBuilderSetStorage");
+    if (!pool) { extern void wonder_nvn_diag_null_pool(void); wonder_nvn_diag_null_pool(); }
     b->pool = pool; b->offset = offset; b->size = size;
 }
 uint32_t wonder_nvnBufferInitialize(void *buffer, const void *builder) {

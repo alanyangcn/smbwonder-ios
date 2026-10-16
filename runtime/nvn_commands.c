@@ -4,6 +4,7 @@
 // during recording closes the current span into the handle's segment list. Records are typed host
 // packets with snapshotted arguments; replay (nvn_queue.c) executes or stops by name.
 #include "nvn_commands.h"
+#include "command_store.h"
 #include <string.h>
 #include <pthread.h>
 #include <stdlib.h>
@@ -180,7 +181,8 @@ static void record_command(void *cmdbuf, unsigned opcode, const void *payload, s
     uint8_t *c = cmdbuf_of(cmdbuf, "record_command");
     if (!c[0x11]) wonder_nvn_stop("NVN_INVALID_STATE %s recorded outside Begin/End", wonder_nvn_command_name(opcode));
     if (size > UINT32_MAX - 24) wonder_nvn_stop("NVN_INVALID_ARGUMENT command payload too large");
-    size_t bytes = (sizeof(struct wonder_nvn_command_header) + size + 7) & ~(size_t)7;
+    // Guest command memory gets an 8-byte stub; the record lives in command_store.c (see there for why).
+    size_t bytes = WONDER_NVN_STUB_SIZE;
     uint8_t *cursor = command_field(c, 0), *limit = command_field(c, 8);
     if (!cursor || (uintptr_t)limit < (uintptr_t)cursor || bytes > (uintptr_t)limit - (uintptr_t)cursor) {
         // sdk+0x4435b0..0x4435f8: callback(cmdbuf, OUT_OF_COMMAND_MEMORY, max(need, 0x200), data), then recheck.
@@ -194,10 +196,9 @@ static void record_command(void *cmdbuf, unsigned opcode, const void *payload, s
         if (!cursor || (uintptr_t)limit < (uintptr_t)cursor || bytes > (uintptr_t)limit - (uintptr_t)cursor)
             wonder_nvn_stop("NVN_COMMAND_MEMORY_EXHAUSTED callback granted too little (needs=%zu)", bytes);
     }
-    struct wonder_nvn_command_header header = {WONDER_NVN_COMMAND_MAGIC, (uint32_t)bytes, opcode, 0};
-    memcpy(cursor, &header, sizeof header);
-    memset(cursor + sizeof header, 0, bytes - sizeof header);
-    if (size) memcpy(cursor + sizeof header, payload, size);
+    uint32_t stub[2] = {WONDER_NVN_STUB_MAGIC, 0};
+    if (wonder_cmdstore_put((uint64_t)(uintptr_t)cursor, opcode, payload, size, &stub[1])) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY command record");
+    memcpy(cursor, stub, sizeof stub);
     command_pointer(c, 0, cursor + bytes);
 }
 // Generic record: nargs 64-bit arguments followed by blob bytes (snapshotted).
@@ -654,24 +655,22 @@ static void walk_segments(const struct segment *segments, unsigned count, uint64
     for (unsigned s = 0; s < count; s++) {
         const uint8_t *command = segments[s].cpu; size_t size = segments[s].bytes, offset = 0;
         while (offset < size) {
-            struct wonder_nvn_command_header header;
-            if (size - offset < sizeof header) wonder_nvn_stop("NVN_INVALID_COMMAND truncated record");
-            memcpy(&header, command + offset, sizeof header);
-            if (header.magic != WONDER_NVN_COMMAND_MAGIC)
-                wonder_nvn_stop("NVN_NATIVE_PACKET_UNSUPPORTED handle=%#llx segment=%u offset=%#zx word=%#x", (unsigned long long)handle, s, offset, header.magic);
-            if (header.size < sizeof header || header.size % 8 || header.size > size - offset || !header.opcode || header.opcode >= WONDER_NVN_CMD_COUNT)
-                wonder_nvn_stop("NVN_INVALID_COMMAND record size=%u opcode=%u", header.size, header.opcode);
-            size_t payload_size = header.size - sizeof header;
-            void *copy = malloc(payload_size ? payload_size : 1);
-            if (!copy) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY command snapshot");
-            memcpy(copy, command + offset + sizeof header, payload_size);
-            if (header.opcode != WONDER_NVN_DRAW_ELEMENTS) {
+            uint32_t stub[2];
+            if (size - offset < sizeof stub) wonder_nvn_stop("NVN_INVALID_COMMAND truncated record");
+            memcpy(stub, command + offset, sizeof stub);
+            if (stub[0] != WONDER_NVN_STUB_MAGIC)
+                wonder_nvn_stop("NVN_NATIVE_PACKET_UNSUPPORTED handle=%#llx segment=%u offset=%#zx word=%#x", (unsigned long long)handle, s, offset, stub[0]);
+            unsigned opcode = 0; size_t payload_size = 0;
+            void *copy = wonder_cmdstore_get((uint64_t)(uintptr_t)(command + offset), stub[1], &opcode, &payload_size);
+            if (!copy) wonder_nvn_stop("NVN_INVALID_COMMAND stale or unknown record handle=%#llx segment=%u offset=%#zx seq=%u", (unsigned long long)handle, s, offset, stub[1]);
+            if (!opcode || opcode >= WONDER_NVN_CMD_COUNT) wonder_nvn_stop("NVN_INVALID_COMMAND record opcode=%u", opcode);
+            if (opcode != WONDER_NVN_DRAW_ELEMENTS) {
                 const struct wonder_nvn_cmd *cmd = copy;
                 if (payload_size < sizeof *cmd || cmd->nargs > 64 || sizeof *cmd + cmd->nargs * 8 + cmd->blob_size > payload_size)
-                    wonder_nvn_stop("NVN_INVALID_COMMAND %s malformed payload", wonder_nvn_command_name(header.opcode));
+                    wonder_nvn_stop("NVN_INVALID_COMMAND %s malformed payload", wonder_nvn_command_name(opcode));
             }
-            visitor(header.opcode, copy, payload_size, context);
-            free(copy); offset += header.size;
+            visitor(opcode, copy, payload_size, context);
+            free(copy); offset += sizeof stub;
         }
     }
 }

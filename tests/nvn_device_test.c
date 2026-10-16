@@ -14,6 +14,7 @@
 #include <CommonCrypto/CommonDigest.h>
 static jmp_buf stopped; static char last_stop[512]; static int host_ready, expecting_stop;
 void wonder_nvn_report(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stdout, format, a); va_end(a); fputc('\n', stdout); }
+void wonder_nvn_diag_null_pool(void) {}   // device-only diagnostic (nvn_bootstrap.c walks guest frames)
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vsnprintf(last_stop, sizeof last_stop, format, a); va_end(a); if (!expecting_stop) { fprintf(stderr, "unexpected stop: %s\n", last_stop); abort(); } longjmp(stopped, 1); }
 static void *last_labeled_resource; static const char *last_resource_label;
 // Draw census sink (Documents/DrawCensus on device): files kept in memory for assertions.
@@ -464,7 +465,7 @@ int main(void) {
     EXPECT_STOP(draw_elements(cmdbuf, 4, 0, 6, 0), "NVN_INVALID_STATE");
     EXPECT_STOP(end_recording(cmdbuf), "NVN_INVALID_STATE");
     EXPECT_STOP(wonder_nvn_command_walk(0x1234, check_draw, NULL), "NVN_INVALID_HANDLE");
-    struct wonder_nvn_command_header saved_header;
+    uint32_t saved_header[2];   // the 8-byte stub (command_store.h)
     memcpy(&saved_header, descriptor_memory, sizeof saved_header);
     memset(descriptor_memory, 0, 4); // native/unknown packet cannot be silently skipped
     EXPECT_STOP(wonder_nvn_command_walk(recorded_handle, check_draw, NULL), "NVN_NATIVE_PACKET_UNSUPPORTED");
@@ -474,8 +475,8 @@ int main(void) {
     assert(((size_t (*)(const void *))slot("nvnCommandBufferGetControlMemoryUsed"))(cmdbuf) == 56);
     assert(((size_t (*)(const void *))slot("nvnCommandBufferGetControlMemoryFree"))(cmdbuf) == 456);
     assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemorySize"))(cmdbuf) == 4096);
-    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryUsed"))(cmdbuf) == 40);
-    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryFree"))(cmdbuf) == 4056);
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryUsed"))(cmdbuf) == 8);    // one stub per command
+    assert(((size_t (*)(const void *))slot("nvnCommandBufferGetCommandMemoryFree"))(cmdbuf) == 4088);
     assert(!((uint32_t (*)(const void *))slot("nvnCommandBufferIsRecording"))(cmdbuf));
     assert(((void *(*)(const void *))slot("nvnCommandBufferGetMemoryCallback"))(cmdbuf) == (void *)0x1dd6344);
     assert(((void *(*)(const void *))slot("nvnCommandBufferGetMemoryCallbackData"))(cmdbuf) == cmdbuf);
@@ -663,7 +664,7 @@ int main(void) {
         uint64_t ubo = (uintptr_t)(cb_memory + 0x8000), words[4] = {0x1122334455667788u, 2, 3, 4};
         ((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(rcb, ubo, 0x20, 0, 0x20, words);
         words[0] = 0;
-        for (int i = 0; i < 40; i++) ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3);   // overflow 0x200 -> callback
+        for (int i = 0; i < 80; i++) ((void (*)(void *, int, int, int))slot("nvnCommandBufferDrawArrays"))(rcb, 4, 0, 3);   // 8-byte stubs: overflow 0x200 -> callback
         ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(rcb, 0x12);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(rcb, 0, (uintptr_t)(cb_memory + 0x8000));
         EXPECT_STOP(((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(rcb, 0, (uintptr_t)(cb_memory + 0x8004)), "16-byte aligned");
@@ -674,9 +675,9 @@ int main(void) {
         uint64_t group; memcpy(&group, rctl + 16, 8); assert((group & 0xffffffff) == 3 && (group >> 32) == rec_callbacks + 1);
         struct rec_trace trace = {0};
         wonder_nvn_command_walk(sub, trace_commands, &trace);
-        assert(trace.count == 50 && trace.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR && trace.opcodes[5] == WONDER_NVN_CMD_SET_DEPTH_RANGES);
+        assert(trace.count == 90 && trace.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR && trace.opcodes[5] == WONDER_NVN_CMD_SET_DEPTH_RANGES);
         assert(trace.opcodes[6] == WONDER_NVN_CMD_SET_RENDER_TARGETS && trace.targets == 1 && trace.clear[0] == 0.25f);
-        assert(trace.uniform_word == 0x1122334455667788u && trace.opcodes[49] == WONDER_NVN_CMD_REPORT_COUNTER);
+        assert(trace.uniform_word == 0x1122334455667788u && trace.opcodes[89] == WONDER_NVN_CMD_REPORT_COUNTER);
         // A second recording calls the first: handles are validated at record time.
         ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);
         ((void (*)(void *, int, const uint64_t *))slot("nvnCommandBufferCallCommands"))(rcb, 1, &sub);
@@ -684,7 +685,7 @@ int main(void) {
         EXPECT_STOP(((void (*)(void *, int, const uint64_t *))slot("nvnCommandBufferCallCommands"))(rcb, 1, &bogus), "NVN_INVALID_HANDLE");
         uint64_t outer = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(rcb);
         struct rec_trace called = {0}, outer_trace = {.called = &called}; wonder_nvn_command_walk(outer, trace_commands, &outer_trace);
-        assert(outer_trace.count == 1 && outer_trace.opcodes[0] == WONDER_NVN_CMD_CALL_COMMANDS && called.count == 50);
+        assert(outer_trace.count == 1 && outer_trace.opcodes[0] == WONDER_NVN_CMD_CALL_COMMANDS && called.count == 90);
         // CallCommands takes the called handle's command segments at record time, as NVN copies its control entries:
         // re-recording at the same control memory (round107: worker threads reuse handle addresses for the next frame
         // while the frame that called them is still being submitted) must not change what the caller runs.
@@ -695,7 +696,7 @@ int main(void) {
         assert(reused == sub);
         struct rec_trace now = {0}; wonder_nvn_command_walk(sub, trace_commands, &now); assert(now.count == 1);
         struct rec_trace called_again = {0}, outer_again = {.called = &called_again}; wonder_nvn_command_walk(outer, trace_commands, &outer_again);
-        assert(called_again.count == 50 && called_again.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR);
+        assert(called_again.count == 90 && called_again.opcodes[0] == WONDER_NVN_CMD_CLEAR_COLOR);
         // Disabled callback: exhaustion stops by name instead of overrunning.
         ((void (*)(void *, uint32_t))slot("nvnCommandBufferSetCommandMemoryCallbackEnabled"))(rcb, 0);
         ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(rcb);

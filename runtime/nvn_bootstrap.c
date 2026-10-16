@@ -35,6 +35,38 @@ static void caller_chain(uint64_t fp, uint64_t pc) {
         fp = frame[0]; pc = frame[1];
     }
 }
+// Round123/124 diagnostic: main+0x107fc00 (the game's buffer-builder wrapper) passed a NULL pool. Its caller
+// (main+0x10cf930, returning to main+0x10cfae0) holds in x21 a pointer to {pool, base} at object+0x178; the object's
+// +0x100 is the buffer address and +0x108 the pool/allocator the game found for it (NULL here). The wrapper saves x21 at
+// fp+0x28 (stp x22, x21, [sp, #0x60] with fp = sp+0x40). Logs those fields and the host pool holding the address.
+const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_t *size);
+static int guest_read(uint64_t address, void *out, size_t size) {
+    vm_size_t count = 0;
+    return vm_read_overwrite(mach_task_self(), address, size, (vm_address_t)out, &count) == KERN_SUCCESS && count == size;
+}
+void wonder_nvn_diag_null_pool(void) {
+    uint64_t fp = (uint64_t)__builtin_frame_address(0), frame[2];
+    for (unsigned depth = 0; depth < 16 && fp && !(fp & 15) && guest_read(fp, frame, sizeof frame); depth++) {
+        module_t *m = module_of((void *)frame[1]);
+        if (m && !strcmp(m->name, "main") && frame[1] - (uint64_t)m->base == 0x10cfae0) {
+            uint64_t holder = 0, obj[0x30] = {0};
+            if (!guest_read(fp + 0x28, &holder, 8) || !holder) { LOG("NVN_NULL_POOL_DIAG no saved x21 at fp=%#llx", (unsigned long long)fp); return; }
+            uint64_t object = holder - 0x178; int ok = guest_read(object + 0x100, obj, 0x190);
+            uint64_t address = obj[0], allocator = obj[1], base = 0, size = 0, info = 0, info_base = 0;
+            if (allocator && guest_read(allocator + 0x110, &info, 8) && info) guest_read(info + 0x18, &info_base, 8);
+            const void *pool = ok ? wonder_nvn_pool_containing(address, &base, &size) : NULL;
+            LOG("NVN_NULL_POOL_DIAG object=%#llx read=%d address(+0x100)=%#llx allocator(+0x108)=%#llx holder(+0x178)={%#llx,%#llx} flag(+0x288)=%#llx",
+                (unsigned long long)object, ok, (unsigned long long)address, (unsigned long long)allocator,
+                (unsigned long long)obj[0x78 / 8 + 0], (unsigned long long)obj[0x78 / 8 + 1], (unsigned long long)(obj[0x188 / 8] & 0xff));
+            LOG("NVN_NULL_POOL_DIAG host pool holding the address: %p base=%#llx size=%#llx; allocator info=%#llx base=%#llx",
+                pool, (unsigned long long)base, (unsigned long long)size, (unsigned long long)info, (unsigned long long)info_base);
+            return;
+        }
+        if (frame[0] <= fp) break;
+        fp = frame[0];
+    }
+    LOG("NVN_NULL_POOL_DIAG caller frame main+0x10cfae0 not found");
+}
 _Noreturn void wonder_nvn_stop(const char *format, ...) {
     char reason[512]; va_list args; va_start(args, format); vsnprintf(reason, sizeof reason, format, args); va_end(args);
     LOG("NVN_BLOCKED %s", reason);
