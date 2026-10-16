@@ -8,6 +8,15 @@
 - 共享字体：iOS/macOS 27 的 PingFang SC/TC 是 `hvgl` 可变字形格式（无 glyf/CFF 轮廓），游戏字体引擎无法使用；改为按候选列表取第一个带 glyf/CFF 轮廓、PostScript 名匹配的系统字体（简体/繁体依次试 PingFang → 华文黑体 STHeiti → 冬青黑体 GB）。功能差异：中文字形来自替代字体。
 - 工具：新 Mac（Apple M6，无 Rosetta，Xcode 27.1）。ios-deploy 弃用，`device_round.sh` 改用 `xcrun devicectl`（安装、App 容器传文件、`launch --console` 记录 App 输出到 `console-*.log`、系统崩溃日志）；`setup_env.sh` 按本机架构重装工具（arm64 工具链重建的着色器与原产物逐字节一致）。
 - round109（2026-10-16，首轮新机）：测试、构建、签名通过，**安装被拒**：付费 Team `5H8VE3NN7D` 新生成的描述文件（13:18）里没有这台 iPhone，而开发者服务器又回复该设备“已在本 Team 存在”——设备在该 Team 里多半处于停用状态（个人 Team MFXJ9AKFM5 的描述文件里有它）。需要在开发者网站把设备启用后重跑。
+- round110–133（个人 Team `MFXJ9AKFM5`、Bundle `local.smbwonder.loaderprobe`、无 extended-virtual-addressing：12 GB 机器上未发现地址空间不足）：
+  - iOS 27 强制 UIScene 生命周期（round111 SIGTRAP）→ `ProbeSceneDelegate`；只横屏、全屏 16:9、隐藏状态栏与 Home 条。
+  - 输入：悬浮半透明触控按键 + GameController 手柄（按位置映射），写入手持手柄 npad 0x20；round115 起游戏读到 A 并离开标题。`WONDER_AUTO_INPUT`（如 `A/2.5@25-300`）脚本按键，round132 起无人操作走到关卡。
+  - 日志：stderr 同时写文件和非阻塞控制台（`devicectl --console` 实时看）；NVN 逐调用日志限流；`WONDER_INTERACTIVE=1` 交互模式；`tools/census_round.sh` 一步完成“取普查→重建→启动”。`WONDER_CENSUS_SWEEP=1`（诊断）缺着色器的 draw 只写普查不执行，一次运行收集沿途全部程序。着色器 102 个阶段（`a0dd652304bcc80a` 因普查时纹理槽 3 未绑定暂缺）。
+  - 修复：存档首次 Commit 在客体小栈上 64 KiB 栈缓冲溢出（round121）；`nn::account::ShowUserCreator` 离线无新建用户界面 → ResultCancelledByUser 0x27c（round122，选人界面的“+”会回到原界面）；`nvnBufferBuilderSetStorage` 按 sdk+0x442d00 只记录、由 Initialize 校验（round123）；`AddCommandMemory` 允许普通池的授予越过池尾（sdk+0x442f70 不检查，round126）。
+  - 关键根因（round125，LLDB 真机附加 + `tools/sdk_nvn_emu.py` 用 unicorn 跑 sdk 自带 NVN 驱动作真值）：gsys::ModelResource 用预录命令的 `GetCommandMemoryUsed/ControlMemoryUsed` 给每个形状留 GPU 空间，宿主内联记录（16 字节头 + 每参数 8 字节）让 `Model/PlayerYoshi.bfres` 在按 RSTB 精确定大小（0x66e620）的堆里差几 KB，48 KiB 块分配静默失败，随后以空池建缓冲。改为命令记录放在宿主（`command_store.c`），客体命令内存每条只占 8 字节引用（不大于任何 NVN 命令）。纹理大小/对齐与 sdk 驱动对 304 种描述逐一相同；`nvnDeviceGetInteger` 游戏用到的值与 sdk 跳转表一致。
+  - 文字：字体是矢量字体（bfttf/bfotf）运行时光栅化到 2048×8192 R8 线性字形缓存（swizzle 1,1,1,R），文字着色器以 2D 数组指令采样 2D 纹理（Maxwell 读第 0 层）→ 反射记录着色器声明类型、绑定 1 层 2D 数组视图。线性单层纹理改为内存池 MTLBuffer 上的零拷贝纹理（原先每次文字 draw 对 16 MiB 算哈希，选存档起明显卡顿，已改善）。**文字仍未显示**：UV 指向的行（≈7250）确有字形，常量/混合/顶点色正常，round133 起抓取文字目标纹理 `Documents/Text/` 继续查。
+  - 新实现：多边形偏移（depth bias）、采样器 LOD bias 与 reduction（iOS 26+ `lodBias`/`reductionMode`）、GPU 纹理间 `CopyTextureToTexture`（blit）。
+  - 诊断：`KERNEL_WAIT`（每 ~30 s 列出阻塞 ≥5 s 的客体线程及等待起点调用栈）、`NVN_NULL_POOL_DIAG`、`HOST_TEXT_DRAW`、`HOST_GLYPH_CACHE`。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
 
 ## 首帧推进（2026-10-15，持续进行）
