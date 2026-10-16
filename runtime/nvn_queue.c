@@ -77,12 +77,17 @@ static struct wonder_nvn_texture_snapshot dump_targets[24]; static int dump_coun
 // Diagnostic (WONDER_DRAW_DUMP=<n>): in every n-th frame, the colour target 0 of each run of draws with one program is
 // read back when the program changes (Documents/DrawDump/f<frame>-<run>-<vs>-<fs>-t<serial>.png; 900 files at most),
 // to see which draw produces a wrong region (round154b: flat blue foreground bushes).
-static struct wonder_nvn_texture_snapshot run_target; static char run_vs[17], run_fs[17]; static int run_valid, run_seq; static unsigned run_frame;
+static struct wonder_nvn_texture_snapshot run_target, run_depth; static char run_vs[17], run_fs[17]; static int run_valid, run_seq; static unsigned run_frame;
 static int draw_dump_frame(void) { static int n = -1; if (n < 0) { const char *e = getenv("WONDER_DRAW_DUMP"); n = e ? atoi(e) : 0; if (n < 0) n = 0; } return n; }
 static void draw_dump_flush(void) {
     if (!run_valid || run_seq >= 900) { run_valid = 0; return; }
     char name[120]; snprintf(name, sizeof name, "DrawDump/f%u-%03d-%.8s-%.8s-t%llu.png", run_frame, run_seq++, run_vs, run_fs, (unsigned long long)run_target.texture.serial);
-    wonder_host_capture_target(&run_target, name); run_valid = 0;
+    wonder_host_capture_target(&run_target, name);
+    if (run_depth.valid) {   // the depth attachment too, as grey (round168: which pass leaves a near depth over the ground)
+        snprintf(name, sizeof name, "DrawDump/f%u-%03d-%.8s-%.8s-z%llu.png", run_frame, run_seq - 1, run_vs, run_fs, (unsigned long long)run_depth.texture.serial);
+        wonder_host_capture_target(&run_depth, name);
+    }
+    run_valid = 0;
 }
 static int frame_dump_every(void) { static int n = -1; if (n < 0) { const char *e = getenv("WONDER_FRAME_DUMP_EVERY"); n = e ? atoi(e) : 0; if (n < 0) n = 0; } return n; }
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
@@ -419,7 +424,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
       if (draw_dump_frame() && f % (unsigned)draw_dump_frame() == 0) {
           run_frame = f;
           if (run_valid && (strcmp(run_vs, d.vs_key) || strcmp(run_fs, d.fs_key) || run_target.texture.serial != d.targets[0].texture.serial)) draw_dump_flush();
-          if (d.color_count && d.targets[0].valid) { run_target = d.targets[0]; snprintf(run_vs, sizeof run_vs, "%s", d.vs_key); snprintf(run_fs, sizeof run_fs, "%s", d.fs_key); run_valid = 1; }
+          if (d.color_count && d.targets[0].valid) { run_target = d.targets[0]; run_depth = d.color_count < 9 ? d.targets[d.color_count] : (struct wonder_nvn_texture_snapshot){0}; snprintf(run_vs, sizeof run_vs, "%s", d.vs_key); snprintf(run_fs, sizeof run_fs, "%s", d.fs_key); run_valid = 1; }
       }
       if (dump || ((int)f >= first && (int)f <= last)) {
           char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d", f, d.vs_key, d.fs_key, d.primitive, call.count);
