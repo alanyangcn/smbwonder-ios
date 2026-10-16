@@ -7,14 +7,15 @@
 #import "host_input.h"
 #import <GameController/GameController.h>
 #include "hid_state.h"
+#include "input_script.h"
 #include <math.h>
 #include <stdio.h>
 
-static uint64_t touch_buttons, pad_buttons;
+static uint64_t touch_buttons, pad_buttons, script_buttons;
 static int32_t touch_lx, touch_ly, pad_lx, pad_ly, pad_rx, pad_ry;
 static uint64_t last_buttons = ~0ull;
 static void publish(void) {
-    uint64_t buttons = touch_buttons | pad_buttons;
+    uint64_t buttons = touch_buttons | pad_buttons | script_buttons;
     int pad_stick = pad_lx || pad_ly;
     int32_t lx = pad_stick ? pad_lx : touch_lx, ly = pad_stick ? pad_ly : touch_ly;
     wonder_hid_publish(buttons, lx, ly, pad_rx, pad_ry);
@@ -166,9 +167,26 @@ static void start_pads(void) {
     for (GCController *c in GCController.controllers) attach(c);
 }
 
+// Scripted presses for unattended rounds (WONDER_AUTO_INPUT, input_script.h), merged like the other sources.
+static void start_script(void) {
+    const char *spec = getenv("WONDER_AUTO_INPUT"); if (!spec || !*spec) return;
+    static struct wonder_input_script script; char err[96] = "";
+    if (wonder_input_script_parse(spec, &script, err, sizeof err)) { fprintf(stderr, "HOST_INPUT_SCRIPT invalid '%s': %s\n", spec, err); return; }
+    fprintf(stderr, "HOST_INPUT_SCRIPT '%s' (%d items)\n", spec, script.count);
+    static dispatch_source_t timer; static CFAbsoluteTime start;
+    start = CFAbsoluteTimeGetCurrent();
+    timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC);
+    dispatch_source_set_event_handler(timer, ^{
+        uint64_t b = wonder_input_script_buttons(&script, CFAbsoluteTimeGetCurrent() - start);
+        if (b != script_buttons) { script_buttons = b; publish(); }
+    });
+    dispatch_resume(timer);
+}
 UIView *wonder_input_controls(void) {
     NSCAssert(NSThread.isMainThread, @"input controls belong to the UIKit thread");
     static WonderControlsView *view; if (!view) view = [WonderControlsView new];
     start_pads();
+    static int scripted; if (!scripted) { scripted = 1; start_script(); }
     return view;
 }

@@ -338,7 +338,11 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
             sd.lodBias = m->lod_bias;
         } else unsupported(d, "sampler LOD bias (needs iOS 26) x1000", (long)(m->lod_bias * 1000));
     }
-    if (m->reduction) unsupported(d, "sampler reduction filter", m->reduction);
+    if (m->reduction) {   // round131: MAX (2) on a course pass; NVN AVERAGE 0 / MIN 1 / MAX 2 equal MTLSamplerReductionMode (iOS 26+)
+        if (m->reduction > 2) unsupported(d, "sampler reduction filter", m->reduction);
+        if (@available(iOS 26.0, macOS 26.0, *)) sd.reductionMode = (MTLSamplerReductionMode)m->reduction;
+        else unsupported(d, "sampler reduction filter (needs iOS 26)", m->reduction);
+    }
     sd.maxAnisotropy = m->anisotropy >= 1 ? (NSUInteger)m->anisotropy : 1;
     if (m->compare_mode) sd.compareFunction = compare(d, m->compare_func);
     s = [device newSamplerStateWithDescriptor:sd];

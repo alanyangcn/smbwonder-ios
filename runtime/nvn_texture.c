@@ -7,6 +7,7 @@
 #include "nvn_deswizzle.h"
 #include <stdatomic.h>
 #include <string.h>
+#include <stdio.h>
 #define TBUILDER_MAGIC 0x42585457u
 #define DEVICE_SET_MARK 0x56454454u      /* SetDevice may precede SetDefaults (main+0x984a4c, 0x77748) */
 #define TEXTURE_MAGIC 0x54584554u        /* "TEXT" */
@@ -142,7 +143,9 @@ int wonder_nvnTextureBuilderGetStorageClass(const void *builder) {
 static const uint8_t *glyph_cache; static uint64_t glyph_cache_size, glyph_cache_serial;
 size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial) {
     size_t n = 0; if (serial) *serial = glyph_cache_serial;
-    for (uint64_t i = 0; glyph_cache && i < glyph_cache_size; i += 64) n += glyph_cache[i] != 0;
+    uint64_t first = UINT64_MAX, last = 0;
+    for (uint64_t i = 0; glyph_cache && i < glyph_cache_size; i += 64) if (glyph_cache[i]) { n++; if (first == UINT64_MAX) first = i; last = i; }
+    if (n) fprintf(stderr, "HOST_GLYPH_CACHE rows %llu..%llu of %llu (2048-byte rows)\n", (unsigned long long)(first / 2048), (unsigned long long)(last / 2048), (unsigned long long)(glyph_cache_size / 2048));
     return n;
 }
 static int display_format(int format) { return format == 0x25 || format == 0x38 || format == 0x9A || format == 0x9C; }  // RGBA8(_SRGB), BGRA8(_SRGB)
