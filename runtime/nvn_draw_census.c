@@ -116,7 +116,7 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
     char json_name[64]; snprintf(json_name, sizeof json_name, "%s/draw.json", dir);
     if (!failed && !o.failed && !wonder_host_census_write(json_name, o.data, o.size)) {
         if (written_count < 256) snprintf(written_dirs[written_count++], sizeof written_dirs[0], "%s", dir);
-        char index[256 * 41 + 1]; size_t at = 0;   // index.txt: every census directory of this run, one per line (device fetch)
+        static char index[256 * 41 + 1]; size_t at = 0;   // (static: off the caller's stack) index.txt: every census directory of this run, one per line (device fetch)
         for (unsigned i = 0; i < written_count; i++) at += (size_t)snprintf(index + at, sizeof index - at, "%s\n", written_dirs[i]);
         wonder_host_census_write("index.txt", index, at);
         snprintf(summary, summary_size, "census=DrawCensus/%s vs=%s fs=%s", dir, keys[0][0] ? keys[0] : "-", keys[1][0] ? keys[1] : "-");

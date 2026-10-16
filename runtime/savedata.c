@@ -66,9 +66,11 @@ static void sync_path(const char *path) {
 static void copy_file(const char *src, const char *dst) {
     int in = open(src, O_RDONLY); if (in < 0) wonder_save_fatal("save open %s: %s", src, strerror(errno));
     int out = open(dst, O_WRONLY | O_CREAT | O_EXCL, 0600); if (out < 0) wonder_save_fatal("save create %s: %s", dst, strerror(errno));
-    char buffer[1 << 16];
+    // Heap buffer: commits run on guest threads, whose stacks are small (round121: a 64 KiB stack buffer here
+    // overflowed into the guard page in ___chkstk_darwin on the first nn::fs::Commit of a new save).
+    enum { CHUNK = 1 << 16 }; char *buffer = malloc(CHUNK); if (!buffer) wonder_save_fatal("save copy %s: out of memory", src);
     for (;;) {
-        ssize_t n = read(in, buffer, sizeof buffer);
+        ssize_t n = read(in, buffer, CHUNK);
         if (n < 0) { if (errno == EINTR) continue; wonder_save_fatal("save read %s: %s", src, strerror(errno)); }
         if (!n) break;
         for (ssize_t done = 0; done < n;) {
@@ -77,6 +79,7 @@ static void copy_file(const char *src, const char *dst) {
             done += w;
         }
     }
+    free(buffer);
     if (fsync(out)) wonder_save_fatal("save fsync %s: %s", dst, strerror(errno));
     close(in); close(out);
 }

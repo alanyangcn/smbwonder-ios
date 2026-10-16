@@ -1,3 +1,4 @@
+#include <pthread.h>
 // Host save data: journaled commit/unmount semantics, nn::fs result codes, handles and listings.
 #include "savedata.h"
 #include <assert.h>
@@ -23,6 +24,12 @@ static void expect(const char *path, const char *text) {
     OK(wonder_save_read(&got, h, size, buf, 1)); assert(got == 0);
     EQ(wonder_save_write(h, 0, "x", 1, 0), FS_WRITE_NOT_PERMITTED);
     OK(wonder_save_close(h));
+}
+static void *small_stack_commit(void *uid) {
+    if (wonder_save_mount("save", uid)) return (void *)1;
+    uint64_t h; if (wonder_save_create_file("save:/big.bin", 200000) || wonder_save_open(&h, "save:/big.bin", 6) || wonder_save_close(h)) return (void *)2;
+    if (wonder_save_commit("save") || wonder_save_unmount("save")) return (void *)3;
+    return NULL;
 }
 int main(int argc, char **argv) {
     assert(argc == 2);
@@ -81,6 +88,9 @@ int main(int argc, char **argv) {
     OK(wonder_save_mount("save", uid)); OK(wonder_save_entry_type(&type, "save:/dir/sub")); EQ(wonder_save_entry_type(&type, "save:/a.bin"), FS_PATH_NOT_FOUND);
     struct stat st; assert(stat(a, &st) && stat(c, &st));
     OK(wonder_save_unmount("save"));
+    // Commit on a 32 KiB stack, as on a guest thread (round121 overflowed with a 64 KiB stack buffer).
+    { pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 32 * 1024); pthread_t t; void *r = (void *)1;
+      assert(!pthread_create(&t, &attr, small_stack_commit, (void *)uid) && !pthread_join(t, &r) && r == NULL); }
     puts("savedata OK");
     return 0;
 }

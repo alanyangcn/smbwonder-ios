@@ -49,6 +49,11 @@ static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uin
 // writes a census for every further missing program; no GPU work of this submit runs after that point, and the submit
 // stops by name at its end (nothing is presented from a partly executed frame).
 static int census_only; static unsigned missing_programs; static char missing_list[512];
+// Diagnostic sweep (WONDER_CENSUS_SWEEP=1, for collecting censuses only, never a playable state): a draw whose program
+// has no translated shaders writes its census and is not executed; everything else in the submit runs and the game
+// continues, so one run collects every program it reaches. Frames with such draws are visibly incomplete.
+static int census_sweep(void) { static int v = -1; if (v < 0) { const char *e = getenv("WONDER_CENSUS_SWEEP"); v = e && *e == '1'; } return v; }
+static unsigned sweep_skipped;
 static char missing_pairs[256][34];   // dedup independent of the (truncated) message list
 // Per-submit draw summary for the log (which programs a failing command buffer contained).
 static unsigned submit_draws; static char submit_programs[256];
@@ -150,6 +155,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
             missing_programs++;
         }
+        if (census_sweep()) { sweep_skipped++; return; }   // only this draw is left out
         if (!census_only) wonder_nvn_report("NVN_CENSUS_ONLY from command %u of submit %u: %s", state.commands, state.submits, summary);
         census_only = 1;
         return;
@@ -543,6 +549,10 @@ static void submit_on_replay_stack(void *arg) {
         atomic_store(&replay_owner, (pthread_t *)NULL);
         wonder_nvn_stop("NVN_SHADER_MISSING %u programs (vs-fs): %s; census=DrawCensus/<vs>-<fs>, build them with tools/wonder_shader_build.py (submit %u)",
                         programs, list, state.submits);
+    }
+    if (census_sweep() && missing_list[0]) {   // programs first met in this submit (missing_pairs dedups over the run)
+        wonder_nvn_report("NVN_CENSUS_SWEEP submit=%u new programs: %s (total %u, skipped draws %u)", state.submits, missing_list, missing_programs, sweep_skipped);
+        missing_list[0] = 0;
     }
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
     // Diagnostic (WONDER_SUBMIT_SYNC=1): wait for the GPU after every submit, to tell CPU/GPU memory races from
