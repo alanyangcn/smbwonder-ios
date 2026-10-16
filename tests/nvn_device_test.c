@@ -402,7 +402,12 @@ int main(void) {
     unsigned char bb[0x40]; memset(bb, 0xcd, sizeof bb);
     ((void (*)(void *, const void *))slot("nvnBufferBuilderSetDevice"))(bb, device);
     ((void (*)(void *))slot("nvnBufferBuilderSetDefaults"))(bb);
-    EXPECT_STOP(wonder_nvnBufferBuilderSetStorage(bb, cb_pool, 0xfff0, 0x20), "NVN_INVALID_ARGUMENT");
+    // SetStorage only records (as the sdk does, sdk+0x442d00): a NULL pool or a range past the pool stops at Initialize.
+    static _Alignas(16) unsigned char unused_buffer[0x30];
+    wonder_nvnBufferBuilderSetStorage(bb, NULL, 0, 0x20);
+    EXPECT_STOP(wonder_nvnBufferInitialize(unused_buffer, bb), "NVN_INVALID_ARGUMENT nvnBufferInitialize device=");
+    wonder_nvnBufferBuilderSetStorage(bb, cb_pool, 0xfff0, 0x20);
+    EXPECT_STOP(wonder_nvnBufferInitialize(unused_buffer, bb), "NVN_INVALID_ARGUMENT nvnBufferInitialize storage");
     ((void (*)(void *, const void *, ptrdiff_t, size_t))slot("nvnBufferBuilderSetStorage"))(bb, cb_pool, 0x8000, 0x20);
     static _Alignas(16) unsigned char buffer[0x30];
     assert(((uint32_t (*)(void *, const void *))slot("nvnBufferInitialize"))(buffer, bb) == 1);

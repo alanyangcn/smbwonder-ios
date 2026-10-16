@@ -12,8 +12,8 @@ WORK=${WONDER_WORK_ROOT:-$REPO/work}
 cd "$REPO"
 tools/device_round.sh "$PREV" --fetch-only > /dev/null 2>&1 || true
 CENSUS=$WORK/analysis/$PREV/Documents/DrawCensus
-[ -s "$CENSUS/index.txt" ] || { echo "✗ $PREV 没有取回 DrawCensus/index.txt"; exit 1; }
 LIST=$WORK/build/census-dirs.txt
+if [ ! -s "$CENSUS/index.txt" ]; then echo "  $PREV 没有新的 DrawCensus（无缺失着色器）"; else
 python3 - "${CENSUS#$REPO/}" "$LIST" <<'PY'
 import os, sys
 census, path = sys.argv[1], sys.argv[2]
@@ -25,5 +25,6 @@ for key in open(os.path.join(census, 'index.txt')).read().split():
     if d not in have: have.append(d); print('added', d)
 open(path, 'w').write(' '.join(have) + '\n')
 PY
+fi
 "$WORK/tools/venv/bin/python3" tools/wonder_shader_build.py $(cat "$LIST") --out "$WORK/build/wonder-shaders" 2>&1 | tail -1
 WONDER_INTERACTIVE=1 tools/device_round.sh "$NEXT" 2>&1 | tail -1

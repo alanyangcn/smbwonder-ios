@@ -32,11 +32,10 @@ void wonder_nvnBufferBuilderSetDefaults(void *builder) {
     memset(b, 0, sizeof *b);
     b->magic = BBUILDER_MAGIC; b->device = device; b->device_mark = device ? DEVICE_SET_MARK : 0;
 }
+// The sdk's implementation (name index 21 -> sdk+0x442d00) only stores pool/offset/size; the pool (which may be NULL,
+// round123: main+0x107fc74 while loading the first course) and the range are checked when the buffer is initialized.
 void wonder_nvnBufferBuilderSetStorage(void *builder, const void *pool, ptrdiff_t offset, size_t size) {
     struct buffer_builder *b = bbuilder_of(builder, "nvnBufferBuilderSetStorage");
-    struct wonder_nvn_pool_view view; wonder_nvn_pool_check(pool, "nvnBufferBuilderSetStorage", &view);
-    if (offset < 0 || !size || (uint64_t)offset + size > view.size)
-        wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnBufferBuilderSetStorage offset=%#tx size=%#zx pool=%#llx", offset, size, (unsigned long long)view.size);
     b->pool = pool; b->offset = offset; b->size = size;
 }
 uint32_t wonder_nvnBufferInitialize(void *buffer, const void *builder) {
@@ -44,6 +43,8 @@ uint32_t wonder_nvnBufferInitialize(void *buffer, const void *builder) {
     if (!buffer) wonder_nvn_stop("NVN_INVALID_OBJECT nvnBufferInitialize buffer=NULL");
     if (!b->device || !b->pool) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnBufferInitialize device=%p pool=%p", b->device, b->pool);
     struct wonder_nvn_pool_view view; wonder_nvn_pool_check(b->pool, "nvnBufferInitialize", &view);
+    if (b->offset < 0 || !b->size || (uint64_t)b->offset + b->size > view.size)
+        wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnBufferInitialize storage offset=%#llx size=%#llx pool=%#llx", (long long)b->offset, (unsigned long long)b->size, (unsigned long long)view.size);
     *(struct buffer *)buffer = (struct buffer){BUFFER_MAGIC, view.flags, b->device, view.memory + b->offset, b->size, b->pool, b->offset};
     wonder_nvn_report("NVN_BUFFER_READY buffer=%p address=%p size=%#llx pool_flags=%#x", buffer, (void *)(view.memory + b->offset),
                       (unsigned long long)b->size, view.flags);
