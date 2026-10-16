@@ -47,6 +47,13 @@ say "Python venv"
 if ! have "$TOOLS/venv/bin/python3"; then python3 -m venv "$TOOLS/venv"; fi
 "$TOOLS/venv/bin/python3" -m pip install --quiet --upgrade pip
 "$TOOLS/venv/bin/python3" -m pip install --quiet -r "$REPO/requirements.txt"
+# Compiled wheels of another architecture (work/ copied from an Intel Mac) import as "incompatible architecture".
+if ! "$TOOLS/venv/bin/python3" -c "import lz4.block" 2> /dev/null; then
+  echo "   venv 的扩展模块不能在 $ARCH 上加载，重建"
+  rm -rf "$TOOLS/venv"; python3 -m venv "$TOOLS/venv"
+  "$TOOLS/venv/bin/python3" -m pip install --quiet --upgrade pip
+  "$TOOLS/venv/bin/python3" -m pip install --quiet -r "$REPO/requirements.txt"
+fi
 
 say "hactool"
 if ! have "$TOOLS/hactool/hactool"; then

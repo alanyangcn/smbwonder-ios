@@ -70,3 +70,13 @@ HLE_FORCE("_ZN2nn7account16LoadProfileImageEPmPvmRKNS0_3UidE", "Offline user ico
     static int logged; if (!logged++) LOG("HOST_ACCOUNT_PROFILE_IMAGE %zu bytes (generated placeholder; no Nintendo user icon offline)", n);
     return 0;
 }
+// nn::account::ShowUserCreator(): the player-select applet in user-creator mode (sdk+0x198390 -> StartPselApplet,
+// mode 1). The offline host has one local user and no user-creation UI, so the applet never runs; the result is the
+// sdk's own when the applet does not complete, ResultCancelledByUser 0x27c (sdk+0x199594), as if the player
+// backed out of the creator. Round122: the sdk client dereferenced a null service object in
+// IsUserRegistrationRequestPermitted (sdk+0x199fe4), called from main+0x260230.
+HLE_FORCE("_ZN2nn7account15ShowUserCreatorEv", "Offline host has no user-creation applet: cancelled by user (0x27c)", Result, h_account_show_creator, void) {
+    require_ready("ShowUserCreator");
+    LOG("HOST_ACCOUNT_USER_CREATOR not available on the offline host -> ResultCancelledByUser 0x27c");
+    return 0x27c;
+}
