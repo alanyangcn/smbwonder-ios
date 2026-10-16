@@ -14,5 +14,8 @@ int main(void) {
     assert(wonder_input_script_parse("A/3", &s, err, sizeof err) == -1);       // no start time
     assert(wonder_input_script_parse("A/0.1@1", &s, err, sizeof err) == -1);   // period shorter than the hold
     assert(wonder_input_script_parse("A@9-3", &s, err, sizeof err) == -1);
+    assert(!wonder_input_script_parse("RIGHT@10-20,A/1@10-20", &s, err, sizeof err));   // hold right, jump every second
+    assert(wonder_input_script_buttons(&s, 9.9) == 0 && wonder_input_script_buttons(&s, 15.5) == WONDER_BTN_RIGHT);
+    assert(wonder_input_script_buttons(&s, 15.05) == (WONDER_BTN_RIGHT | WONDER_BTN_A) && wonder_input_script_buttons(&s, 20.1) == 0);
     puts("INPUT_SCRIPT_OK");
 }

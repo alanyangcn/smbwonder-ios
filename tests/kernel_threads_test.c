@@ -59,6 +59,11 @@ static void address_waiter(uint64_t arg) {
     (void)arg;
     assert(svc(0x34, (uint64_t)&counter, 2, 0, (uint64_t)-1, 0, 0, 0) == 0);   // wait while counter == 0
 }
+static int32_t counter2 = 5;
+static void address_waiter2(uint64_t arg) {
+    (void)arg;
+    assert(svc(0x34, (uint64_t)&counter2, 2, 5, (uint64_t)-1, 0, 0, 0) == 0);   // wait while counter2 == 5
+}
 int main(void) {
     uint64_t r[8] = {0};
     assert(!wonder_event_call(0x18, r));                          // non-guest caller is never served
@@ -108,6 +113,14 @@ int main(void) {
     assert(svc(0x35, (uint64_t)&counter, 1, 0, 1, 0, 0, 0) == 0 && counter == 1);
     thread_handle = (uint32_t)th;
     assert(svc(0x18, 0, (uint64_t)&thread_handle, 1, 2000000000, 0, 0, 0) == 0);
+    // SignalToAddress type 2 (SignalAndModifyByWaitingCountIfEqual), count <= 0 with a waiter: value - 2 on firmware >= 7.0.0
+    // (Atmosphere KAddressArbiter); without waiters value + 1.
+    assert(svc(0x08, 0, (uint64_t)address_waiter2, 0, sp_top(), 44, 0, &th) == 0 && svc(0x09, th, 0, 0, 0, 0, 0, 0) == 0);
+    usleep(30000);
+    assert(svc(0x35, (uint64_t)&counter2, 2, 5, (uint64_t)-1, 0, 0, 0) == 0 && counter2 == 3);
+    thread_handle = (uint32_t)th;
+    assert(svc(0x18, 0, (uint64_t)&thread_handle, 1, 2000000000, 0, 0, 0) == 0);
+    assert(svc(0x35, (uint64_t)&counter2, 2, 3, (uint64_t)-1, 0, 0, 0) == 0 && counter2 == 4);
     // Priorities / core masks / ids.
     uint64_t v;
     assert(svc(0x0D, 0x1001, 70, 0, 0, 0, 0, 0) == 0xE001 && svc(0x0D, 0x1001, 30, 0, 0, 0, 0, 0) == 0);
@@ -115,14 +128,14 @@ int main(void) {
     assert(svc(0x0F, 0x1001, 1, 0x8, 0, 0, 0, 0) == 0xE201 && svc(0x0F, 0x1001, 2, 0x1, 0, 0, 0, 0) == 0xE801);
     assert(svc(0x0F, 0x1001, -1, 0x6, 0, 0, 0, 0) == 0 && svc(0x10, 0, 0, 0, 0, 0, 0, 0) == 1);
     assert(svc(0x25, 0, 0x7777, 0, 0, 0, 0, 0) == 0xE401);
-    for (int i = 0; i < 2000 && retired < 3; i++) usleep(1000);
-    assert(retired == 3);
+    for (int i = 0; i < 2000 && retired < 4; i++) usleep(1000);
+    assert(retired == 4);
     int before = prepared;
     assert(svc(0x08, 0, (uint64_t)waiter, 0, sp_top(), 44, 0, &th) == 0);
     for (int i = 0; i < 2000 && prepared == before; i++) usleep(1000);
     assert(prepared == before + 1);
     assert(svc(0x16, th, 0, 0, 0, 0, 0, 0) == 0); // close before StartThread
-    for (int i = 0; i < 2000 && retired < 4; i++) usleep(1000);
-    assert(retired == 4); // host pthread/TLS must retire without executing the guest
+    for (int i = 0; i < 2000 && retired < 5; i++) usleep(1000);
+    assert(retired == 5); // host pthread/TLS must retire without executing the guest
     puts("KERNEL_THREADS_SYNC_OK");
 }

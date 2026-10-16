@@ -411,8 +411,9 @@ int wonder_event_call(int number, uint64_t *r) {
         int64_t result = 0;
         if (type != 0) {
             int32_t nv = value + 1;
-            if (type == 2) {
-                if (count <= 0) nv = nw > 0 ? value - 1 : value + 1;
+            if (type == 2) {   // SignalAndModifyByWaitingCountIfEqual, firmware >= 7.0.0 (Atmosphere KAddressArbiter): with waiters,
+                               // count <= 0 writes value - 2 (older kernels wrote value - 1; round140 stalls/races after character select)
+                if (count <= 0) nv = nw > 0 ? value - 2 : value + 1;
                 else nv = nw == 0 ? value + 1 : nw <= count ? value - 1 : value;
             }
             uint32_t e = (uint32_t)value;

@@ -40,7 +40,7 @@ uint64_t wonder_input_script_buttons(const struct wonder_input_script *s, double
         const struct wonder_input_item *it = &s->items[i];
         if (t < it->at || t > it->until) continue;
         double phase = it->every > 0 ? fmod(t - it->at, it->every) : t - it->at;
-        if (phase < HOLD) b |= it->button;
+        if ((it->every <= 0 && isfinite(it->until)) || phase < HOLD) b |= it->button;   // BTN@t-until: held for the interval
     }
     return b;
 }

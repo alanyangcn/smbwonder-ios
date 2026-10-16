@@ -41,7 +41,10 @@ static void handler(int sig, siginfo_t *info, void *context) {
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
     if (!module_of((void *)pc)) {   // not guest code: log where (host symbol + frame chain), restore and re-raise
         static _Atomic int logged;
-        if (!atomic_exchange(&logged, 1)) {
+        // Only faults the kernel raised for this instruction (a re-delivered kill() / abort reaches other threads too).
+        int raised = (sig == SIGSEGV && (info->si_code == SEGV_MAPERR || info->si_code == SEGV_ACCERR)) ||
+                     (sig == SIGBUS && (info->si_code == BUS_ADRALN || info->si_code == BUS_ADRERR || info->si_code == BUS_OBJERR)) || sig == SIGILL || sig == SIGTRAP;
+        if (raised && !atomic_exchange(&logged, 1)) {
             char where[160], caller[160]; host_describe(where, sizeof where, pc); host_describe(caller, sizeof caller, lr);
             LOG("HOST_FAULT signal=%d address=%p pc=%s lr=%s sp=%#llx", sig, info->si_addr, where, caller, (unsigned long long)uc->uc_mcontext->__ss.__sp);
             for (unsigned depth = 0; fp && !(fp & 7) && depth < 24; depth++) {

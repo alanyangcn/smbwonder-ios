@@ -3,7 +3,8 @@
 //   A@20          press A once at t = 20 s (t counts from the first call of wonder_input_script_buttons)
 //   A/3@15        press A every 3 s from t = 15 s on
 //   A/3@15-90     ... until t = 90 s
-// Buttons: A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT. Each press is held for 150 ms.
+//   RIGHT@150-480 hold RIGHT from t = 150 s to t = 480 s (no period: held, not pressed)
+// Buttons: A B X Y L R ZL ZR PLUS MINUS UP DOWN LEFT RIGHT. Each press is held for 150 ms; a timed range holds.
 #include <stdint.h>
 #define WONDER_INPUT_SCRIPT_MAX 16
 struct wonder_input_item { uint64_t button; double at, every, until; };
