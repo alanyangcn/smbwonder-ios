@@ -50,6 +50,15 @@ int wonder_hid_get_states(wonder_npad_state *out, int count, uint32_t id, uint32
     pthread_mutex_unlock(&lock);
     return count;
 }
+uint64_t wonder_hid_stick_bits(int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    const int32_t t = WONDER_STICK_MAX / 2; uint64_t b = 0;
+    if (lx < -t) b |= 1u << 16; if (ly > t) b |= 1u << 17; if (lx > t) b |= 1u << 18; if (ly < -t) b |= 1u << 19;
+    if (rx < -t) b |= 1u << 20; if (ry > t) b |= 1u << 21; if (rx > t) b |= 1u << 22; if (ry < -t) b |= 1u << 23;
+    return b;
+}
+static int32_t clamp_axis(int32_t v) { return v > WONDER_STICK_MAX ? WONDER_STICK_MAX : v < -WONDER_STICK_MAX ? -WONDER_STICK_MAX : v; }
 void wonder_hid_publish(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    lx = clamp_axis(lx); ly = clamp_axis(ly); rx = clamp_axis(rx); ry = clamp_axis(ry);
+    buttons = (buttons & ~(uint64_t)WONDER_BTN_STICK_DIRECTIONS) | wonder_hid_stick_bits(lx, ly, rx, ry);
     pthread_mutex_lock(&lock); input.buttons = buttons; input.lx = lx; input.ly = ly; input.rx = rx; input.ry = ry; pthread_mutex_unlock(&lock);
 }

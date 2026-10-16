@@ -73,7 +73,7 @@ def copy_shaders(source, destination):
     return len(keys)
 
 
-def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk"):
+def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va=True):
     profile = json.loads(profile_path.read_text())
     validate_inputs(work, profile)
     if profile.get('npdm', {}).get('main_thread_stack_size') != 0x100000:
@@ -117,18 +117,21 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk"):
                 'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/ngc_service.c', 'runtime/ngc_hooks.c',
                 'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal3_draw.m', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
-                'runtime/graphics_gate.c', 'runtime/metal3_probe.m',
+                'runtime/graphics_gate.c', 'runtime/metal3_probe.m', 'runtime/host_input.m', 'runtime/log_throttle.c',
                 'runtime/metal3_pixels.c', 'runtime/metal3_shader_check.m',
                 *RUNTIME_GRAPHICS)]
-    command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', *flags, '-o', str(app / 'LoaderProbe')]
+    command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', '-framework', 'GameController', *flags, '-o', str(app / 'LoaderProbe')]
     subprocess.run(command, check=True, env=env)
     info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe',
             'CFBundleExecutable':'LoaderProbe', 'CFBundlePackageType':'APPL',
             'CFBundleShortVersionString':'0.1', 'CFBundleVersion':'4', 'WonderBootStage':stage,
             'MinimumOSVersion':'18.0', 'LSRequiresIPhoneOS':True, 'UIDeviceFamily':[1, 2],
             'UIFileSharingEnabled':True, 'LSSupportsOpeningDocumentsInPlace':True,
-            'UILaunchScreen':{}, 'UISupportedInterfaceOrientations':['UIInterfaceOrientationPortrait',
-            'UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight']}
+            'UILaunchScreen':{},
+            # iOS 27 stops apps without the UIScene lifecycle (LoaderProbe.m ProbeSceneDelegate).
+            'UIApplicationSceneManifest':{'UIApplicationSupportsMultipleScenes':False,'UISceneConfigurations':{'UIWindowSceneSessionRoleApplication':[
+                {'UISceneConfigurationName':'Default','UISceneDelegateClassName':'ProbeSceneDelegate'}]}}, 'UISupportedInterfaceOrientations':['UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'],
+            'UIRequiresFullScreen':True, 'UIStatusBarHidden':True}
     with (app / 'Info.plist').open('wb') as stream:
         plistlib.dump(info, stream)
     if xcodegen:
@@ -139,6 +142,10 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk"):
             plistlib.dump(xcode_info, stream)
         spec = (REPOSITORY / 'ios-probe/project.yml').read_text()
         spec = spec.replace('${SMBW_REFERENCE}', str(REPOSITORY)).replace('${SMBW_WORK}', str(work))
+        if not extended_va:   # personal teams cannot provision it; the address-space need is then checked on the device
+            line = '        com.apple.developer.kernel.extended-virtual-addressing: true\n'
+            if line not in spec: raise ValueError('project.yml no longer declares extended-virtual-addressing')
+            spec = spec.replace(line, '')
         (project / 'project.yml').write_text(spec)
         subprocess.run([str(xcodegen), 'generate', '--spec', str(project / 'project.yml')], check=True)
     (output / 'build-result.json').write_text(json.dumps({'app':str(app), 'executable_sha256':digest(app / 'LoaderProbe'),
@@ -153,7 +160,8 @@ if __name__ == '__main__':
     parser.add_argument('--work-root', type=Path, default=REPOSITORY / 'work')
     parser.add_argument('--profile', type=Path, default=REPOSITORY / 'verified-inputs.json')
     parser.add_argument('--bundle-id', default='two.local.smbwonder.loaderprobe')
+    parser.add_argument('--no-extended-va', action='store_true', help='omit com.apple.developer.kernel.extended-virtual-addressing (personal team)')
     parser.add_argument('--xcodegen', type=Path, help='Also generate an automatic-signing Xcode project in the external work directory')
     parser.add_argument('--stage', choices=['sdk','constructors','main'], default='sdk')
     args = parser.parse_args()
-    build(args.work_root.resolve(), args.profile.resolve(), args.bundle_id, args.xcodegen, args.stage)
+    build(args.work_root.resolve(), args.profile.resolve(), args.bundle_id, args.xcodegen, args.stage, not args.no_extended_va)

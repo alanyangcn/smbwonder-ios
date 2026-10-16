@@ -47,9 +47,19 @@ HLE_FORCE("_ZN2nn3hid20GetNpadJoyAssignmentERKj", "Joy-Con assignment bookkeepin
 HLE_FORCE("_ZN2nn3hid15GetNpadStyleSetERKj", "Connected style of an npad", uint32_t, h_hid_style, const uint32_t *id) {
     need_npad("GetNpadStyleSet"); return wonder_hid_style_set(npad_id(id, "GetNpadStyleSet"));
 }
+// Diagnostics: the first reads per style, and the first reads that return pressed buttons (which npad/style the
+// game polls, and whether host input reaches it).
+static void log_read(const char *who, uint32_t id, int count, int written, const wonder_npad_state *out, unsigned *calls, unsigned *pressed) {
+    unsigned n = __atomic_add_fetch(calls, 1, __ATOMIC_RELAXED);
+    if (n <= 4) LOG("HOST_HID_READ %s id=%#x count=%d written=%d attributes=%#x buttons=%#llx (call %u)", who, id, count, written,
+                    written ? out[0].attributes : 0, written ? (unsigned long long)out[0].buttons : 0ull, n);
+    if (written && out[0].buttons && __atomic_add_fetch(pressed, 1, __ATOMIC_RELAXED) <= 20)
+        LOG("HOST_HID_READ_PRESSED %s id=%#x buttons=%#llx lx=%d ly=%d (call %u)", who, id, (unsigned long long)out[0].buttons, out[0].lx, out[0].ly, n);
+}
 #define STATES(mangled, style, cname) \
     HLE_FORCE(mangled, "Npad state history from the host input model", int, cname, wonder_npad_state *out, int count, const uint32_t *id) { \
-        need_npad(#cname); return wonder_hid_get_states(out, count, npad_id(id, #cname), style); }
+        need_npad(#cname); static unsigned calls, pressed; uint32_t npad = npad_id(id, #cname); \
+        int written = wonder_hid_get_states(out, count, npad, style); log_read(#cname, npad, count, written, out, &calls, &pressed); return written; }
 STATES("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadFullKeyStateEiRKj", WONDER_STYLE_FULLKEY, h_hid_states_fullkey)
 STATES("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadHandheldStateEiRKj", WONDER_STYLE_HANDHELD, h_hid_states_handheld)
 STATES("_ZN2nn3hid13GetNpadStatesEPNS0_16NpadJoyDualStateEiRKj", WONDER_STYLE_JOYDUAL, h_hid_states_joydual)

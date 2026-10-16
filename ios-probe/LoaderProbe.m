@@ -6,6 +6,7 @@
 #include "dm.h"
 #include "../runtime/romfs.h"
 #import "../runtime/metal3_probe.h"
+#import "../runtime/host_input.h"
 #import "../runtime/metal3_shader_check.h"
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
@@ -16,6 +17,8 @@
 #include <unistd.h>
 #include <sys/sysctl.h>
 #include <sys/proc.h>
+#include <fcntl.h>
+#include <errno.h>
 
 struct dm_flags g_flag;
 static UITextView *gText;
@@ -57,7 +60,31 @@ static void report(NSString *message) {
     });
 }
 
+// stderr goes to Documents/loader-probe.log and, live, to the original stderr (devicectl --console streams it to the
+// Mac: copying the growing file off the device fails while the game runs). The console copy never blocks the game:
+// when the console is slow or absent, its lines are dropped; the file gets every line.
+static int log_file = -1, log_console = -1;
+static void *log_pump(void *arg) {
+    int in = (int)(intptr_t)arg; char buffer[16384];
+    for (;;) {
+        ssize_t n = read(in, buffer, sizeof buffer); if (n <= 0) { if (n < 0 && errno == EINTR) continue; break; }
+        for (ssize_t done = 0; done < n;) { ssize_t w = write(log_file, buffer + done, (size_t)(n - done)); if (w <= 0) { if (errno == EINTR) continue; break; } done += w; }
+        if (log_console >= 0) (void)!write(log_console, buffer, (size_t)n);
+    }
+    return NULL;
+}
+static int start_log(const char *path) {
+    log_file = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (log_file < 0) return -1;
+    log_console = dup(STDERR_FILENO); if (log_console >= 0) fcntl(log_console, F_SETFL, fcntl(log_console, F_GETFL) | O_NONBLOCK);
+    int p[2]; if (pipe(p)) return -1;
+    if (dup2(p[1], STDERR_FILENO) < 0) return -1; close(p[1]);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+    pthread_t t; if (pthread_create(&t, NULL, log_pump, (void *)(intptr_t)p[0])) return -1; pthread_detach(t);
+    return 0;
+}
+static void show_log(BOOL shown) { dispatch_async(dispatch_get_main_queue(), ^{ gText.hidden = !shown; }); }
 static void guest_stopped(const char *reason) {
+    show_log(YES);
     if(strstr(reason,"GUEST_FAULT")) {
         report([NSString stringWithFormat:@"GUEST_FAULT: %s\n游戏代码访问异常；客体已停止，日志含模块偏移与调用链。",reason]);
         return;
@@ -98,6 +125,7 @@ int wonder_host_graphics_probe(void) {
     BOOL metal3=[device supportsFamily:MTLGPUFamilyMetal3];
     BOOL bc=device.supportsBCTextureCompression;
     report([NSString stringWithFormat:@"GPU_CAPABILITY name=%@ Metal3=%d Apple7=%d argumentBuffersTier=%lu BC=%d RAM=%llu OS=%@",device.name,metal3,[device supportsFamily:MTLGPUFamilyApple7],(unsigned long)device.argumentBuffersSupport,bc,NSProcessInfo.processInfo.physicalMemory,UIDevice.currentDevice.systemVersion]);
+    if(metal3&&bc)show_log(NO);   // the game draws from here on; the log overlay returns if the guest stops
     return metal3&&bc?1:0;   // the renderer needs both (graphics_gate.c)
 }
 
@@ -106,39 +134,76 @@ uint64_t wonder_host_language(void) {
     return wonder_language_code(NSLocale.preferredLanguages.firstObject.UTF8String);
 }
 
+// iOS 27 requires the UIScene lifecycle (an app without a scene manifest is stopped in
+// _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption, round111). One window scene; the probe UI, the log and
+// the game thread start when it first connects, so the Metal surface exists before nv::InitializeGraphics.
 @interface ProbeDelegate : UIResponder <UIApplicationDelegate>
+@end
+@implementation ProbeDelegate
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options { (void)application; (void)options; return YES; }
+- (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
+    (void)application; (void)options;
+    return [[UISceneConfiguration alloc] initWithName:@"Default" sessionRole:session.role];
+}
+@end
+
+// Landscape only, no status bar, home indicator hidden and edge gestures deferred (the controls sit at the edges).
+@interface ProbeGameController : UIViewController
+@end
+@implementation ProbeGameController
+- (BOOL)prefersStatusBarHidden { return YES; }
+- (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
+- (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+@end
+
+@interface ProbeSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
-@implementation ProbeDelegate
+@implementation ProbeSceneDelegate
 // Lifecycle is logged so a round can tell whether iOS backgrounded the probe.
-- (void)applicationDidBecomeActive:(UIApplication *)application { (void)application;fprintf(stderr,"HOST_LIFECYCLE active t=%.3f\n",now_ns()/1e9);wonder_applet_focus(1); }
-- (void)applicationWillResignActive:(UIApplication *)application { (void)application;fprintf(stderr,"HOST_LIFECYCLE resign t=%.3f\n",now_ns()/1e9);wonder_applet_focus(2); }
-- (void)applicationDidEnterBackground:(UIApplication *)application { (void)application;fprintf(stderr,"HOST_LIFECYCLE background t=%.3f\n",now_ns()/1e9);wonder_applet_focus(3); }
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
-    (void)application; (void)options;
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    UIViewController *controller = [UIViewController new];
-    controller.view.backgroundColor = UIColor.systemBackgroundColor;
+- (void)sceneDidBecomeActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE active t=%.3f\n",now_ns()/1e9);wonder_applet_focus(1); }
+- (void)sceneWillResignActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE resign t=%.3f\n",now_ns()/1e9);wonder_applet_focus(2); }
+- (void)sceneDidEnterBackground:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE background t=%.3f\n",now_ns()/1e9);wonder_applet_focus(3); }
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
+    (void)session; (void)options;
+    if (![scene isKindOfClass:UIWindowScene.class] || self.window) return;
+    static int started; if (started) return; started = 1;   // one game per process
+    self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+    ProbeGameController *controller = [ProbeGameController new];
+    controller.view.backgroundColor = UIColor.blackColor;
     gText = [[UITextView alloc] initWithFrame:CGRectZero];
-    gText.editable = NO;
-    gText.font = [UIFont monospacedSystemFontOfSize:14 weight:UIFontWeightRegular];
-    gText.text = @"Wonder Native Loader Probe\n\n原生装载诊断包：用于验证签名代码映射、重定位和原生返回。\n游戏启动接口诊断；尚未接入图形，不能游玩。\n";
+    gText.editable = NO; gText.userInteractionEnabled = NO;
+    gText.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightRegular];
+    gText.textColor = UIColor.whiteColor; gText.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+    gText.text = @"Wonder Native Loader Probe\n";
     gText.translatesAutoresizingMaskIntoConstraints = NO;
-    // Persistent CAMetalLayer that VI exposes as the native window; black until NVN presents.
+    // Persistent CAMetalLayer that VI exposes as the native window: 16:9, as tall as the screen allows, centred
+    // (the 19.5:9 iPhone gets bars at the sides). Black until NVN presents.
     UIView *surface = wonder_graphics_surface();
     surface.translatesAutoresizingMaskIntoConstraints = NO;
-    [controller.view addSubview:surface];
-    [controller.view addSubview:gText];
+    // Floating touch controls over the whole screen (GameController pads feed nn::hid too). The probe log is an
+    // overlay shown while booting and again when the guest stops.
+    UIView *controls = wonder_input_controls();
+    controls.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *root = controller.view;
+    [root addSubview:surface]; [root addSubview:controls]; [root addSubview:gText];
+    NSLayoutConstraint *fillHeight = [surface.heightAnchor constraintEqualToAnchor:root.heightAnchor]; fillHeight.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [surface.leadingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.leadingAnchor],
-        [surface.trailingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.trailingAnchor],
-        [surface.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor],
-        [surface.heightAnchor constraintEqualToAnchor:surface.widthAnchor multiplier:9.0/16.0],
-        [gText.leadingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.leadingAnchor constant:12],
-        [gText.trailingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
-        [gText.topAnchor constraintEqualToAnchor:surface.bottomAnchor constant:8],
-        [gText.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor constant:-12]
+        [surface.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
+        [surface.centerYAnchor constraintEqualToAnchor:root.centerYAnchor],
+        [surface.widthAnchor constraintEqualToAnchor:surface.heightAnchor multiplier:16.0/9.0],
+        [surface.widthAnchor constraintLessThanOrEqualToAnchor:root.widthAnchor],
+        [surface.heightAnchor constraintLessThanOrEqualToAnchor:root.heightAnchor], fillHeight,
+        [controls.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [controls.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [controls.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [controls.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [gText.leadingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.leadingAnchor constant:8],
+        [gText.trailingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.trailingAnchor constant:-8],
+        [gText.topAnchor constraintEqualToAnchor:root.topAnchor constant:8],
+        [gText.heightAnchor constraintEqualToAnchor:root.heightAnchor multiplier:0.45]
     ]];
     self.window.rootViewController = controller;
     [self.window makeKeyAndVisible];
@@ -147,8 +212,7 @@ uint64_t wonder_host_language(void) {
     NSString *previous=[documents stringByAppendingPathComponent:@"loader-probe.previous.log"];
     [NSFileManager.defaultManager removeItemAtPath:previous error:nil];
     if([NSFileManager.defaultManager fileExistsAtPath:log])[NSFileManager.defaultManager moveItemAtPath:log toPath:previous error:nil];
-    if (!freopen(log.fileSystemRepresentation, "w", stderr)) return YES;
-    setvbuf(stderr, NULL, _IOLBF, 0);
+    if (start_log(log.fileSystemRepresentation)) return;
     report([NSString stringWithFormat:@"PROBE_RUN id=%@ pid=%d debugger=%d stage=%@",NSUUID.UUID.UUIDString,getpid(),debugger_attached(),[NSBundle.mainBundle objectForInfoDictionaryKey:@"WonderBootStage"]]);
     for(NSString *k in [NSProcessInfo.processInfo.environment.allKeys sortedArrayUsingSelector:@selector(compare:)])
         if([k hasPrefix:@"WONDER_"]) report([NSString stringWithFormat:@"PROBE_ENV %@=%@",k,NSProcessInfo.processInfo.environment[k]]);
@@ -194,7 +258,6 @@ uint64_t wonder_host_language(void) {
     extern void wonder_crash_install(void); wonder_crash_install();
     int error=wonder_game_thread_start(&gameThread,run_game_thread,(__bridge_retained void *)gameTask);
     if(error)die("Game main thread creation failed %d",error);
-    return YES;
 }
 @end
 

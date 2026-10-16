@@ -20,7 +20,13 @@ int main(void) {
     usleep(20000); wonder_hid_get_states(s, 1, 0x20, WONDER_STYLE_HANDHELD); assert(s[0].sampling >= first + 3);   // 5 ms period
     wonder_hid_publish(1u << 0, 100, -200, 0, 32767);                          // A held, sticks moved
     wonder_hid_get_states(s, 2, 0x20, WONDER_STYLE_HANDHELD);
-    assert(s[0].buttons == 1 && s[0].lx == 100 && s[0].ly == -200 && s[0].ry == 32767);
+    assert(s[0].buttons == (WONDER_BTN_A | 1u << 21) && s[0].lx == 100 && s[0].ly == -200 && s[0].ry == 32767);   // + StickR Up
+    // Stick-direction bits follow the sticks (half deflection); published direction bits are replaced, values clamped.
+    wonder_hid_publish(WONDER_BTN_B | 1u << 16, -20000, 20000, 40000, -16000);
+    wonder_hid_get_states(s, 1, 0x20, WONDER_STYLE_HANDHELD);
+    assert(s[0].buttons == (WONDER_BTN_B | 1u << 16 | 1u << 17 | 1u << 22) && s[0].rx == 32767 && s[0].ry == -16000);
+    assert(wonder_hid_stick_bits(0, 0, 0, 0) == 0 && wonder_hid_stick_bits(0, -16384, 0, 0) == 1u << 19);
+    wonder_hid_publish(0, 0, 0, 0, 0); wonder_hid_get_states(s, 1, 0x20, WONDER_STYLE_HANDHELD); assert(s[0].buttons == 0);
     assert(wonder_hid_get_states(s, 0, 0x20, WONDER_STYLE_HANDHELD) == 0);
     puts("HID_STATE_OK");
 }

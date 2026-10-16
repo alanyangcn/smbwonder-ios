@@ -14,7 +14,7 @@ settings:
     CLANG_ENABLE_OBJC_ARC: YES
     GCC_OPTIMIZATION_LEVEL: 1
     HEADER_SEARCH_PATHS: ['${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host', '${SMBW_REFERENCE}/runtime', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/nvn', '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex']
-    OTHER_LDFLAGS: '-framework CoreGraphics -framework CoreText -framework Metal -framework QuartzCore -framework ImageIO -Wl,-segprot,__DMmainW,rw,rw -Wl,-segprot,__DMsdkW,rw,rw'
+    OTHER_LDFLAGS: '-framework CoreGraphics -framework CoreText -framework Metal -framework QuartzCore -framework ImageIO -framework GameController -Wl,-segprot,__DMmainW,rw,rw -Wl,-segprot,__DMsdkW,rw,rw'
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ENABLE_DEBUG_DYLIB: NO
     GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "SMBW_STRICT_IMPORTS=1"]
@@ -52,6 +52,8 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/os_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/graphics_gate.c'
       - path: '${SMBW_REFERENCE}/runtime/metal3_probe.m'
+      - path: '${SMBW_REFERENCE}/runtime/host_input.m'
+      - path: '${SMBW_REFERENCE}/runtime/log_throttle.c'
       - path: '${SMBW_REFERENCE}/runtime/metal3_shader_check.m'
       - path: '${SMBW_REFERENCE}/runtime/metal3_pixels.c'
       - path: '${SMBW_REFERENCE}/runtime/kernel_threads.c'

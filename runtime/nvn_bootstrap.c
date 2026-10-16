@@ -4,19 +4,26 @@
 #include "hle.h"
 #include "nvn_device.h"
 #include "nvn_names.h"
+#include "log_throttle.h"
 #include <stdarg.h>
 #include <mach/mach.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 _Noreturn void wonder_game_thread_stop(const char *reason);
 extern const uint64_t wonder_nvn_unimpl_stubs[WONDER_NVN_NAME_COUNT];
 
+// Per-call NVN reports are rate limited (log_throttle.h); WONDER_NVN_VERBOSE=1 prints every line.
 void wonder_nvn_report(const char *format, ...) {
     char line[512]; va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
-    LOG("%s", line);
+    static int verbose = -1; if (verbose < 0) { const char *v = getenv("WONDER_NVN_VERBOSE"); verbose = v && *v && strcmp(v, "0"); }
+    unsigned long count = 0;
+    if (verbose || wonder_log_throttle(line, &count)) {
+        if (count > WONDER_LOG_FIRST) LOG("%s (occurrence %lu)", line, count); else LOG("%s", line);
+    }
 }
 static void caller_chain(uint64_t fp, uint64_t pc) {
     for (unsigned depth = 0; depth < 12; depth++) {
