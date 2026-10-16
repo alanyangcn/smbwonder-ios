@@ -302,7 +302,7 @@ void wonder_nvnCommandBufferBindProgram(void *cb, const void *program, int stage
         wonder_nvn_stop("NVN_INVALID_STATE nvnCommandBufferBindProgram program=%p has no shaders", program);
     const uint64_t a[] = {(uint64_t)(unsigned)stage_bits, (uintptr_t)program};
     rec(cb, WONDER_NVN_CMD_BIND_PROGRAM, a, 2, &shaders, sizeof shaders);
-    if (!program || !(stage_bits & 0x20)) trace_bind(cb, program ? &shaders : NULL);
+    if (!program || (shaders.mask & 1)) trace_bind(cb, program ? &shaders : NULL);   // a graphics program (any stage bits)
 }
 void wonder_nvnCommandBufferBindVertexBuffer(void *cb, int index, uint64_t address, size_t size) {
     need_range(index, 0, 15, "nvnCommandBufferBindVertexBuffer", "index"); need_address(address, size, "nvnCommandBufferBindVertexBuffer");
