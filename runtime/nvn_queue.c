@@ -469,8 +469,8 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
           if (d.color_count && d.targets[0].valid) { run_target = d.targets[0]; run_depth = d.color_count < 9 ? d.targets[d.color_count] : (struct wonder_nvn_texture_snapshot){0}; snprintf(run_vs, sizeof run_vs, "%s", d.vs_key); snprintf(run_fs, sizeof run_fs, "%s", d.fs_key); run_valid = 1; }
       }
       if (dump || draw_log_frame(f)) {
-          char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d inst=%d mask=%#x blend=%#x depth=%u/%u/%u cull=%u", f, d.vs_key, d.fs_key, d.primitive,
-                                           call.count, call.instances, (d.states_set & 2) ? d.channel_mask.mask : 0xffffffffu, d.color.blend_en, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df, d.polygon.cull);
+          char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d inst=%d mask=%#x blend=%#x depth=%u/%u/%u cull=%u front=%u", f, d.vs_key, d.fs_key, d.primitive,
+                                           call.count, call.instances, (d.states_set & 2) ? d.channel_mask.mask : 0xffffffffu, d.color.blend_en, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df, d.polygon.cull, d.polygon.front);
           for (int i = 0; i < 9 && n < (int)sizeof line - 80; i++) if (d.targets[i].valid) {
               const struct wonder_nvn_texture *t = &d.targets[i].texture;
               n += snprintf(line + n, sizeof line - n, " rt%d=%llu:%ux%u@%p+%#llx:%#x", i, (unsigned long long)t->serial, t->desc.width, t->desc.height, t->pool, (unsigned long long)t->offset, t->desc.format);

@@ -967,6 +967,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     memcpy(x.blend_color, d->blend_color, sizeof x.blend_color);
     x.depth_clamp = d->depth_clamp; x.bias = d->depth_bias_enabled; x.bias_units = d->depth_bias; x.bias_slope = d->depth_bias_slope; x.bias_clamp = d->depth_bias_clamp;
     if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) cull = MTLCullModeNone;   // diagnostic (with the depth test above)
+    if (diag_fs_listed(d, "WONDER_DIAG_NOCULL_FS")) cull = MTLCullModeNone;   // diagnostic (round190): face culling only
     x.cull = cull; x.winding = winding; x.viewport = vp; x.scissor = scissor; x.primitive = primitive; x.itype = itype; x.ib_offset = ib_offset; x.uses_default = uses_default;
     NSString *label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
     NSArray *vbufs = bufs[0], *fbufs = bufs[1], *vtex = stage_textures[0], *ftex = stage_textures[1], *vsmp = stage_samplers[0], *fsmp = stage_samplers[1];
