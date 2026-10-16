@@ -59,10 +59,20 @@ uint32_t wonder_romfs_mount(const char *name){
     else strcpy(mount_name,name);
     pthread_mutex_unlock(&lock);return result;
 }
+// nn::fs normalizes paths before the file system sees them: runs of separators collapse to one (round141: the sound
+// engine opens "content://Sound/Resource/Stream/*.bwav", every stream failed with 0x202). Callers hold the lock.
+static char normalized[0x301];
 static const char *relative(const char *path){
     if(!path||!mount_name[0])return NULL;size_t n=strlen(mount_name);
     if(strncmp(path,mount_name,n)||strncmp(path+n,":/",2))return NULL;
-    return valid(path+n+2)?path+n+2:NULL;
+    const char *s=path+n+1;size_t o=0;
+    while(*s){
+        if(*s=='/'){while(*s=='/')s++;if(*s&&o)normalized[o++]='/';continue;}
+        if(o>=sizeof normalized-1)return NULL;
+        normalized[o++]=*s++;
+    }
+    normalized[o]=0;
+    return valid(normalized)?normalized:NULL;
 }
 static const struct wonder_romfs_entry *find(const char *name){
     size_t lo=0,hi=count;while(lo<hi){size_t m=lo+(hi-lo)/2;int c=strcmp(entries[m].name,name);if(c<0)lo=m+1;else hi=m;}

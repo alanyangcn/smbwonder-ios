@@ -11,6 +11,8 @@ int main(int argc,char **argv){
     assert(!wonder_romfs_size(&size,h)&&size==10);
     assert(!wonder_romfs_read(&n,h,3,b,20)&&n==7&&!memcmp(b,"3456789",7));
     assert(!wonder_romfs_read(&n,h,10,b,1)&&n==0);assert(wonder_romfs_read(&n,h,-1,b,1));
+    { uint64_t h2; assert(!wonder_romfs_open(&h2,"rom://Folder//hello.bin",1)&&!wonder_romfs_close(h2)); }   // nn::fs collapses separators (round141)
+    assert(wonder_romfs_open(&h,"rom://Folder/../empty",1));
     assert(wonder_romfs_open(&h,"rom:/Folder/../empty",1));assert(wonder_romfs_open(&h,"rom:/folder/hello.bin",1));
     assert(wonder_romfs_open(&h,"rom:/empty",2));assert(!wonder_romfs_close(old));
     assert(wonder_romfs_size(&size,old));assert(!wonder_romfs_open(&h,"rom:/empty",1));assert(h!=old);
