@@ -133,6 +133,17 @@ int main(int argc, char **argv) {
             r = wonder_host_view_slices(MTLTextureTypeCubeArray, 2, 0, 1);     assert(r.location == 0 && r.length == 6);   // rounded up to the cube
             r = wonder_host_view_slices(MTLTextureTypeCubeArray, 2, 3, 1);     assert(r.length == 0);                       // not cube-aligned
             r = wonder_host_view_slices(MTLTextureType2DArray, 4, 3, 2);       assert(r.length == 0);                       // beyond the array
+            // Views with their own target (round149: 2D texture viewed as a 2D array).
+            assert(wonder_host_view_type(MTLTextureType2D, 4) == MTLTextureType2DArray && wonder_host_view_type(MTLTextureType2D, 7) == MTLTextureType2D);
+            assert(wonder_host_view_type(MTLTextureType2D, 8) == -1 && wonder_host_view_type(MTLTextureType3D, 4) == -1 && wonder_host_view_type(MTLTextureType2DArray, 2) == -1);
+            assert(wonder_host_view_type(MTLTextureType2DArray, 8) == MTLTextureTypeCube && wonder_host_view_type(MTLTextureTypeCube, 1) == MTLTextureType2D);
+            r = wonder_host_view_type_slices(MTLTextureType2D, 1, MTLTextureType2DArray, 0, 0);       assert(r.location == 0 && r.length == 1);
+            r = wonder_host_view_type_slices(MTLTextureTypeCube, 1, MTLTextureType2D, 3, 1);          assert(r.location == 3 && r.length == 1);   // one face
+            r = wonder_host_view_type_slices(MTLTextureTypeCube, 1, MTLTextureType2D, 0, 0);          assert(r.length == 0);                      // 6 faces into 2D
+            r = wonder_host_view_type_slices(MTLTextureType2DArray, 12, MTLTextureTypeCube, 6, 6);    assert(r.location == 6 && r.length == 6);
+            r = wonder_host_view_type_slices(MTLTextureType2DArray, 12, MTLTextureTypeCube, 0, 0);    assert(r.length == 0);                      // 2 cubes into one
+            r = wonder_host_view_type_slices(MTLTextureType2DArray, 4, MTLTextureTypeCube, 0, 6);     assert(r.length == 0);                      // not whole cubes
+            r = wonder_host_view_type_slices(MTLTextureTypeCubeArray, 2, MTLTextureType2DArray, 2, 5); assert(r.location == 2 && r.length == 5);
         }
         // Vertex format table: NVN format -> MTLVertexFormat.
         assert(wonder_host_vertex_format(0x2E) == MTLVertexFormatFloat4 && wonder_host_vertex_format(0x16) == MTLVertexFormatFloat2);

@@ -21,4 +21,8 @@ MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *d,
 // Metal slice range of an NVN view's layers (min_layer, layers; layers 0 = the rest). Cube and cube-array views must
 // cover whole cubes: a cube-aligned range is rounded up to whole cubes. Length 0 = not representable.
 NSRange wonder_host_view_slices(MTLTextureType type, NSUInteger array_length, NSUInteger min_layer, NSUInteger layers);
+// Metal type of a view with NVN target nvn_target over a texture of type source (-1 = Metal has no such view), and the
+// slice range of its layers in that type (length 0 = not representable: a 2D view is one layer, cube views whole cubes).
+long wonder_host_view_type(MTLTextureType source, int nvn_target);
+NSRange wonder_host_view_type_slices(MTLTextureType source, NSUInteger array_length, MTLTextureType view, NSUInteger min_layer, NSUInteger layers);
 #endif

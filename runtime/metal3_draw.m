@@ -189,7 +189,6 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     // swizzle are executed as a Metal texture view; reinterpreting the format or target stops by name.
     const struct wonder_nvn_texture_view *v = reg->has_view ? &reg->view : NULL;
     if (v && v->set_format && v->format != t->desc.format) unsupported(d, "texture view format (reinterpretation) on serial", (long)t->serial);
-    if (v && v->set_target && v->target != t->desc.target) unsupported(d, "texture view target on serial", (long)t->serial);
     if (v && v->set_depth_stencil && v->depth_stencil_mode && t->desc.format >= 0x31 && t->desc.format <= 0x36) unsupported(d, "stencil texturing view on serial", (long)t->serial);
     id<MTLTexture> gpu = (__bridge id<MTLTexture>)wonder_host_render_target_existing(t);
     id<MTLTexture> tex = gpu;
@@ -291,9 +290,20 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     NSUInteger levels = tex.mipmapLevelCount, base = 0, count = levels;
     NSRange all = wonder_host_view_slices(tex.textureType, tex.arrayLength, 0, 0), range = all;
     if (v && v->set_levels) { base = v->base_level; count = v->levels ? v->levels : levels - base; }
-    if (v && v->set_layers) range = wonder_host_view_slices(tex.textureType, tex.arrayLength, (NSUInteger)MAX(0, v->min_layer), (NSUInteger)MAX(0, v->layers));
+    // A view with its own target (round149: a 2D RGBA8_SRGB texture viewed as a 2D array for a texture2d_array shader)
+    // becomes a Metal view of that type when Metal allows it and the layers fit; anything else stops by name.
+    MTLTextureType type = tex.textureType;
+    if (v && v->set_target && v->target != t->desc.target) {
+        long vt = wonder_host_view_type(tex.textureType, v->target);
+        if (vt < 0) unsupported(d, "texture view target on serial", (long)t->serial);
+        type = (MTLTextureType)vt;
+    }
+    if (type != tex.textureType || (v && v->set_layers)) {
+        range = wonder_host_view_type_slices(tex.textureType, tex.arrayLength, type, v && v->set_layers ? (NSUInteger)MAX(0, v->min_layer) : 0,
+                                             v && v->set_layers ? (NSUInteger)MAX(0, v->layers) : 0);
+    }
     if (base >= levels || count > levels - base) unsupported(d, "texture view levels beyond the texture, serial", (long)t->serial);
-    if (!range.length) unsupported(d, "texture view layers not representable (cube views need whole cubes), serial", (long)t->serial);
+    if (!range.length) unsupported(d, "texture view layers not representable (cube views need whole cubes, 2D views one layer), serial", (long)t->serial);
     NSUInteger first = range.location, layers = range.length, slices = all.length;
     const uint8_t *z = v && v->set_swizzle ? v->swizzle : t->swizzle;   // NVN swizzle values equal MTLTextureSwizzle (ZERO 0, ONE 1, R 2, G 3, B 4, A 5)
     if (t->desc.format == 0x1 && (t->desc.flags & 0x10)) {   // diagnostic: the font glyph cache (2048x8192 R8 linear, round123 serial 38)
@@ -307,11 +317,11 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     }
     int identity = z[0] == 2 && z[1] == 3 && z[2] == 4 && z[3] == 5, unset = !(z[0] | z[1] | z[2] | z[3]);
     if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
-    int whole = base == 0 && count == levels && first == 0 && layers == slices;
+    int whole = base == 0 && count == levels && first == 0 && layers == slices && type == tex.textureType;
     if (whole && (identity || unset)) return tex;
     id<MTLTexture> view = identity || unset   // the swizzle-taking call fails outright on GPUs without texture swizzle
-        ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:tex.textureType levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]
-        : [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:tex.textureType levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)
+        ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]
+        : [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)
                                      swizzle:MTLTextureSwizzleChannelsMake(z[0], z[1], z[2], z[3])];
     if (!view) unsupported(d, "texture view creation on serial", (long)t->serial);
     return view;
@@ -869,6 +879,35 @@ NSRange wonder_host_view_slices(MTLTextureType type, NSUInteger array_length, NS
     if (cube) { if (first % 6) return NSMakeRange(0, 0); count = (count + 5) / 6 * 6; }
     if (first >= total || count > total - first || !count) return NSMakeRange(0, 0);
     return NSMakeRange(first, count);
+}
+// Metal texture-view type rules: 2D -> 2D / 2D array; 2D array, cube, cube array -> any of those four; 3D -> 3D only.
+long wonder_host_view_type(MTLTextureType source, int nvn_target) {
+    long view; switch (nvn_target) {
+    case 1: case 7: view = MTLTextureType2D; break;
+    case 4: view = MTLTextureType2DArray; break;
+    case 8: view = MTLTextureTypeCube; break;
+    case 9: view = MTLTextureTypeCubeArray; break;
+    case 2: view = MTLTextureType3D; break;
+    default: return -1;
+    }
+    int layered = source == MTLTextureType2DArray || source == MTLTextureTypeCube || source == MTLTextureTypeCubeArray;
+    if (source == MTLTextureType2D) return view == MTLTextureType2D || view == MTLTextureType2DArray ? view : -1;
+    if (layered) return view != MTLTextureType3D ? view : -1;
+    return (long)source == view ? view : -1;
+}
+NSRange wonder_host_view_type_slices(MTLTextureType source, NSUInteger array_length, MTLTextureType view, NSUInteger first, NSUInteger count) {
+    NSUInteger total = wonder_host_view_slices(source, array_length, 0, 0).length;
+    if (view == source) return wonder_host_view_slices(source, array_length, first, count);
+    NSRange r;
+    if (view == MTLTextureTypeCube || view == MTLTextureTypeCubeArray) {   // whole cubes out of the source's layer-faces
+        if (total % 6) return NSMakeRange(0, 0);
+        r = wonder_host_view_slices(MTLTextureTypeCubeArray, total / 6, first, count);
+        if (view == MTLTextureTypeCube && r.length != 6) return NSMakeRange(0, 0);
+        return r;
+    }
+    r = wonder_host_view_slices(MTLTextureType2DArray, total, first, count);   // NVN layer-face index = Metal slice
+    if (view == MTLTextureType2D && r.length != 1) return NSMakeRange(0, 0);
+    return r;
 }
 MTLTextureDescriptor *wonder_host_render_target_descriptor(const nvn_texdesc *t, MTLPixelFormat format) {
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];

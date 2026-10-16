@@ -65,6 +65,11 @@ void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target
 int wonder_host_copy_texture(const struct wonder_nvn_texture_snapshot *s, const struct wonder_nvn_copy_region *sr,
                              const struct wonder_nvn_texture_snapshot *d, const struct wonder_nvn_copy_region *dr, int flags, char *why, size_t n);
 static struct wonder_nvn_texture_snapshot text_targets[3]; static int text_pending;
+// Diagnostic (WONDER_FRAME_DUMP_EVERY=<n>): in every n-th presented frame, each colour target a submit drew to is read back
+// after that submit (Documents/FrameDump/f<frame>-s<submit>-<k>-t<serial>.png) and every draw is logged (NVN_DRAW_LOG),
+// to find the pass that produces a wrong picture.
+static struct wonder_nvn_texture_snapshot dump_targets[24]; static int dump_count;
+static int frame_dump_every(void) { static int n = -1; if (n < 0) { const char *e = getenv("WONDER_FRAME_DUMP_EVERY"); n = e ? atoi(e) : 0; if (n < 0) n = 0; } return n; }
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
 static _Atomic(pthread_t *) replay_owner;
@@ -369,8 +374,14 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
       // textures by storage, to compare frames that execute the same draw sequence.
       static int first = -1, last = -1;
       if (first < 0) { const char *e = getenv("WONDER_DRAW_LOG"); first = 0; last = -1; if (e) sscanf(e, "%d-%d", &first, &last); }
-      unsigned f = atomic_load(&frame_index) + 1;
-      if ((int)f >= first && (int)f <= last) {
+      unsigned f = atomic_load(&frame_index) + 1; int dump = frame_dump_every() && f % (unsigned)frame_dump_every() == 0;
+      if (dump) for (int i = 0; i < 9; i++) if (d.targets[i].valid) {
+          int known = 0; const struct wonder_nvn_texture_snapshot *t = &d.targets[i];
+          for (int k = 0; k < dump_count && !known; k++) known = dump_targets[k].texture.serial == t->texture.serial && dump_targets[k].has_view == t->has_view &&
+              (!t->has_view || (dump_targets[k].view.base_level == t->view.base_level && dump_targets[k].view.min_layer == t->view.min_layer));
+          if (!known && dump_count < (int)(sizeof dump_targets / sizeof *dump_targets)) dump_targets[dump_count++] = *t;
+      }
+      if (dump || ((int)f >= first && (int)f <= last)) {
           char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d", f, d.vs_key, d.fs_key, d.primitive, call.count);
           for (int i = 0; i < 9 && n < (int)sizeof line - 80; i++) if (d.targets[i].valid) {
               const struct wonder_nvn_texture *t = &d.targets[i].texture;
@@ -734,6 +745,14 @@ static void submit_on_replay_stack(void *arg) {
         missing_list[0] = 0;
     }
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
+    if (dump_count) {
+        char name[80]; unsigned f = atomic_load(&frame_index) + 1;
+        for (int i = 0; i < dump_count; i++) {
+            snprintf(name, sizeof name, "FrameDump/f%u-s%u-%d-t%llu.png", f, state.submits, i, (unsigned long long)dump_targets[i].texture.serial);
+            wonder_host_capture_target(&dump_targets[i], name);
+        }
+        dump_count = 0;
+    }
     if (text_pending) {
         static int captured; char name[40];
         for (int i = 0; i < text_pending && i < 3; i++) { snprintf(name, sizeof name, "Text/text-%d.png", captured++); wonder_host_capture_target(&text_targets[i], name); }
