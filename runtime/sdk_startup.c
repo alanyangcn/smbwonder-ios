@@ -1,3 +1,4 @@
+#include <dlfcn.h>
 #include <stdatomic.h>
 #include "guest_tls.h"
 #include "dm.h"
@@ -25,7 +26,13 @@ void wonder_guest_frames(uint64_t fp,uint64_t lr,char *out,size_t size){
     for(unsigned depth=0;depth<16&&n+24<size;depth++){
         module_t *m=module_of((void *)pc);
         if(m) n+=(size_t)snprintf(out+n,size-n,"%s+%#llx ",m->name,(unsigned long long)(pc-(uint64_t)m->base));
-        else n+=(size_t)snprintf(out+n,size-n,"%#llx ",(unsigned long long)pc);   // host code
+        else {   // host code: image + offset (symbol when the image exports one)
+            Dl_info d;
+            if(dladdr((void *)pc,&d)&&d.dli_fname){const char *b=strrchr(d.dli_fname,'/');b=b?b+1:d.dli_fname;
+                if(d.dli_sname)n+=(size_t)snprintf(out+n,size-n,"%s+%#llx(%s) ",b,(unsigned long long)(pc-(uint64_t)d.dli_fbase),d.dli_sname);
+                else n+=(size_t)snprintf(out+n,size-n,"%s+%#llx ",b,(unsigned long long)(pc-(uint64_t)d.dli_fbase));}
+            else n+=(size_t)snprintf(out+n,size-n,"%#llx ",(unsigned long long)pc);
+        }
         uint64_t frame[2]; vm_size_t count=0;
         if(!fp||(fp&15)||vm_read_overwrite(mach_task_self(),fp,sizeof frame,(vm_address_t)frame,&count)!=KERN_SUCCESS||count!=sizeof frame||frame[0]<=fp)break;
         fp=frame[0]; pc=frame[1];

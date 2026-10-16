@@ -50,6 +50,7 @@ struct thr {
     jmp_buf host_exit; int host_exit_ready;
     int wkind, woke; uint64_t waddr, wkey, wseq; uint32_t wtag; int64_t wres;
     uint64_t wfp, wlr; int64_t wstart; uint32_t wsvc;   // where and when the current wait began (diagnostics)
+    uint64_t sfp, slr; volatile int sleeping;            // guest fp / lr of the current SleepThread (diagnostics)
     struct thr *next, *all;
 };
 static pthread_mutex_t G = PTHREAD_MUTEX_INITIALIZER;
@@ -63,7 +64,8 @@ static void (*report_hook)(const char *line);
 static void report(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void report(const char *fmt, ...) {
     if (!report_hook) return;
-    char line[512]; va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); report_hook(line);
+    static _Thread_local char line[1400];   // off the caller's stack (guest stacks can be small)
+    va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); report_hook(line);
 }
 static void make_key(void) { pthread_key_create(&key_thread, NULL); }
 
@@ -202,7 +204,7 @@ void wonder_kernel_dump_waits(int64_t min_ns, void (*frames)(uint64_t fp, uint64
 // formatted after every thread runs again (nothing that could need a lock the suspended thread holds runs in between).
 // A load that polls instead of blocking (round134 / round138: the loading screen after character select) shows here.
 void wonder_kernel_sample_running(void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size)) {
-    struct sample { uint32_t handle; uint64_t id; int prio, core; uint64_t pc, lr, fp; } s[64]; int n = 0;
+    struct sample { uint32_t handle; uint64_t id; int prio, core; uint64_t pc, lr, fp, sfp, slr; int sleeping; }; static struct sample s[64]; int n = 0;   // one sampler at a time (present thread)
     pthread_mutex_lock(&G);
     for (struct thr *t = all_threads; t && n < 64; t = t->all) {
         if (!t->guest || !t->started || t->exited || pthread_equal(t->pt, pthread_self())) continue;
@@ -214,13 +216,15 @@ void wonder_kernel_sample_running(void (*frames)(uint64_t fp, uint64_t lr, char 
         kern_return_t k = thread_get_state(m, ARM_THREAD_STATE64, (thread_state_t)&st, &count);
         thread_resume(m);
         if (k != KERN_SUCCESS) continue;
-        s[n++] = (struct sample){t->handle, t->id, t->prio, t->core, (uint64_t)arm_thread_state64_get_pc(st), (uint64_t)arm_thread_state64_get_lr(st), (uint64_t)arm_thread_state64_get_fp(st)};
+        s[n++] = (struct sample){t->handle, t->id, t->prio, t->core, (uint64_t)arm_thread_state64_get_pc(st), (uint64_t)arm_thread_state64_get_lr(st), (uint64_t)arm_thread_state64_get_fp(st),
+                                 t->sfp, t->slr, t->sleeping};
     }
     pthread_mutex_unlock(&G);
     for (int i = 0; i < n; i++) {
-        char at[160] = "", chain[400] = "";
+        static char at[200], chain[900]; at[0] = chain[0] = 0;
         if (frames) { frames(0, s[i].pc, at, sizeof at); frames(s[i].fp, s[i].lr, chain, sizeof chain); }
         report("KERNEL_RUNNING thread=%#x id=%#llx prio=%d core=%d pc=%s lr/fp chain=%s", s[i].handle, (unsigned long long)s[i].id, s[i].prio, s[i].core, at, chain);
+        if (s[i].sleeping && frames) { frames(s[i].sfp, s[i].slr, chain, sizeof chain); report("KERNEL_RUNNING_SLEEP thread=%#x SleepThread from %s", s[i].handle, chain); }
     }
     report("KERNEL_RUNNING_SUMMARY sampled=%d", n);
 }
@@ -309,6 +313,7 @@ int wonder_event_call(int number, uint64_t *r) {
     // Every caller of these SVCs must be a registered guest thread; anything else is a host defect.
     if (!me) { report("KERNEL_NON_GUEST_CALLER svc=%#x", number); return 0; }
     if (number == 0x18 || number == 0x1A || number == 0x1C || number == 0x34) { me->wfp = r[29]; me->wlr = r[30]; me->wsvc = (uint32_t)number; }
+    if (number == 0x0B) { me->sfp = r[29]; me->slr = r[30]; me->sleeping = 1; }   // a polling loop shows where (KERNEL_RUNNING)
     switch (number) {
     case 0x08: r[0] = create_thread(r); return 1;
     case 0x09: {
@@ -324,6 +329,7 @@ int wonder_event_call(int number, uint64_t *r) {
         int64_t ns = (int64_t)r[0];
         if (ns > 0) { struct timespec ts = {ns / 1000000000, ns % 1000000000}; while (nanosleep(&ts, &ts) && errno == EINTR) {} }
         else sched_yield();   // 0 / -1 / -2: the yield variants
+        me->sleeping = 0;
         return 1;
     }
     case 0x0C: { pthread_mutex_lock(&G); struct thr *t = h_peek((uint32_t)r[1], O_THREAD);
