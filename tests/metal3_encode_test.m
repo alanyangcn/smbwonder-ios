@@ -22,7 +22,9 @@ static pthread_mutex_t replay = PTHREAD_MUTEX_INITIALIZER;
 static void take(const char *who) { if (pthread_mutex_trylock(&replay)) { fprintf(stderr, "replay mutex re-entered by %s (deadlock on device)\n", who); abort(); } }
 void wonder_host_gpu_error_reset(void) {} void wonder_host_finish(void) {} int wonder_host_gpu_error(char *out, size_t size) { (void)out; (void)size; return 0; }
 void wonder_host_replay_lock(void) { take("wonder_host_replay_lock"); } void wonder_host_replay_unlock(void) { pthread_mutex_unlock(&replay); }
-void *wonder_host_replay_command_buffer(void) { if (!pending) pending = [queue commandBuffer]; return (__bridge void *)pending; }
+void *wonder_host_replay_command_buffer_raw(void) { if (!pending) pending = [queue commandBuffer]; return (__bridge void *)pending; }
+void wonder_host_draw_flush_locked(void);
+void *wonder_host_replay_command_buffer(void) { wonder_host_draw_flush_locked(); return wonder_host_replay_command_buffer_raw(); }   // as host_graphics.m
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { take("render_target_existing"); id<MTLTexture> x = targets[@(t->serial)]; pthread_mutex_unlock(&replay); return (__bridge void *)x; }
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format) {
     take("render_target"); pthread_mutex_unlock(&replay);
@@ -84,7 +86,7 @@ int main(int argc, char **argv) {
             int rect[4] = {16, 16, 32, 32};
             assert(wonder_host_clear_depth_stencil_rect((__bridge void *)z, 0, 0, 1, 0.25f, 0, 0, 0xff, rect) == 0);
             id<MTLBuffer> zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
-            id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
+            id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
             [b copyFromTexture:z sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:zb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
             [b endEncoding]; [pending commit]; [pending waitUntilCompleted];
             const float *zz = zb.contents; printf("depth in %g outside %g edge %g\n", zz[32 * 64 + 32], zz[8 * 64 + 8], zz[48 * 64 + 48]);
@@ -100,7 +102,7 @@ int main(int argc, char **argv) {
             float red[4] = {1, 0.25f, 0, 0.5f}; int rect[4] = {16, 16, 32, 32};
             assert(wonder_host_clear_rect((__bridge void *)c, 0, 0, red, 0x9, rect) == 0);
             id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
-            id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
+            id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
             [b copyFromTexture:c sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
             [b endEncoding]; [pending commit]; [pending waitUntilCompleted];
             const uint8_t *in = (const uint8_t *)rb.contents + (32 * 64 + 32) * 4, *outside = (const uint8_t *)rb.contents + (8 * 64 + 8) * 4, *edge = (const uint8_t *)rb.contents + (48 * 64 + 48) * 4;
@@ -258,7 +260,7 @@ int main(int argc, char **argv) {
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
-        id<MTLBlitCommandEncoder> b = [pending blitCommandEncoder];
+        id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
         [b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
         [b copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:zb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
         [b endEncoding]; [pending commit]; [pending waitUntilCompleted]; assert(pending.status == MTLCommandBufferStatusCompleted);

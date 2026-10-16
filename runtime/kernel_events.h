@@ -15,3 +15,5 @@ void *wonder_handle_object(uint32_t handle, uint32_t kind);
 // Diagnostics: log every guest thread blocked longer than min_ns (KERNEL_WAIT lines), frames formatted by the hook.
 #include <stddef.h>
 void wonder_kernel_dump_waits(int64_t min_ns, void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size));
+// Diagnostics: pc and frame chain of every guest thread not blocked in a kernel wait (KERNEL_RUNNING lines).
+void wonder_kernel_sample_running(void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size));

@@ -14,6 +14,7 @@
 #include <setjmp.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <mach/mach.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -196,6 +197,32 @@ void wonder_kernel_dump_waits(int64_t min_ns, void (*frames)(uint64_t fp, uint64
     }
     report("KERNEL_WAIT_SUMMARY waiting=%u reported=%u (blocked >= %lld ms)", total, n, (long long)(min_ns / 1000000));
     pthread_mutex_unlock(&G);
+}
+// Running (not waiting) guest threads: each is suspended just long enough to read pc / lr / fp, then resumed; frames are
+// formatted after every thread runs again (nothing that could need a lock the suspended thread holds runs in between).
+// A load that polls instead of blocking (round134 / round138: the loading screen after character select) shows here.
+void wonder_kernel_sample_running(void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size)) {
+    struct sample { uint32_t handle; uint64_t id; int prio, core; uint64_t pc, lr, fp; } s[64]; int n = 0;
+    pthread_mutex_lock(&G);
+    for (struct thr *t = all_threads; t && n < 64; t = t->all) {
+        if (!t->guest || !t->started || t->exited || pthread_equal(t->pt, pthread_self())) continue;
+        int waits = 0; for (struct thr *w = waiting; w; w = w->next) if (w == t) { waits = 1; break; }
+        if (waits) continue;
+        mach_port_t m = pthread_mach_thread_np(t->pt);
+        if (!m || thread_suspend(m) != KERN_SUCCESS) continue;
+        arm_thread_state64_t st; mach_msg_type_number_t count = ARM_THREAD_STATE64_COUNT;
+        kern_return_t k = thread_get_state(m, ARM_THREAD_STATE64, (thread_state_t)&st, &count);
+        thread_resume(m);
+        if (k != KERN_SUCCESS) continue;
+        s[n++] = (struct sample){t->handle, t->id, t->prio, t->core, (uint64_t)arm_thread_state64_get_pc(st), (uint64_t)arm_thread_state64_get_lr(st), (uint64_t)arm_thread_state64_get_fp(st)};
+    }
+    pthread_mutex_unlock(&G);
+    for (int i = 0; i < n; i++) {
+        char at[160] = "", chain[400] = "";
+        if (frames) { frames(0, s[i].pc, at, sizeof at); frames(s[i].fp, s[i].lr, chain, sizeof chain); }
+        report("KERNEL_RUNNING thread=%#x id=%#llx prio=%d core=%d pc=%s lr/fp chain=%s", s[i].handle, (unsigned long long)s[i].id, s[i].prio, s[i].core, at, chain);
+    }
+    report("KERNEL_RUNNING_SUMMARY sampled=%d", n);
 }
 uint32_t wonder_threads_register_current(int prio, int core, void (*prepare)(void), void (*enter)(uint64_t, uint64_t, uint64_t),
                                          void (*reporter)(const char *)) {

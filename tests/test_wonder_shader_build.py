@@ -136,7 +136,12 @@ class CensusBuild(unittest.TestCase):
         self.assertIn('depth minus_one', self.refl('vs')); self.assertFalse(any(l.startswith('depth') for l in self.refl('fs')))
     def test_msl_21_flags(self):
         for flag in ('--msl-ios', '--msl-version', '30200', '--msl-decoration-binding'): self.assertIn(flag, self.manifest['spirv_cross_command'])
-        self.assertIn('gl_Position.z = fma(', (self.out / f"{self.keys['vs']}.metal").read_text())
+        # The NEAR_IS_MINUS_W remap z' = fma(z, 0.5, w * 0.5): assigned directly, or through a temporary in DebugMode.
+        import re
+        text = (self.out / f"{self.keys['vs']}.metal").read_text()
+        direct = 'gl_Position.z = fma(' in text
+        via = re.search(r'float (_\d+) = fma\(\w+, 0\.5, \w+\);\s*out\.gl_Position\.z = \1;', text)
+        self.assertTrue(direct or via, 'vertex depth remap missing')
     def test_manifest_hashes(self):
         import hashlib
         for key, entry in self.manifest['keys'].items():

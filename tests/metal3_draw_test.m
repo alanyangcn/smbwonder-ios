@@ -14,6 +14,7 @@ _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a,
 void wonder_host_gpu_error_reset(void) {} void wonder_host_finish(void) {} int wonder_host_gpu_error(char *out, size_t size) { (void)out; (void)size; return 0; }
 void wonder_host_replay_lock(void) {} void wonder_host_replay_unlock(void) {}
 void *wonder_host_replay_command_buffer(void) { return NULL; }
+void *wonder_host_replay_command_buffer_raw(void) { return NULL; }
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { (void)t; return NULL; }
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format) { (void)t; (void)format; return NULL; }
 static NSString *dir;

@@ -161,7 +161,10 @@ def job_for(census, stage_entry, code_path):
     stage_no, stage = stage_entry['stage'], STAGES.get(stage_entry['stage'])
     if not stage: raise ValueError(f"stage {stage_entry['name']} is not built yet")
     job = {'key': stage_entry['key'], 'stage': stage, 'code': str(code_path), 'tex': {}, 'img': {}, 'attr': {}, 'fout': {},
-           'debug': False, 'reduced': False, 'depth_minus_one': census['depth_mode'] in (0, -1)}   # -1 = never set: NVN default NEAR_IS_MINUS_W
+           # DebugMode (no Ryujinx AST optimizer) for every stage, as D2R dmsh_build defaults: the optimizer merges indirect-branch
+           # (BRX) switch arms (round138: text vs 982e87b1faa0b87f kept 1 of 3 jump-table targets per BRX, so glyph UVs came from
+           # the wrong fields and every text fragment was discarded). The Metal compiler removes the extra temporaries.
+           'debug': True, 'reduced': False, 'depth_minus_one': census['depth_mode'] in (0, -1)}   # -1 = never set: NVN default NEAR_IS_MINUS_W
     for t in census['textures']:
         if t['stage'] == stage_no and t['texture']: job['tex'][str(t['index'])] = texture_type(t['texture']['target'])
     if stage == 'cs':

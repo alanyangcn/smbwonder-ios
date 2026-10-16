@@ -91,7 +91,10 @@ static id<MTLSamplerState> present_sampler;
 static char gpu_error_text[256]; static _Atomic int gpu_failed;
 void wonder_host_gpu_error_reset(void){ atomic_store(&gpu_failed,0); gpu_error_text[0]=0; }
 int wonder_host_gpu_error(char *out,size_t size){ if(!atomic_load(&gpu_failed)) return 0; snprintf(out,size,"%s",gpu_error_text); return 1; }
-static id<MTLCommandBuffer> pending_buffer(void){
+// The pending command buffer as is (the draw batch flush encodes into it) and, for every other user, after the open
+// draw batch was encoded (metal3_draw.m pass batching keeps command order this way).
+void wonder_host_draw_flush_locked(void);
+static id<MTLCommandBuffer> raw_pending_buffer(void){
  if(!pending){
   pending=[queue commandBuffer]; pending.label=@"Wonder NVN submit";
   [pending addCompletedHandler:^(id<MTLCommandBuffer> b){
@@ -103,8 +106,10 @@ static id<MTLCommandBuffer> pending_buffer(void){
  }
  return pending;
 }
+void *wonder_host_replay_command_buffer_raw(void){ return (__bridge void*)raw_pending_buffer(); }
+static id<MTLCommandBuffer> pending_buffer(void){ wonder_host_draw_flush_locked(); return raw_pending_buffer(); }
 static unsigned pending_first_submit, pending_last_submit;
-static void commit_locked(void){ if(pending){ [pending commit]; last_committed=pending; pending=nil; pending_first_submit=pending_last_submit=0; } }
+static void commit_locked(void){ wonder_host_draw_flush_locked(); if(pending){ [pending commit]; last_committed=pending; pending=nil; pending_first_submit=pending_last_submit=0; } }
 void wonder_host_note_submit(unsigned submit){
  pthread_mutex_lock(&replay_mutex);
  id<MTLCommandBuffer> b=pending_buffer(); if(!pending_first_submit) pending_first_submit=submit; pending_last_submit=submit;
@@ -252,9 +257,14 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
   if(presents%1800==0){   // every ~30 s: guest threads blocked >= 5 s (a stalled load names its waiter)
    extern void wonder_guest_frames(uint64_t,uint64_t,char *,size_t);
    wonder_kernel_dump_waits(INT64_C(5000000000),wonder_guest_frames);
+   for(int k=0;k<3;k++){ wonder_kernel_sample_running(wonder_guest_frames); usleep(3000); }   // a polling loop shows the same frames
   }
   extern size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial); uint64_t gserial=0; size_t glyphs=wonder_nvn_glyph_cache_nonzero(&gserial);
-  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs);
+  extern void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes); unsigned bd, bp; wonder_host_draw_batch_stats(&bd,&bp);
+  static unsigned last_bd, last_bp; static double last_t; double now=CACurrentMediaTime();
+  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
+          bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0);
+  last_bd=bd; last_bp=bp; last_t=now;
  }
  if(present_setup()) return EIO;
  if(t.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];

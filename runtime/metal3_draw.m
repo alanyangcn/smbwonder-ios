@@ -414,6 +414,87 @@ static void sync_check(const struct wonder_host_draw *d) {
     char variants[256]; bisect(d, variants, sizeof variants);
     wonder_nvn_stop("NVN_DRAW_GPU_FAULT vs=%s fs=%s primitive=%d count=%d base_vertex=%d: %s; bisect:%s;%s", d->vs_key, d->fs_key, d->primitive, d->count, d->base_vertex, error, variants, spans);
 }
+// ---------- Pass batching ----------
+// Consecutive draws into the same attachments share one render pass (one load/store of the attachments instead of one
+// per draw: round136 in the course ran 141 single-draw passes per frame at ~6 fps). The batch's buffer copies run in one
+// blit encoder ahead of its render encoder. Any other GPU operation takes the pending command buffer through
+// wonder_host_replay_command_buffer() (host_graphics.m pending_buffer), which flushes the batch first, so command order
+// is kept. All batch state is under the replay lock.
+struct draw_copy { __unsafe_unretained id<MTLBuffer> src; NSUInteger src_offset; __unsafe_unretained id<MTLBuffer> dst; NSUInteger dst_offset, size, window; };
+struct draw_encoding {
+    NSUInteger index[2][32], offset[2][32]; int nb[2];
+    uint8_t tex_index[2][40], smp_index[2][40]; int ntex[2];
+    NSUInteger stream_index[16], stream_offset[16]; int nstreams;
+    int index_type, count, first, instances, base_instance, base_vertex, bias, uses_default;
+    float blend_color[4], bias_units, bias_slope, bias_clamp;
+    MTLCullMode cull; MTLWinding winding; MTLViewport viewport; MTLScissorRect scissor; MTLPrimitiveType primitive; MTLIndexType itype; NSUInteger ib_offset;
+};
+static MTLRenderPassDescriptor *batch_pass; static NSMutableArray *batch_blocks, *batch_buffers; static struct draw_copy *batch_copies; static int batch_ncopies, batch_cap;
+static unsigned batch_draws_total, batch_passes_total;
+// Scratch windows for copies: carved from 4 MiB private buffers, never reused (the command buffer retains each chunk
+// until it completes), instead of one 64 KiB allocation per uniform buffer per draw.
+static id<MTLBuffer> scratch_chunk; static NSUInteger scratch_used;
+static id<MTLBuffer> scratch_window(NSUInteger size, NSUInteger *offset) {
+    size = (size + 255) & ~(NSUInteger)255;
+    if (!scratch_chunk || scratch_used + size > scratch_chunk.length) {
+        scratch_chunk = [device newBufferWithLength:MAX(size, (NSUInteger)4 << 20) options:MTLResourceStorageModePrivate]; scratch_used = 0;
+        if (!scratch_chunk) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED scratch buffer allocation of %lu bytes failed", (unsigned long)size);
+    }
+    *offset = scratch_used; scratch_used += size; return scratch_chunk;
+}
+static int draw_batch_open(void) { return batch_pass != nil; }
+static int same_attachment(MTLRenderPassAttachmentDescriptor *a, MTLRenderPassAttachmentDescriptor *b) {
+    return a.texture == b.texture && a.level == b.level && a.slice == b.slice && a.depthPlane == b.depthPlane;
+}
+static int draw_batch_same_pass(MTLRenderPassDescriptor *p) {
+    for (int i = 0; i < 8; i++) if (!same_attachment(batch_pass.colorAttachments[i], p.colorAttachments[i])) return 0;
+    return same_attachment(batch_pass.depthAttachment, p.depthAttachment) && same_attachment(batch_pass.stencilAttachment, p.stencilAttachment);
+}
+static id<MTLTexture> texture_root(id<MTLTexture> t) { while (t.parentTexture) t = t.parentTexture; return t; }
+static int draw_batch_attachment_sampled_by(MTLRenderPassDescriptor *p, __strong id<MTLTexture> *textures, int n) {
+    for (int i = 0; i < n; i++) {
+        id<MTLTexture> t = texture_root(textures[i]);
+        for (int k = 0; k < 8; k++) if (p.colorAttachments[k].texture && texture_root(p.colorAttachments[k].texture) == t) return 1;
+        if ((p.depthAttachment.texture && texture_root(p.depthAttachment.texture) == t) || (p.stencilAttachment.texture && texture_root(p.stencilAttachment.texture) == t)) return 1;
+    }
+    return 0;
+}
+static int draw_batch_attachment_sampled(__strong id<MTLTexture> *textures, int n) { return draw_batch_open() && draw_batch_attachment_sampled_by(batch_pass, textures, n); }
+static void draw_batch_begin(MTLRenderPassDescriptor *p) {
+    batch_pass = p; if (!batch_blocks) { batch_blocks = [NSMutableArray array]; batch_buffers = [NSMutableArray array]; }
+}
+static void draw_batch_add(const struct draw_copy *c, int n, void (^encode)(id<MTLRenderCommandEncoder>)) {
+    if (batch_ncopies + n > batch_cap) {
+        batch_cap = MAX(batch_cap * 2, batch_ncopies + n + 64);
+        struct draw_copy *grown = realloc(batch_copies, sizeof *grown * (size_t)batch_cap); if (!grown) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED batch copy list allocation failed");
+        batch_copies = grown;
+    }
+    for (int i = 0; i < n; i++) { batch_copies[batch_ncopies++] = c[i]; [batch_buffers addObject:c[i].src]; [batch_buffers addObject:c[i].dst]; }   // retained until the flush
+    [batch_blocks addObject:encode];
+}
+void *wonder_host_replay_command_buffer_raw(void);   // host_graphics.m: the pending command buffer without flushing
+void wonder_host_draw_flush_locked(void) {
+    if (!batch_pass) return;
+    MTLRenderPassDescriptor *pass = batch_pass; batch_pass = nil;
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer_raw();
+    if (batch_ncopies) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder]; blit.label = @"NVN draw batch copies";
+        for (int i = 0; i < batch_ncopies; i++) {
+            const struct draw_copy *c = &batch_copies[i];
+            if (c->window > c->size) [blit fillBuffer:c->dst range:NSMakeRange(c->dst_offset + c->size, c->window - c->size) value:0];
+            if (c->size) [blit copyFromBuffer:c->src sourceOffset:c->src_offset toBuffer:c->dst destinationOffset:c->dst_offset size:c->size];
+        }
+        [blit endEncoding];
+    }
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
+    if (!e) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED render encoder creation for a batch of %lu draws", (unsigned long)batch_blocks.count);
+    e.label = [NSString stringWithFormat:@"NVN pass (%lu draws)", (unsigned long)batch_blocks.count];
+    for (void (^encode)(id<MTLRenderCommandEncoder>) in batch_blocks) encode(e);
+    [e endEncoding];
+    batch_draws_total += (unsigned)batch_blocks.count; batch_passes_total++;
+    [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0;
+}
+void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes) { *draws = batch_draws_total; *passes = batch_passes_total; }
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
 static id<MTLBuffer> support_buffer;
@@ -534,95 +615,125 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
             for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
         }
     }
-    // Encode.
-    wonder_host_replay_lock();
-    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
-    // Translated shaders declare every c[n] as 64 KiB; Maxwell returns 0 past the bound size, Metal would read the next pool
-    // bytes (or past the pool's MTLBuffer). Each read uniform buffer is copied on the GPU, in command order (after any
-    // UpdateUniformBuffer blits already in this command buffer), into a zero-filled 64 KiB buffer.
-    id<MTLBuffer> ubo_copies[2][14] = {{nil}};
-    id<MTLBlitCommandEncoder> ubo_blit = nil;
-    for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ncbuf; i++) {
-        int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
-        id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
-        if (!src || u->offset + n > src.length) { wonder_host_replay_unlock(); unsupported(d, "uniform buffer span outside its pool buffer, slot", slot); }
-        if (!ubo_blit) ubo_blit = [cb blitCommandEncoder];
-        id<MTLBuffer> copy = [device newBufferWithLength:0x10000 options:MTLResourceStorageModePrivate];
-        [ubo_blit fillBuffer:copy range:NSMakeRange(0, 0x10000) value:0];
-        if (n) [ubo_blit copyFromBuffer:src sourceOffset:u->offset toBuffer:copy destinationOffset:0 size:n];
-        ubo_copies[stage][slot] = copy;
-    }
-    // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
-    id<MTLBuffer> stream_copies[16] = {nil};
-    for (int s = 0; s < 16; s++) if ((d->stream_mask >> s & 1) && d->stream[s].fetch_size > d->stream[s].span.size) {
-        id<MTLBuffer> src = (__bridge id<MTLBuffer>)d->stream[s].span.buffer;
-        if (!src || d->stream[s].span.offset + d->stream[s].span.size > src.length) { wonder_host_replay_unlock(); unsupported(d, "vertex stream span outside its pool buffer, stream", s); }
-        if (!ubo_blit) ubo_blit = [cb blitCommandEncoder];
-        NSUInteger n = (NSUInteger)((d->stream[s].fetch_size + 15) & ~15ull);
-        id<MTLBuffer> copy = [device newBufferWithLength:n options:MTLResourceStorageModePrivate];
-        [ubo_blit fillBuffer:copy range:NSMakeRange(0, n) value:0];
-        if (d->stream[s].span.size) [ubo_blit copyFromBuffer:src sourceOffset:d->stream[s].span.offset toBuffer:copy destinationOffset:0 size:d->stream[s].span.size];
-        stream_copies[s] = copy;
-    }
-    [ubo_blit endEncoding];
-    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-    if (!e) { wonder_host_replay_unlock(); unsupported(d, "render encoder creation", 0); }
-    e.label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
-    [e setRenderPipelineState:pso]; [e setDepthStencilState:dss];
-    [e setBlendColorRed:d->blend_color[0] green:d->blend_color[1] blue:d->blend_color[2] alpha:d->blend_color[3]];
+    // Encode: appended to the open pass batch (draw_batch_*), encoded at the next flush.
     MTLCullMode cull = MTLCullModeNone;
-    if (d->states_set & 8) { if (d->polygon.cull == 3) { wonder_host_replay_unlock(); unsupported(d, "cull FRONT_AND_BACK", 3); }
+    if (d->states_set & 8) { if (d->polygon.cull == 3) unsupported(d, "cull FRONT_AND_BACK", 3);
                              cull = d->polygon.cull == 1 ? MTLCullModeFront : d->polygon.cull == 2 ? MTLCullModeBack : MTLCullModeNone; }
-    [e setCullMode:cull];
     // NVN front face (CW 0 / CCW 1) is defined on clip-space winding; with UPPER_LEFT origin Metal's framebuffer winding
     // matches the GL clip-control convention, so the NVN value maps directly (pinned by the back-face GPU test).
-    [e setFrontFacingWinding:(d->states_set & 8) && d->polygon.front == 0 ? MTLWindingClockwise : MTLWindingCounterClockwise];
-    if (d->depth_bias_enabled) [e setDepthBias:d->depth_bias slopeScale:d->depth_bias_slope clamp:d->depth_bias_clamp];
+    MTLWinding winding = (d->states_set & 8) && d->polygon.front == 0 ? MTLWindingClockwise : MTLWindingCounterClockwise;
     MTLViewport vp = {0, 0, (double)width, (double)height, d->depth_range[0], d->depth_range[1]};
     if (d->viewport_set) { vp.originX = d->viewport[0]; vp.originY = d->viewport[1]; vp.width = d->viewport[2]; vp.height = d->viewport[3]; }
-    [e setViewport:vp];
+    MTLScissorRect scissor = {0, 0, width, height};
     if (d->scissor_set) {
         long x = MAX(0, d->scissor[0]), y = MAX(0, d->scissor[1]);
         long x1 = MIN((long)width, (long)d->scissor[0] + d->scissor[2]), y1 = MIN((long)height, (long)d->scissor[1] + d->scissor[3]);
-        if (x1 <= x || y1 <= y) { [e endEncoding]; wonder_host_replay_unlock(); return 0; }   // empty scissor: nothing is drawn
-        [e setScissorRect:(MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)(x1 - x), (NSUInteger)(y1 - y)}];
+        if (x1 <= x || y1 <= y) return 0;   // empty scissor: nothing is drawn
+        scissor = (MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)(x1 - x), (NSUInteger)(y1 - y)};
     }
+    // Translated shaders declare every c[n] as 64 KiB; Maxwell returns 0 past the bound size, Metal would read the next pool
+    // bytes (or past the pool's MTLBuffer). Each read uniform buffer is copied on the GPU into a zero-filled 64 KiB window,
+    // in command order: the batch's copies run in one blit encoder ahead of its render encoder, and every operation that
+    // could change their sources (UpdateUniformBuffer, fills, other encoders, a draw writing storage) flushes the batch first.
+    struct draw_copy copies[2 * 14 + 16]; int ncopies = 0;
+    id<MTLBuffer> ubo_copies[2][14] = {{nil}}; NSUInteger ubo_offsets[2][14] = {{0}};
+    for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ncbuf; i++) {
+        int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
+        id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
+        if (!src || u->offset + n > src.length) unsupported(d, "uniform buffer span outside its pool buffer, slot", slot);
+        NSUInteger offset; id<MTLBuffer> window = scratch_window(0x10000, &offset);
+        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, n, 0x10000};
+        ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
+    }
+    // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
+    id<MTLBuffer> stream_copies[16] = {nil}; NSUInteger stream_offsets[16] = {0};
+    for (int s = 0; s < 16; s++) if ((d->stream_mask >> s & 1) && d->stream[s].fetch_size > d->stream[s].span.size) {
+        id<MTLBuffer> src = (__bridge id<MTLBuffer>)d->stream[s].span.buffer;
+        if (!src || d->stream[s].span.offset + d->stream[s].span.size > src.length) unsupported(d, "vertex stream span outside its pool buffer, stream", s);
+        NSUInteger n = (NSUInteger)((d->stream[s].fetch_size + 15) & ~15ull), offset;
+        id<MTLBuffer> window = scratch_window(n, &offset);
+        copies[ncopies++] = (struct draw_copy){src, d->stream[s].span.offset, window, offset, d->stream[s].span.size, n};
+        stream_copies[s] = window; stream_offsets[s] = offset;
+    }
+    // Everything the encoder needs, by value: the block runs at flush time, after `d` was reused (blocks cannot capture
+    // C arrays, hence the struct and the NSArrays).
+    static id<MTLBuffer> zeros; if (uses_default && !zeros) zeros = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];   // zero-filled
+    struct draw_encoding x; memset(&x, 0, sizeof x);
+    NSMutableArray *bufs[2] = {[NSMutableArray array], [NSMutableArray array]};
     for (int stage = 0; stage < 2; stage++) {
         const struct wonder_shader_refl *r = refl[stage];
-        void (^buffer)(id<MTLBuffer>, NSUInteger, NSUInteger) = ^(id<MTLBuffer> b, NSUInteger offset, NSUInteger index) {
-            if (stage) [e setFragmentBuffer:b offset:offset atIndex:index]; else [e setVertexBuffer:b offset:offset atIndex:index]; };
-        for (int i = 0; i < r->ncbuf; i++) buffer(ubo_copies[stage][r->cbuf[i].slot], 0, r->cbuf[i].buffer);
-        for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][r->sbuf[i].slot]; buffer((__bridge id<MTLBuffer>)sb->buffer, sb->offset, r->sbuf[i].buffer); }
-        if (r->c1_buffer >= 0) buffer(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
-        if (r->drv0_buffer >= 0) buffer(drv0_buffers[stage], 0, (NSUInteger)r->drv0_buffer);
-        if (r->support >= 0) buffer(support_buffer, 0, (NSUInteger)r->support);
-        for (int i = 0; i < r->ntex; i++) {
-            if (stage) { [e setFragmentTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setFragmentSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
-            else { [e setVertexTexture:textures[stage][i] atIndex:r->tex[i].texture]; [e setVertexSamplerState:sampler_states[stage][i] atIndex:r->tex[i].sampler]; }
-        }
+        #define BIND(b_, off_, idx_) do { id<MTLBuffer> bb_ = (b_); if (!bb_) unsupported(d, "draw buffer binding without a buffer, index", (long)(idx_)); \
+            [bufs[stage] addObject:bb_]; x.offset[stage][x.nb[stage]] = (off_); x.index[stage][x.nb[stage]++] = (idx_); } while (0)
+        for (int i = 0; i < r->ncbuf; i++) BIND(ubo_copies[stage][r->cbuf[i].slot], ubo_offsets[stage][r->cbuf[i].slot], r->cbuf[i].buffer);
+        for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][r->sbuf[i].slot]; BIND((__bridge id<MTLBuffer>)sb->buffer, sb->offset, r->sbuf[i].buffer); }
+        if (r->c1_buffer >= 0) BIND(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
+        if (r->drv0_buffer >= 0) BIND(drv0_buffers[stage], 0, (NSUInteger)r->drv0_buffer);
+        if (r->support >= 0) BIND(support_buffer, 0, (NSUInteger)r->support);
+        #undef BIND
     }
-    if (uses_default) {
-        static id<MTLBuffer> zeros; if (!zeros) zeros = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];   // zero-filled
-        [e setVertexBuffer:zeros offset:0 atIndex:WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
+    NSMutableArray *stage_textures[2] = {[NSMutableArray array], [NSMutableArray array]}, *stage_samplers[2] = {[NSMutableArray array], [NSMutableArray array]};
+    for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ntex; i++) {
+        [stage_textures[stage] addObject:textures[stage][i]]; [stage_samplers[stage] addObject:sampler_states[stage][i]];
+        x.tex_index[stage][i] = refl[stage]->tex[i].texture; x.smp_index[stage][i] = refl[stage]->tex[i].sampler; x.ntex[stage] = refl[stage]->ntex;
     }
+    NSMutableArray *streams = [NSMutableArray array];
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
-        if (stream_copies[s]) [e setVertexBuffer:stream_copies[s] offset:0 atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];
-        else [e setVertexBuffer:(__bridge id<MTLBuffer>)d->stream[s].span.buffer offset:d->stream[s].span.offset atIndex:WONDER_SHADER_STREAM_BUFFER_BASE + s];
+        id<MTLBuffer> b = stream_copies[s] ?: (__bridge id<MTLBuffer>)d->stream[s].span.buffer;
+        [streams addObject:b]; x.stream_offset[x.nstreams] = stream_copies[s] ? stream_offsets[s] : d->stream[s].span.offset; x.stream_index[x.nstreams++] = WONDER_SHADER_STREAM_BUFFER_BASE + s;
     }
-    if (d->index_type < 0) {
-        [e drawPrimitives:primitive vertexStart:(NSUInteger)d->first vertexCount:(NSUInteger)d->count instanceCount:(NSUInteger)d->instances baseInstance:(NSUInteger)d->base_instance];
-    } else {
-        id<MTLBuffer> ib = (__bridge id<MTLBuffer>)d->index.buffer; NSUInteger offset = d->index.offset; MTLIndexType type = MTLIndexTypeUInt16;
+    id<MTLBuffer> ib = nil; NSUInteger ib_offset = 0; MTLIndexType itype = MTLIndexTypeUInt16;
+    if (d->index_type >= 0) {
+        ib = (__bridge id<MTLBuffer>)d->index.buffer; ib_offset = d->index.offset;
         if (d->index_type == 0) {   // Metal has no 8-bit indices: widen to 16 bits for this draw
             id<MTLBuffer> wide = [device newBufferWithLength:MAX((NSUInteger)2, (NSUInteger)d->count * 2) options:MTLResourceStorageModeShared];
-            const uint8_t *src = (const uint8_t *)ib.contents + offset; uint16_t *dst = wide.contents;
+            const uint8_t *src = (const uint8_t *)ib.contents + ib_offset; uint16_t *dst = wide.contents;
             for (int i = 0; i < d->count; i++) dst[i] = src[i];
-            ib = wide; offset = 0;
-        } else if (d->index_type == 2) type = MTLIndexTypeUInt32;
-        [e drawIndexedPrimitives:primitive indexCount:(NSUInteger)d->count indexType:type indexBuffer:ib indexBufferOffset:offset
-                   instanceCount:(NSUInteger)d->instances baseVertex:d->base_vertex baseInstance:(NSUInteger)d->base_instance];
+            ib = wide; ib_offset = 0;
+        } else if (d->index_type == 2) itype = MTLIndexTypeUInt32;
     }
-    [e endEncoding];
+    x.index_type = d->index_type; x.count = d->count; x.first = d->first; x.instances = d->instances; x.base_instance = d->base_instance; x.base_vertex = d->base_vertex;
+    memcpy(x.blend_color, d->blend_color, sizeof x.blend_color);
+    x.bias = d->depth_bias_enabled; x.bias_units = d->depth_bias; x.bias_slope = d->depth_bias_slope; x.bias_clamp = d->depth_bias_clamp;
+    x.cull = cull; x.winding = winding; x.viewport = vp; x.scissor = scissor; x.primitive = primitive; x.itype = itype; x.ib_offset = ib_offset; x.uses_default = uses_default;
+    NSString *label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
+    NSArray *vbufs = bufs[0], *fbufs = bufs[1], *vtex = stage_textures[0], *ftex = stage_textures[1], *vsmp = stage_samplers[0], *fsmp = stage_samplers[1];
+    void (^encode)(id<MTLRenderCommandEncoder>) = ^(id<MTLRenderCommandEncoder> e) {
+        [e pushDebugGroup:label];
+        [e setRenderPipelineState:pso]; [e setDepthStencilState:dss];
+        [e setBlendColorRed:x.blend_color[0] green:x.blend_color[1] blue:x.blend_color[2] alpha:x.blend_color[3]];
+        [e setCullMode:x.cull]; [e setFrontFacingWinding:x.winding];
+        [e setDepthBias:x.bias ? x.bias_units : 0 slopeScale:x.bias ? x.bias_slope : 0 clamp:x.bias ? x.bias_clamp : 0];   // state persists across the batch's draws
+        [e setViewport:x.viewport]; [e setScissorRect:x.scissor];
+        for (int stage = 0; stage < 2; stage++) for (int i = 0; i < x.nb[stage]; i++) {
+            if (stage) [e setFragmentBuffer:fbufs[i] offset:x.offset[stage][i] atIndex:x.index[stage][i]];
+            else [e setVertexBuffer:vbufs[i] offset:x.offset[stage][i] atIndex:x.index[stage][i]];
+        }
+        for (int stage = 0; stage < 2; stage++) for (int i = 0; i < x.ntex[stage]; i++) {
+            if (stage) { [e setFragmentTexture:ftex[i] atIndex:x.tex_index[stage][i]]; [e setFragmentSamplerState:fsmp[i] atIndex:x.smp_index[stage][i]]; }
+            else { [e setVertexTexture:vtex[i] atIndex:x.tex_index[stage][i]]; [e setVertexSamplerState:vsmp[i] atIndex:x.smp_index[stage][i]]; }
+        }
+        if (x.uses_default) [e setVertexBuffer:zeros offset:0 atIndex:WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
+        for (int i = 0; i < x.nstreams; i++) [e setVertexBuffer:streams[i] offset:x.stream_offset[i] atIndex:x.stream_index[i]];
+        if (x.index_type < 0) [e drawPrimitives:x.primitive vertexStart:(NSUInteger)x.first vertexCount:(NSUInteger)x.count instanceCount:(NSUInteger)x.instances baseInstance:(NSUInteger)x.base_instance];
+        else [e drawIndexedPrimitives:x.primitive indexCount:(NSUInteger)x.count indexType:x.itype indexBuffer:ib indexBufferOffset:x.ib_offset
+                       instanceCount:(NSUInteger)x.instances baseVertex:x.base_vertex baseInstance:(NSUInteger)x.base_instance];
+        [e popDebugGroup];
+    };
+    // Batching rules: same attachments; no sampled texture is one of the batch's attachments (it must see the earlier
+    // draws' output, i.e. a stored pass); a draw writing storage buffers ends its batch (later copies / draws read it).
+    int writes = 0;
+    for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->nsbuf; i++) writes |= refl[stage]->sbuf[i].write;
+    wonder_host_replay_lock();
+    if (draw_batch_open() && (!draw_batch_same_pass(pass) || draw_batch_attachment_sampled(textures[0], refl[0]->ntex) || draw_batch_attachment_sampled(textures[1], refl[1]->ntex)))
+        wonder_host_draw_flush_locked();
+    if (!draw_batch_open() && (draw_batch_attachment_sampled_by(pass, textures[0], refl[0]->ntex) || draw_batch_attachment_sampled_by(pass, textures[1], refl[1]->ntex))) {
+        // The draw samples one of its own attachments: a pass of its own, as before batching.
+        draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); wonder_host_draw_flush_locked();
+    } else {
+        if (!draw_batch_open()) draw_batch_begin(pass);
+        draw_batch_add(copies, ncopies, encode);
+        if (writes) wonder_host_draw_flush_locked();
+    }
     wonder_host_replay_unlock();
     if (getenv("WONDER_DRAW_SYNC")) sync_check(d);
     return 0;
