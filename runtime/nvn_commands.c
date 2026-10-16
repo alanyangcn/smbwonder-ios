@@ -284,11 +284,14 @@ static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *
     const char *list = getenv("WONDER_TRACE_VS"); int match = 0;
     for (const char *p = list; p && *p && !match; ) { size_t n = strcspn(p, ","); match = n && key[0] && !strncmp(p, key, n); p += n; if (*p == ',') p++; }
     if (match) {   // record-time bind of a listed program: which command buffer, from where in the game
-        static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 120) {
-            char chain[700] = "";
-            if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), chain, sizeof chain);
-            wonder_nvn_report("NVN_TRACE_RECORD_BIND vs=%s cb=%p chain=%s", key, cb, chain);
-        }
+        char chain[700] = "";
+        if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), chain, sizeof chain);
+        // each distinct (key, chain) once, at most 400 lines
+        static uint64_t seen[400]; static unsigned nseen; uint64_t h = 1469598103934665603ull;
+        for (const char *c = key; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
+        for (const char *c = chain; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
+        pthread_mutex_lock(&trace_lock); int fresh = nseen < 400; for (unsigned i = 0; i < nseen && fresh; i++) fresh = seen[i] != h; if (fresh) seen[nseen++] = h; pthread_mutex_unlock(&trace_lock);
+        if (fresh) wonder_nvn_report("NVN_TRACE_RECORD_BIND vs=%s cb=%p chain=%s", key, cb, chain);
     }
 }
 static void trace_draw(const void *cb, const char *what, int count) {
