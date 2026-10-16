@@ -306,7 +306,10 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                 n, d.vs_key, d.fs_key, call.primitive, call.count, call.first, call.instances, call.base_instance,
                 (unsigned long long)sa, (unsigned long long)ss, (unsigned long long)ua, (unsigned long long)us);
             if (sa && ss >= 64) { make_cpu_visible(sa, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(sa, 64, &v); const float *f = (const float *)v.memory; const int32_t *iv = (const int32_t *)v.memory;
-                k += snprintf(line + k, sizeof line - k, " inst0=[%g %g %g %g | %g %g %g %g | %#x %#x layer=%d %d | %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], iv[8], iv[9], iv[10], iv[11], f[12], f[13], f[14], f[15]); }
+                k += snprintf(line + k, sizeof line - k, " inst0=[%g %g %g %g | %g %g %g %g | %#x %#x layer=%d %d | %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], iv[8], iv[9], iv[10], iv[11], f[12], f[13], f[14], f[15]);
+                extern uint64_t wonder_nvn_glyph_cache_rect_sum(float, float, float, float, unsigned *); unsigned px = 0;
+                uint64_t sum = wonder_nvn_glyph_cache_rect_sum(f[4], f[5], f[6], f[7], &px);
+                k += snprintf(line + k, sizeof line - k, " glyph_rect_sum=%llu/%u px", (unsigned long long)sum, px); }
             if (ua && us >= 64) { make_cpu_visible(ua, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(ua, 64, &v); const float *f = (const float *)v.memory;
                 k += snprintf(line + k, sizeof line - k, " c3=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]); }
             uint64_t fa = draw_state.uniform_buffer[1][0].address, fs = draw_state.uniform_buffer[1][0].size;

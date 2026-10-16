@@ -113,6 +113,7 @@ _Noreturn static void unsupported(const struct wonder_host_draw *d, const char *
 uint32_t wonder_host_vertex_format(int f) {
     switch (f) {
     case 0x0A: return MTLVertexFormatFloat;   case 0x16: return MTLVertexFormatFloat2;  case 0x22: return MTLVertexFormatFloat3;  case 0x2E: return MTLVertexFormatFloat4;   // R/RG/RGB/RGBA32F
+    case 0x3D: return MTLVertexFormatUInt1010102Normalized; case 0x69: return MTLVertexFormatInt1010102Normalized;   // RGB10A2 / RGB10A2SN (round133)
     case 0x05: return MTLVertexFormatHalf;    case 0x11: return MTLVertexFormatHalf2;   case 0x1D: return MTLVertexFormatHalf3;   case 0x29: return MTLVertexFormatHalf4;    // R/RG/RGB/RGBA16F
     case 0x01: return MTLVertexFormatUCharNormalized; case 0x0D: return MTLVertexFormatUChar2Normalized; case 0x19: return MTLVertexFormatUChar3Normalized; case 0x25: return MTLVertexFormatUChar4Normalized;   // R/RG/RGB/RGBA8
     case 0x02: return MTLVertexFormatCharNormalized;  case 0x0E: return MTLVertexFormatChar2Normalized;  case 0x1A: return MTLVertexFormatChar3Normalized;  case 0x26: return MTLVertexFormatChar4Normalized;    // ..8SN

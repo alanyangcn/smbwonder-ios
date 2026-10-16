@@ -8,6 +8,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #define TBUILDER_MAGIC 0x42585457u
 #define DEVICE_SET_MARK 0x56454454u      /* SetDevice may precede SetDefaults (main+0x984a4c, 0x77748) */
 #define TEXTURE_MAGIC 0x54584554u        /* "TEXT" */
@@ -141,6 +142,13 @@ int wonder_nvnTextureBuilderGetStorageClass(const void *builder) {
 // Diagnostic (round126: text never drawn): the first R8 pitch-linear texture is the font glyph cache (2048x8192);
 // wonder_nvn_glyph_cache_nonzero samples its storage so the log tells whether glyphs are rasterized at all.
 static const uint8_t *glyph_cache; static uint64_t glyph_cache_size, glyph_cache_serial;
+// Sum of the glyph cache bytes in a normalized uv rect (diagnostic for HOST_TEXT_DRAW).
+uint64_t wonder_nvn_glyph_cache_rect_sum(float u0, float v0, float u1, float v1, unsigned *pixels) {
+    uint64_t sum = 0; *pixels = 0; if (!glyph_cache) return 0;
+    int x0 = (int)(fminf(u0, u1) * 2048), x1 = (int)(fmaxf(u0, u1) * 2048), y0 = (int)(fminf(v0, v1) * 8192), y1 = (int)(fmaxf(v0, v1) * 8192);
+    for (int y = y0 < 0 ? 0 : y0; y <= y1 && y < 8192; y++) for (int x = x0 < 0 ? 0 : x0; x <= x1 && x < 2048; x++) { sum += glyph_cache[(uint64_t)y * 2048 + (uint64_t)x]; (*pixels)++; }
+    return sum;
+}
 size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial) {
     size_t n = 0; if (serial) *serial = glyph_cache_serial;
     uint64_t first = UINT64_MAX, last = 0;
