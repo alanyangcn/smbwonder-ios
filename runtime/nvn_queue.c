@@ -29,6 +29,7 @@ static _Atomic unsigned frame_draws, frame_index; static _Atomic uint64_t frame_
 // Every present advances the frame number the per-frame diagnostics use (WONDER_DRAW_LOG, WONDER_FRAME_DUMP_EVERY);
 // before round153 only WONDER_PRESENT_EVERY advanced it, so frame dumps never fired.
 void wonder_nvn_frame_advance(void) { atomic_fetch_add(&frame_index, 1); }
+unsigned wonder_nvn_frame_number(void) { return atomic_load(&frame_index); }
 void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash) {
     static unsigned clears_at_last; unsigned c = state.clears;
     *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
@@ -293,7 +294,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     d.nattr = d.vr->nattr;
     d.primitive = call.primitive; d.index_type = call.index_type; d.count = call.count; d.first = call.first;
     d.base_vertex = call.base_vertex; d.instances = call.instances; d.base_instance = call.base_instance;
-    d.depth_clamp = raster.depth_clamp; d.depth_bias_enabled = bias; d.depth_bias = raster.offset_units; d.depth_bias_slope = raster.offset_factor; d.depth_bias_clamp = raster.offset_clamp;
+    d.frame = atomic_load(&frame_index); d.depth_clamp = raster.depth_clamp; d.depth_bias_enabled = bias; d.depth_bias = raster.offset_units; d.depth_bias_slope = raster.offset_factor; d.depth_bias_clamp = raster.offset_clamp;
     if (call.indirect_address) replay_stop(opcode, "indirect draws are not executed yet");
     if (call.index_type >= 0) {
         d.index = span_of(opcode, call.index_address, (uint64_t)call.count << call.index_type);

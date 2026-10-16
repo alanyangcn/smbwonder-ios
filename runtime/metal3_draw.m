@@ -667,13 +667,15 @@ static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
 static id<MTLBuffer> support_buffer;
 // Diagnostic (WONDER_TEX_DUMP_FS=<fragment key prefix>[,<prefix>...]): the first draw of each listed fragment shader
-// saves every 2D texture it samples, each mip level, as Documents/TexDump/<fs>-s<slot>-t<serial>-f<format>-l<level>.png
-// (round155b: terrain masks that turn far hills blue).
+// (after present WONDER_TEX_DUMP_AFTER, default 0) saves every 2D texture it samples, each mip level, as
+// Documents/TexDump/<fs>-s<slot>-t<serial>-f<format>-l<level>.png (round155b: terrain masks that turn far hills blue).
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c);
 static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shader_refl *r, __strong id<MTLTexture> *textures) {
     static const char *list = (const char *)1; static NSMutableSet<NSString *> *done;
     if (list == (const char *)1) list = getenv("WONDER_TEX_DUMP_FS");
     if (!list || !*list) return;
+    static int after = -1; if (after < 0) { const char *e = getenv("WONDER_TEX_DUMP_AFTER"); after = e ? atoi(e) : 0; }
+    if (d->frame < (unsigned)after) return;
     int match = 0; for (const char *p = list; *p && !match; ) { size_t n = strcspn(p, ","); match = n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n); p += n; if (*p == ',') p++; }
     if (!match) return;
     if (!done) done = [NSMutableSet set];
