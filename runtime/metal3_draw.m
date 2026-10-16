@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <stdatomic.h>
 #include <TargetConditionals.h>
-#include "metal2_draw.h"
+#include "metal3_draw.h"
 #include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <pthread.h>
@@ -74,7 +74,7 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         NSData *source = verified(key, @"metal", @"msl_sha256", stage);
         if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
         MTLCompileOptions *options = [MTLCompileOptions new];
-        options.languageVersion = MTLLanguageVersion2_1; options.fastMathEnabled = NO;   // keep the translator's precision contract
+        options.languageVersion = MTLLanguageVersion3_2; options.fastMathEnabled = NO;   // keep the translator's precision contract
         __block NSError *error = nil; __block id<MTLLibrary> library = nil;
         on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&e]; error = e; });
         if (!library) {
@@ -106,7 +106,6 @@ int wonder_host_shader_available(const char key_c[17]) {
 // One render pass per draw (load/store), appended to the replay's pending command buffer. Every NVN state the first
 // draws use is mapped; anything else stops by name instead of being approximated.
 #include "nvn_fmt_mtl.h"
-#include "nvn_bcdec.h"
 #include "nvn_deswizzle.h"
 _Noreturn static void unsupported(const struct wonder_host_draw *d, const char *what, long value) {
     wonder_nvn_stop("NVN_DRAW_UNSUPPORTED %s %ld (vs=%s fs=%s)", what, value, d->vs_key, d->fs_key);
@@ -169,15 +168,6 @@ static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct 
 #else
 #define CPU_TEXTURE_STORAGE MTLStorageModeShared
 #endif
-static int device_samples_bc(void) {
-    const char *force = getenv("WONDER_TEST_NO_BC"); if (force && *force && strcmp(force, "0")) return 0;
-#if TARGET_OS_OSX
-    return 1;   // every Mac GPU samples BC
-#else
-    if (@available(iOS 16.4, *)) return device.supportsBCTextureCompression;
-    return 0;
-#endif
-}
 static uint64_t fnv64(const uint8_t *p, uint64_t n) { uint64_t h = 1469598103934665603ull; for (uint64_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull; return h; }
 // CPU-uploaded copies of sampled textures by serial; nvnTextureFinalize drops them (guest threads, hence the lock).
 static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutableDictionary<NSNumber *, NSNumber *> *sampled_hash;
@@ -202,12 +192,9 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         if (target != 1 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 2D array / rectangle so far)", target);
         if (linear && (target == 4 || t->desc.levels > 1)) unsupported(d, "pitch-linear texture with layers or mips, serial", (long)t->serial);
         if (!d->tex[stage][slot].storage) unsupported(d, "sampled texture without CPU storage, serial", (long)t->serial);
-        uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL), bc_bpp = 0; uint32_t bc_pf = 0;
-        // BC formats map "exactly" in the table, but the A11 cannot sample them: decode on the CPU unless the GPU has BC
-        // (WONDER_TEST_NO_BC forces the decode on hosts that do, like D2R's DM_TEST_NO_BC).
-        int bc = nvn_bc_unpacked((uint32_t)t->desc.format, &bc_pf, &bc_bpp) && !device_samples_bc();
-        if (fit != 1 && !bc) unsupported(d, "sampled texture format", t->desc.format);
-        if (bc) { static _Atomic int logged; if (atomic_fetch_add(&logged, 1) < 8) fprintf(stderr, "HOST_TEXTURE_BC_DECODE serial=%llu format=%#x %ux%u\n", (unsigned long long)t->serial, t->desc.format, t->desc.width, t->desc.height); }
+        // BC1-7 map exactly and are sampled natively (the graphics gate requires supportsBCTextureCompression).
+        uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL);
+        if (fit != 1) unsupported(d, "sampled texture format", t->desc.format);
         uint64_t hash = fnv64(d->tex[stage][slot].storage, d->tex[stage][slot].storage_size);
         NSNumber *key = @(t->serial);
         pthread_mutex_lock(&sampled_lock);
@@ -215,7 +202,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         tex = sampled[key]; int stale = !tex || sampled_hash[key].unsignedLongLongValue != hash;
         pthread_mutex_unlock(&sampled_lock);
         if (stale) {
-            MTLPixelFormat pf = (MTLPixelFormat)(bc ? bc_pf : mtl);
+            MTLPixelFormat pf = (MTLPixelFormat)mtl;
             NSUInteger layers = target == 4 ? (t->desc.depth ? t->desc.depth : 1) : 1;
             MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:t->desc.width height:t->desc.height mipmapped:t->desc.levels > 1];
             if (target == 4) { td.textureType = MTLTextureType2DArray; td.arrayLength = layers; }
@@ -239,11 +226,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
                     if (nvn_deswizzle(&t->desc, level, (unsigned)layer, d->tex[stage][slot].storage, linear_copy.mutableBytes, row_bytes)) unsupported(d, "texture deswizzle level", level);
                     src = linear_copy.bytes;
                 }
-                if (bc) {
-                    NSMutableData *rgba = [NSMutableData dataWithLength:(NSUInteger)w * h * (NSUInteger)bc_bpp];
-                    if (nvn_bc_decode((uint32_t)t->desc.format, src, row_bytes, w, h, rgba.mutableBytes, (size_t)w * (size_t)bc_bpp)) unsupported(d, "BC decode level", level);
-                    [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:rgba.bytes bytesPerRow:(NSUInteger)w * (NSUInteger)bc_bpp bytesPerImage:0];
-                } else [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
+                [tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:level slice:layer withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
             }
             tex.label = [NSString stringWithFormat:@"NVN sampled %llu %ux%u fmt %#x", (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.format];
             pthread_mutex_lock(&sampled_lock); sampled[key] = tex; sampled_hash[key] = @(hash); pthread_mutex_unlock(&sampled_lock);
@@ -274,46 +257,11 @@ int wonder_host_border_color(const float c[4]) {
     if (c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 1) return (int)MTLSamplerBorderColorOpaqueWhite;
     return -1;
 }
-// The A11's support for clamp-to-border is not documented as a feature-set row: sample once outside a red 1x1 texture
-// with an opaque-white border and read the pixel back (1 = white, 0 = anything else, e.g. the edge texel).
-int wonder_host_border_color_works(void) {
-    static int result = -1; if (result >= 0) return result;
-    NSString *src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct o { float4 p [[position]]; };\n"
-        "vertex o v(uint i [[vertex_id]]) { o r; r.p = float4(i == 1 ? 3.0 : -1.0, i == 2 ? 3.0 : -1.0, 0, 1); return r; }\n"
-        "fragment float4 f(texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) { return t.sample(s, float2(2.5, 2.5)); }\n";
-    MTLCompileOptions *options = [MTLCompileOptions new]; options.languageVersion = MTLLanguageVersion2_1;
-    id<MTLLibrary> lib = [device newLibraryWithSource:src options:options error:nil];
-    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    pd.vertexFunction = [lib newFunctionWithName:@"v"]; pd.fragmentFunction = [lib newFunctionWithName:@"f"];
-    pd.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
-    id<MTLRenderPipelineState> pso = lib ? [device newRenderPipelineStateWithDescriptor:pd error:nil] : nil;
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:1 height:1 mipmapped:NO];
-    td.storageMode = CPU_TEXTURE_STORAGE; id<MTLTexture> red = [device newTextureWithDescriptor:td];
-    uint32_t px = 0xff0000ff; [red replaceRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0 withBytes:&px bytesPerRow:4];
-    td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModePrivate; id<MTLTexture> target = [device newTextureWithDescriptor:td];
-    MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
-    sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToBorderColor; sd.borderColor = MTLSamplerBorderColorOpaqueWhite;
-    id<MTLSamplerState> smp = [device newSamplerStateWithDescriptor:sd];
-    id<MTLBuffer> out = [device newBufferWithLength:4 options:MTLResourceStorageModeShared];
-    id<MTLCommandQueue> q = [device newCommandQueue]; id<MTLCommandBuffer> cb = [q commandBuffer];
-    if (!pso || !red || !target || !smp || !out || !cb) { result = 0; return result; }
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target; pass.colorAttachments[0].loadAction = MTLLoadActionClear; pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-    [e setRenderPipelineState:pso]; [e setFragmentTexture:red atIndex:0]; [e setFragmentSamplerState:smp atIndex:0];
-    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [e endEncoding];
-    id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
-    [b copyFromTexture:target sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(1, 1, 1) toBuffer:out destinationOffset:0 destinationBytesPerRow:4 destinationBytesPerImage:4];
-    [b endEncoding]; [cb commit]; [cb waitUntilCompleted];
-    result = cb.status == MTLCommandBufferStatusCompleted && *(uint32_t *)out.contents == 0xffffffffu;
-    fprintf(stderr, "HOST_BORDER_COLOR_CHECK pixel=%#x works=%d\n", *(uint32_t *)out.contents, result);
-    return result;
-}
-// Transparent black is exactly ClampToZero (all GPUs); the other two colours need the GPU's border support.
-int wonder_host_border_address_mode(const float c[4], int border_works) {
+// Transparent black is exactly ClampToZero; opaque black / white use the border colour (every Metal 3 GPU has it).
+int wonder_host_border_address_mode(const float c[4]) {
     int color = wonder_host_border_color(c);
-    if (color == (int)MTLSamplerBorderColorTransparentBlack) return (int)MTLSamplerAddressModeClampToZero;
-    return color >= 0 && border_works ? (int)MTLSamplerAddressModeClampToBorderColor : -1;
+    if (color < 0) return -1;
+    return color == (int)MTLSamplerBorderColorTransparentBlack ? (int)MTLSamplerAddressModeClampToZero : (int)MTLSamplerAddressModeClampToBorderColor;
 }
 static NSMutableDictionary<NSData *, id<MTLSamplerState>> *samplers;
 static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const struct wonder_nvn_sampler_state *m) {
@@ -340,12 +288,7 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
             char what[96]; snprintf(what, sizeof what, "sampler border colour %g,%g,%g,%g (Metal: transparent/opaque black, opaque white)", m->border[0], m->border[1], m->border[2], m->border[3]);
             unsupported(d, what, 5);
         }
-        int mode = color == (int)MTLSamplerBorderColorTransparentBlack ? wonder_host_border_address_mode(m->border, 0)
-                                                                        : wonder_host_border_address_mode(m->border, wonder_host_border_color_works());
-        if (mode < 0) {
-            char what[96]; snprintf(what, sizeof what, "sampler border colour %g,%g,%g,%g: this GPU samples 0 at the border", m->border[0], m->border[1], m->border[2], m->border[3]);
-            unsupported(d, what, 5);
-        }
+        int mode = wonder_host_border_address_mode(m->border);
         sd.borderColor = (MTLSamplerBorderColor)color;
         for (int i = 0; i < 3; i++) if (wraps[i] == 5) modes[i] = (MTLSamplerAddressMode)mode;
     }

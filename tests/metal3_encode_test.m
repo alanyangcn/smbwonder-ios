@@ -5,7 +5,7 @@
 #import <ImageIO/ImageIO.h>
 #include <unistd.h>
 #include <pthread.h>
-#include "metal2_draw.h"
+#include "metal3_draw.h"
 #include "host_draw.h"
 #include "nvn_deswizzle.h"
 #include <assert.h>
@@ -27,8 +27,9 @@ void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t) { t
 void *wonder_host_render_target(const struct wonder_nvn_texture *t, uint32_t format) {
     take("render_target"); pthread_mutex_unlock(&replay);
     id<MTLTexture> x = targets[@(t->serial)];
-    if (!x) { MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)format width:t->desc.width height:t->desc.height mipmapped:NO];
-              d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; d.storageMode = MTLStorageModePrivate; x = [device newTextureWithDescriptor:d]; targets[@(t->serial)] = x; }
+    // The real descriptor (cube / array targets get their slices; a 2D stand-in for a cube passes on AMD but not on Apple GPUs).
+    if (!x) { MTLTextureDescriptor *d = wonder_host_render_target_descriptor(&t->desc, (MTLPixelFormat)format); assert(d);
+              x = [device newTextureWithDescriptor:d]; targets[@(t->serial)] = x; }
     return (__bridge void *)x;
 }
 static NSString *const vs_src = @"#include <metal_stdlib>\nusing namespace metal;\n"
@@ -46,7 +47,7 @@ static NSString *const vs_default_src = @"#include <metal_stdlib>\nusing namespa
     "struct I { float4 p [[attribute(0)]]; float4 dflt [[attribute(1)]]; };\nstruct O { float4 p [[position]]; };\nstruct C1 { float4 v[4]; };\n"
     "vertex O main0(I in [[stage_in]], constant C1& c1 [[buffer(2)]]) { O o; o.p = in.p + c1.v[0] + float4(in.dflt.xyz, in.dflt.w - 1.0); return o; }\n";
 static id<MTLFunction> function(NSString *source) {
-    NSError *e = nil; MTLCompileOptions *o = [MTLCompileOptions new]; o.languageVersion = MTLLanguageVersion2_1;
+    NSError *e = nil; MTLCompileOptions *o = [MTLCompileOptions new]; o.languageVersion = MTLLanguageVersion3_2;
     id<MTLLibrary> l = [device newLibraryWithSource:source options:o error:&e]; assert(l); return [l newFunctionWithName:@"main0"];
 }
 static struct wonder_nvn_texture target_texture(uint64_t serial, int format) {
@@ -88,7 +89,7 @@ int main(int argc, char **argv) {
             [b endEncoding]; [pending commit]; [pending waitUntilCompleted];
             const float *zz = zb.contents; printf("depth in %g outside %g edge %g\n", zz[32 * 64 + 32], zz[8 * 64 + 8], zz[48 * 64 + 48]);
             assert(zz[32 * 64 + 32] == 0.25f && zz[8 * 64 + 8] == 1.0f && zz[48 * 64 + 48] == 1.0f);
-            puts("metal2 clear depth rect OK"); return 0;
+            puts("metal3 clear depth rect OK"); return 0;
         }
         // Scissored / channel-masked colour clear drawn as a triangle: rect (16,16,32,32), red+alpha only, over blue.
         if (!strcmp(mode, "clear_rect")) {
@@ -106,7 +107,7 @@ int main(int argc, char **argv) {
             printf("in %u %u %u %u outside %u %u %u %u\n", in[0], in[1], in[2], in[3], outside[0], outside[1], outside[2], outside[3]);
             assert(in[0] == 255 && in[1] == 0 && in[2] == 255 && (in[3] == 127 || in[3] == 128));   // R and A written, G/B kept
             assert(outside[0] == 0 && outside[2] == 255 && edge[0] == 0);                         // outside the rect untouched (x,y 48 excluded)
-            puts("metal2 clear rect OK"); return 0;
+            puts("metal3 clear rect OK"); return 0;
         }
         // Texture view slice ranges in Metal slices (round83: Metal requires whole cubes for cube / cube-array views;
         // NVN layers are layer-faces). Out-of-range layers return length 0.
@@ -163,7 +164,6 @@ int main(int argc, char **argv) {
         d.tex_mask[1] = 1; d.tex[1][0].texture.valid = 1; d.tex[1][0].texture.texture.serial = 77; d.tex[1][0].texture.texture.desc = td;
         d.tex[1][0].texture.texture.swizzle[0] = 2; d.tex[1][0].texture.texture.swizzle[1] = 3; d.tex[1][0].texture.texture.swizzle[2] = 4; d.tex[1][0].texture.texture.swizzle[3] = 5;
         d.tex[1][0].storage = storage; d.tex[1][0].storage_size = lay.size;
-        int swizzle_views = [device supportsFamily:MTLGPUFamilyApple1] || [device supportsFamily:MTLGPUFamilyMac2];   // A11 yes; old Intel Macs no
         if (!strcmp(mode, "blend_color")) {
             // Target 0 blends with CONSTANT_COLOR / ZERO: result = source x blend colour (0.5, 1, 1, 1) -> red channel halves.
             d.color.blend_en = 1; d.blend_set = 1;
@@ -213,8 +213,7 @@ int main(int argc, char **argv) {
             v->base_level = 0; v->levels = 1; v->set_levels = 1;
         }
         if (!strcmp(mode, "bc")) {
-            // 4x4 BC1 texture, one solid green block (565 0x07e0), decoded on the CPU as on the A11 (no BC sampling there).
-            setenv("WONDER_TEST_NO_BC", "1", 1);
+            // 4x4 BC1 texture, one solid green block (565 0x07e0), sampled natively by the GPU.
             nvn_texdesc bd = {.target = 1, .format = 0x42, .samples = 0, .width = 4, .height = 4, .depth = 1, .levels = 1};
             nvn_texlayout bl; nvn_tex_layout(&bd, &bl);
             uint8_t block[8] = {0xe0, 0x07, 0xe0, 0x07, 0, 0, 0, 0}; uint8_t *bs = calloc(1, bl.size); assert(!nvn_swizzle(&bd, 0, 0, block, 8, bs));
@@ -222,7 +221,7 @@ int main(int argc, char **argv) {
         }
         if (!strcmp(mode, "view") || !strcmp(mode, "bad_view")) {
             // Every view field set, as round56's second draw registers it. Level 1 (1x1 red) is selected; where the GPU has
-            // texture swizzle, blue is taken from red, so the red texel samples magenta.
+            // texture swizzle (every Metal 3 GPU), blue is taken from red, so the red texel samples magenta.
             td.levels = 2; nvn_tex_layout(&td, &lay);
             uint8_t *mips = calloc(1, lay.size); assert(!nvn_swizzle(&td, 0, 0, linear, 8, mips));
             uint8_t red[4] = {255, 0, 0, 255}; assert(!nvn_swizzle(&td, 1, 0, red, 4, mips));
@@ -230,7 +229,7 @@ int main(int argc, char **argv) {
             struct wonder_nvn_texture_view *v = &d.tex[1][0].texture.view; d.tex[1][0].texture.has_view = 1;
             v->target = 1; v->format = !strcmp(mode, "bad_view") ? 0x34 : 0x25; v->base_level = 1; v->levels = 1; v->min_layer = 0; v->layers = 1;
             v->set_levels = v->set_layers = v->set_format = v->set_swizzle = v->set_depth_stencil = v->set_target = 1;
-            v->swizzle[0] = 2; v->swizzle[1] = 3; v->swizzle[2] = swizzle_views ? 2 : 4; v->swizzle[3] = 5;
+            v->swizzle[0] = 2; v->swizzle[1] = 3; v->swizzle[2] = 2; v->swizzle[3] = 5;
         }
         d.tex[1][0].sampler = (struct wonder_nvn_sampler_state){.min = 0, .mag = 0, .wrap_s = 7, .wrap_t = 7, .wrap_r = 7, .valid = 1, .lod_max = 1000, .anisotropy = 1};
         d.color = (wonder_nvn_color_state){.blend_en = 0, .logic_op = 3, .alpha_func = 8};
@@ -267,16 +266,16 @@ int main(int argc, char **argv) {
         const uint8_t *centre = px + (32 * 64 + 32) * 4, *corner = px;
         printf("centre %u %u %u %u depth %g; corner %u %u %u %u depth %g\n", centre[0], centre[1], centre[2], centre[3], z[32 * 64 + 32], corner[0], corner[1], corner[2], corner[3], z[0]);
         assert(corner[0] == 0 && corner[1] == 0 && corner[2] == 255 && z[0] == 1.0f);   // untouched: clear colour and depth
-        if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal2 encode back face culled OK"); return 0; }
-        if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal2 encode channel mask OK"); return 0; }
-        if (!strcmp(mode, "default_attr")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && z[32 * 64 + 32] == 0.25f); puts("metal2 encode default attribute OK"); return 0; }
-        if (!strcmp(mode, "linear") || !strcmp(mode, "array")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); printf("metal2 encode %s OK\n", mode); return 0; }
-        if (!strcmp(mode, "cube_view")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode cube view OK"); return 0; }
+        if (!strcmp(mode, "back_facing")) { assert(centre[2] == 255 && z[32 * 64 + 32] == 1.0f); puts("metal3 encode back face culled OK"); return 0; }
+        if (!strcmp(mode, "mask")) { assert(centre[0] == 0 && centre[1] == 0 && centre[2] == 255); puts("metal3 encode channel mask OK"); return 0; }
+        if (!strcmp(mode, "default_attr")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && z[32 * 64 + 32] == 0.25f); puts("metal3 encode default attribute OK"); return 0; }
+        if (!strcmp(mode, "linear") || !strcmp(mode, "array")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); printf("metal3 encode %s OK\n", mode); return 0; }
+        if (!strcmp(mode, "cube_view")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal3 encode cube view OK"); return 0; }
         if (!strcmp(mode, "fetch_pad")) {   // the corner would be covered if vertex 3 came from the pool bytes (5,5)
-            const uint8_t *far_px = px + (2 * 64 + 62) * 4; assert(far_px[2] == 255 && far_px[1] == 0); puts("metal2 encode fetch padding OK"); return 0; }
-        if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal2 encode blend colour OK"); return 0; }
-        if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal2 encode BC decode OK"); return 0; }
-        if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == (swizzle_views ? 255 : 0)); printf("swizzle views %d\n", swizzle_views); puts("metal2 encode texture view OK"); return 0; }
+            const uint8_t *far_px = px + (2 * 64 + 62) * 4; assert(far_px[2] == 255 && far_px[1] == 0); puts("metal3 encode fetch padding OK"); return 0; }
+        if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal3 encode blend colour OK"); return 0; }
+        if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal3 encode BC native OK"); return 0; }
+        if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == 255); puts("metal3 encode texture view OK"); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);
         for (int i = 0; i < 200 && access(png, F_OK); i++) usleep(10000);   // written by the command buffer's completion handler
@@ -287,7 +286,7 @@ int main(int argc, char **argv) {
         CFDataRef pixels = CGDataProviderCopyData(CGImageGetDataProvider(image)); const uint8_t *p = CFDataGetBytePtr(pixels) + 32 * CGImageGetBytesPerRow(image) + 32 * 4;
         assert(p[0] == centre[0] && p[1] == centre[1] && p[2] == centre[2]);
         CFRelease(pixels); CGImageRelease(image); CFRelease(src);
-        puts("metal2 encode draw OK");
+        puts("metal3 encode draw OK");
     }
     return 0;
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline shader build from first-draw censuses (runtime/nvn_draw_census.h): Maxwell stage → SPIR-V (work/tools/wonder_xlate,
-the Ryujinx translator front end) → MSL 2.1 with discrete bindings (spirv-cross) + a line-oriented reflection (.refl) the
+the Ryujinx translator front end) → MSL 3.2 with discrete bindings (spirv-cross) + a line-oriented reflection (.refl) the
 host parses (runtime/shader_library.h). Translator queries are answered from the census, never defaulted:
 texture targets from the bound texture descriptors, vertex attribute / fragment output component types from the bound
 formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl, jobs.json, manifest.json.
@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 XLATE = ROOT / 'work/tools/wonder_xlate/wonder_xlate'
 CROSS = ROOT / 'work/tools/spirv-cross/spirv-cross'
 NVN_H = ROOT / 'vendor/d2r-mobile/dm/gfx/nvn/include/nvn.h'
-CROSS_FLAGS = ['--msl', '--msl-ios', '--msl-version', '20100', '--msl-decoration-binding']
+CROSS_FLAGS = ['--msl', '--msl-ios', '--msl-version', '30200', '--msl-decoration-binding']
 TEX_TABLE, TEX_SLOTS = 0x20, 32
 TARGETS = {0: '1d', 1: '2d', 2: '3d', 3: '1darray', 4: '2darray', 5: '2dms', 6: '2dmsarray', 7: '2d', 8: 'cube', 9: 'cubearray', 10: 'buffer'}
 STAGES = {0: 'vs', 1: 'ps'}   # census stage → translator stage; others stop until a draw needs them
@@ -198,7 +198,7 @@ def build(census_dirs, out):
             for r in retry:
                 for j in jobs:
                     if j['key'] == r['key']: j['debug'] = True
-        manifest = {'scope': 'Wonder draw-census shader build (MSL 2.1, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
+        manifest = {'scope': 'Wonder draw-census shader build (MSL 3.2, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
                     'translator_source_sha': subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip(),
                     'keys': {}}
         manifest['failed'] = {}; built = {}

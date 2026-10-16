@@ -2,7 +2,7 @@ name: WonderLoaderProbe
 options:
   bundleIdPrefix: two.local.smbwonder
   deploymentTarget:
-    iOS: '16.0'
+    iOS: '18.0'   # MSL 3.2 (MTLLanguageVersion3_2)
 settings:
   base:
     ARCHS: arm64
@@ -44,16 +44,16 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/ngc_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_draw_census.c'
       - path: '${SMBW_REFERENCE}/runtime/shader_library.c'
-      - path: '${SMBW_REFERENCE}/runtime/metal2_draw.m'
+      - path: '${SMBW_REFERENCE}/runtime/metal3_draw.m'
       - path: '${SMBW_REFERENCE}/runtime/profile_image.c'
       - path: '${SMBW_REFERENCE}/runtime/texture_storage.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_service.c'
       - path: '${SMBW_REFERENCE}/runtime/settings_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/os_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/graphics_gate.c'
-      - path: '${SMBW_REFERENCE}/runtime/metal2_probe.m'
-      - path: '${SMBW_REFERENCE}/runtime/metal2_shader_check.m'
-      - path: '${SMBW_REFERENCE}/runtime/metal2_pixels.c'
+      - path: '${SMBW_REFERENCE}/runtime/metal3_probe.m'
+      - path: '${SMBW_REFERENCE}/runtime/metal3_shader_check.m'
+      - path: '${SMBW_REFERENCE}/runtime/metal3_pixels.c'
       - path: '${SMBW_REFERENCE}/runtime/kernel_threads.c'
       - path: '${SMBW_REFERENCE}/runtime/account_state.c'
       - path: '${SMBW_REFERENCE}/runtime/account_hooks.c'
@@ -77,7 +77,6 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/nvn_texture.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_state.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'
-      - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_bootstrap.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c'

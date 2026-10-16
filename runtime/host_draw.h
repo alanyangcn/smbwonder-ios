@@ -1,5 +1,5 @@
 #pragma once
-// One draw, fully resolved by the replay (nvn_queue.c) for the Metal backend (metal2_draw.m): shader functions and their
+// One draw, fully resolved by the replay (nvn_queue.c) for the Metal backend (metal3_draw.m): shader functions and their
 // reflections, host buffer spans for every buffer the reflections and vertex layout read, texture/sampler descriptors
 // snapshotted from the bound pools, render targets and fixed-function state. Everything is by value for one submission.
 #include "nvn_commands.h"

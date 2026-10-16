@@ -1,8 +1,8 @@
-// Shader library on a real Metal device: manifest-verified MSL compiled as MSL 2.1, cached by key; every failure stops
+// Shader library on a real Metal device: manifest-verified MSL compiled as MSL 3.2, cached by key; every failure stops
 // by name. argv[1] = scratch dir; argv[2] = "ok" (positive checks) or a stop case run in its own process (Metal is not
 // fork-safe); argv[3] (optional, with "ok") = work/build/wonder-shaders to compile the real translated stages.
 #import <Metal/Metal.h>
-#include "metal2_draw.h"
+#include "metal3_draw.h"
 #include "host_draw.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <assert.h>
@@ -42,18 +42,16 @@ static void positive(int argc, char **argv) {
     assert(f && ((__bridge id<MTLFunction>)f).functionType == MTLFunctionTypeVertex);
     assert(wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0) == f);                     // cached by key
     const struct wonder_shader_refl *r = wonder_host_shader_refl("aaaaaaaaaaaaaaaa"); assert(r && r->stage == 0);
-    // CLAMP_TO_BORDER: Metal has three fixed border colours; the GPU is checked once by sampling outside a 1x1 texture.
+    // CLAMP_TO_BORDER: Metal has three fixed border colours.
     assert(wonder_host_border_color((const float[4]){0, 0, 0, 0}) == MTLSamplerBorderColorTransparentBlack);
     assert(wonder_host_border_color((const float[4]){0, 0, 0, 1}) == MTLSamplerBorderColorOpaqueBlack);
     assert(wonder_host_border_color((const float[4]){1, 1, 1, 1}) == MTLSamplerBorderColorOpaqueWhite);
     assert(wonder_host_border_color((const float[4]){0.5f, 0, 0, 1}) == -1);
-    assert(wonder_host_border_color_works() == 1);   // every Mac GPU honours it
-    // A transparent-black border is MTLSamplerAddressModeClampToZero, which every GPU has (the A11 samples 0 for any
-    // border colour, round100); other colours need the checked border support.
-    assert(wonder_host_border_address_mode((const float[4]){0, 0, 0, 0}, 0) == MTLSamplerAddressModeClampToZero);
-    assert(wonder_host_border_address_mode((const float[4]){1, 1, 1, 1}, 1) == MTLSamplerAddressModeClampToBorderColor);
-    assert(wonder_host_border_address_mode((const float[4]){1, 1, 1, 1}, 0) == -1);
-    assert(wonder_host_border_address_mode((const float[4]){0.5f, 0, 0, 1}, 1) == -1);
+    // Transparent black is exactly ClampToZero; opaque black / white use the border colour; anything else has no mode.
+    assert(wonder_host_border_address_mode((const float[4]){0, 0, 0, 0}) == MTLSamplerAddressModeClampToZero);
+    assert(wonder_host_border_address_mode((const float[4]){0, 0, 0, 1}) == MTLSamplerAddressModeClampToBorderColor);
+    assert(wonder_host_border_address_mode((const float[4]){1, 1, 1, 1}) == MTLSamplerAddressModeClampToBorderColor);
+    assert(wonder_host_border_address_mode((const float[4]){0.5f, 0, 0, 1}) == -1);
     if (argc > 3) {   // real translated stages from tools/wonder_shader_build.py
         wonder_host_shader_set_directory(argv[3]);
         pthread_attr_t attr; pthread_attr_init(&attr); pthread_attr_setstacksize(&attr, 64 * 1024);
@@ -83,7 +81,7 @@ int main(int argc, char **argv) {
         wonder_host_draw_set_device((__bridge void *)device);
         wonder_host_shader_set_directory(argv[1]);
         const char *mode = argv[2];
-        if (!strcmp(mode, "ok")) { positive(argc, argv); puts("metal2_draw shader library OK"); return 0; }
+        if (!strcmp(mode, "ok")) { positive(argc, argv); puts("metal3_draw shader library OK"); return 0; }
         if (!strcmp(mode, "missing")) missing();
         if (!strcmp(mode, "broken")) broken();
         if (!strcmp(mode, "tampered")) tampered();

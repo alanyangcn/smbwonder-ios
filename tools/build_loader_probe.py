@@ -22,7 +22,6 @@ RUNTIME_GRAPHICS = tuple('runtime/' + name for name in (
     'shared_font.c', 'host_fonts.m', 'font_hooks.c', 'nvn_device.c', 'nvn_swapchain.c', 'nvn_buffer.c', 'nvn_commands.c', 'nvn_queue.c', 'nvn_texture.c', 'nvn_state.c', 'nvn_bootstrap.c', 'nvn_unimpl.S')) + (
     'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c',      # shared TX1 block-linear layout calculator (deko3d-derived)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c',  # NVN format -> Metal pixel format (pure C)
-    'vendor/d2r-mobile/dm/gfx/tex/nvn_bcdec.c',    # BC decode for GPUs without BC (A11)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c')  # TX1 block-linear <-> linear
 
 
@@ -74,7 +73,7 @@ def copy_shaders(source, destination):
     return len(keys)
 
 
-def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_backend="metal2"):
+def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk"):
     profile = json.loads(profile_path.read_text())
     validate_inputs(work, profile)
     if profile.get('npdm', {}).get('main_thread_stack_size') != 0x100000:
@@ -106,7 +105,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
                                      str(patch_dir), str(embed), 'main', 'sdk'], text=True).split()
     env = os.environ.copy()
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], env=env, text=True).strip()
-    command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios16.0', '-isysroot', sdk,
+    command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios18.0', '-isysroot', sdk,
                '-DSMBW_STRICT_IMPORTS=1', '-O1', '-g', '-fobjc-arc', '-Wall', '-Wno-unused-variable', '-I' + str(REPOSITORY / 'vendor/d2r-mobile/dm/host'), '-I' + str(REPOSITORY / 'vendor/d2r-mobile/dm/gfx/nvn'), '-I' + str(REPOSITORY / 'vendor/d2r-mobile/dm/gfx/tex')]
     command += [str(REPOSITORY / p) for p in ('ios-probe/LoaderProbe.m',
                 'vendor/d2r-mobile/dm/host/loader.c', 'vendor/d2r-mobile/dm/host/hle.c', 'vendor/d2r-mobile/dm/host/entry.S',
@@ -117,16 +116,16 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
                 'runtime/romfs.c', 'runtime/romfs_hooks.c',
                 'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/ngc_service.c', 'runtime/ngc_hooks.c',
-                'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal2_draw.m', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
-                'runtime/graphics_gate.c', 'runtime/metal2_probe.m',
-                'runtime/metal2_pixels.c', 'runtime/metal2_shader_check.m',
+                'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal3_draw.m', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
+                'runtime/graphics_gate.c', 'runtime/metal3_probe.m',
+                'runtime/metal3_pixels.c', 'runtime/metal3_shader_check.m',
                 *RUNTIME_GRAPHICS)]
     command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', *flags, '-o', str(app / 'LoaderProbe')]
     subprocess.run(command, check=True, env=env)
     info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe',
             'CFBundleExecutable':'LoaderProbe', 'CFBundlePackageType':'APPL',
-            'CFBundleShortVersionString':'0.1', 'CFBundleVersion':'4', 'WonderBootStage':stage, 'WonderGraphicsBackend':graphics_backend,
-            'MinimumOSVersion':'16.0', 'LSRequiresIPhoneOS':True, 'UIDeviceFamily':[1, 2],
+            'CFBundleShortVersionString':'0.1', 'CFBundleVersion':'4', 'WonderBootStage':stage,
+            'MinimumOSVersion':'18.0', 'LSRequiresIPhoneOS':True, 'UIDeviceFamily':[1, 2],
             'UIFileSharingEnabled':True, 'LSSupportsOpeningDocumentsInPlace':True,
             'UILaunchScreen':{}, 'UISupportedInterfaceOrientations':['UIInterfaceOrientationPortrait',
             'UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight']}
@@ -143,7 +142,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", graphics_ba
         (project / 'project.yml').write_text(spec)
         subprocess.run([str(xcodegen), 'generate', '--spec', str(project / 'project.yml')], check=True)
     (output / 'build-result.json').write_text(json.dumps({'app':str(app), 'executable_sha256':digest(app / 'LoaderProbe'),
-        'scope':{'sdk':'SDK initialization only','constructors':'SDK initialization and module DT_INIT','main':'SDK, module DT_INIT and nnMain entry; subsequent missing services stop the guest'}[stage], 'stage':stage, 'graphics_backend':graphics_backend, 'signing':'not provisioned; clang may add ad-hoc signature',
+        'scope':{'sdk':'SDK initialization only','constructors':'SDK initialization and module DT_INIT','main':'SDK, module DT_INIT and nnMain entry; subsequent missing services stop the guest'}[stage], 'stage':stage, 'graphics_backend':'metal3', 'signing':'not provisioned; clang may add ad-hoc signature',
         'profile_sha256':digest(profile_path)}, indent=2) + '\n')
     print(app)
     print('Diagnostic only; not a playable game. Device provisioning and execution remain to be verified.')
@@ -156,6 +155,5 @@ if __name__ == '__main__':
     parser.add_argument('--bundle-id', default='two.local.smbwonder.loaderprobe')
     parser.add_argument('--xcodegen', type=Path, help='Also generate an automatic-signing Xcode project in the external work directory')
     parser.add_argument('--stage', choices=['sdk','constructors','main'], default='sdk')
-    parser.add_argument('--graphics-backend', choices=['metal2','metal3'], default='metal2')
     args = parser.parse_args()
-    build(args.work_root.resolve(), args.profile.resolve(), args.bundle_id, args.xcodegen, args.stage, args.graphics_backend)
+    build(args.work_root.resolve(), args.profile.resolve(), args.bundle_id, args.xcodegen, args.stage)

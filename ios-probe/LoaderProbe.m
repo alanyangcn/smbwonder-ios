@@ -5,8 +5,8 @@
 #import <Metal/Metal.h>
 #include "dm.h"
 #include "../runtime/romfs.h"
-#import "../runtime/metal2_probe.h"
-#import "../runtime/metal2_shader_check.h"
+#import "../runtime/metal3_probe.h"
+#import "../runtime/metal3_shader_check.h"
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
 #if !defined(__aarch64__)
@@ -58,10 +58,6 @@ static void report(NSString *message) {
 }
 
 static void guest_stopped(const char *reason) {
-    if(strstr(reason,"GAME_RENDERER_PENDING")) {
-        report([NSString stringWithFormat:@"%s\nMetal 2 已通过基础 GPU 验证；继续接入游戏 NVN 和实际着色器。",reason]);
-        return;
-    }
     if(strstr(reason,"GUEST_FAULT")) {
         report([NSString stringWithFormat:@"GUEST_FAULT: %s\n游戏代码访问异常；客体已停止，日志含模块偏移与调用链。",reason]);
         return;
@@ -70,30 +66,26 @@ static void guest_stopped(const char *reason) {
         report([NSString stringWithFormat:@"NVN_GAP: %s\n已推进到首个未实现的 NVN 调用；客体已停止，未返回伪成功。",reason]);
         return;
     }
-    if(strstr(reason,"DEVICE_UPGRADE_REQUIRED")) {
-        report([NSString stringWithFormat:@"%s\n已到当前图形路径的换机检查点：请使用支持 Metal 3 的较新设备。游戏图形接入仍待完成。",reason]);
+    if(strstr(reason,"GRAPHICS_DEVICE_UNSUPPORTED")) {
+        report([NSString stringWithFormat:@"%s\n此设备的 GPU 不满足渲染器要求（Metal 3 家族 + BC 贴图采样）。",reason]);
         return;
     }
     report([NSString stringWithFormat:@"BOOT_BLOCKED: %s\n客体已停止；此界面保留日志，未跳过缺失接口。",reason]);
 }
 
-const char *wonder_graphics_backend(void) {
-    NSString *backend=[NSBundle.mainBundle objectForInfoDictionaryKey:@"WonderGraphicsBackend"]?:@"metal2";
-    return backend.UTF8String;
-}
-int wonder_metal2_selftest(void) {
+int wonder_metal3_selftest(void) {
     NSString *documents=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
     NSError *error=nil;
-    NSDictionary *result=wonder_metal2_run(MTLCreateSystemDefaultDevice(),documents,&error);
+    NSDictionary *result=wonder_metal3_run(MTLCreateSystemDefaultDevice(),documents,&error);
     if(!result) {
         NSDictionary *failure=@{@"scope":@"host GPU diagnostic; not game frame",@"passed":@NO,@"error":error.description?:@"unknown"};
-        [[NSJSONSerialization dataWithJSONObject:failure options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[documents stringByAppendingPathComponent:@"metal2-probe.json"] atomically:YES];
-        report([NSString stringWithFormat:@"METAL2_PROBE_FAILED: %@",error.description]);return 1;
+        [[NSJSONSerialization dataWithJSONObject:failure options:NSJSONWritingPrettyPrinted error:nil] writeToFile:[documents stringByAppendingPathComponent:@"metal3-probe.json"] atomically:YES];
+        report([NSString stringWithFormat:@"METAL3_PROBE_FAILED: %@",error.description]);return 1;
     }
-    report(@"METAL2_GPU_PROBE_OK: 4096 像素正确；错误参数负对照已拒绝。此为 GPU 诊断图，并非游戏画面。");
-    NSString *sourceDirectory=[documents stringByAppendingPathComponent:@"Metal2ShaderSources"];
+    report(@"METAL3_GPU_PROBE_OK: 4096 像素正确；错误参数负对照已拒绝。此为 GPU 诊断图，并非游戏画面。");
+    NSString *sourceDirectory=[documents stringByAppendingPathComponent:@"Metal3ShaderSources"];
     if([NSFileManager.defaultManager fileExistsAtPath:[sourceDirectory stringByAppendingPathComponent:@"sources.json"]]) {
-        NSError *sourceError=nil;NSDictionary *checks=wonder_metal2_check_sources(MTLCreateSystemDefaultDevice(),sourceDirectory,&sourceError);
+        NSError *sourceError=nil;NSDictionary *checks=wonder_metal3_check_sources(MTLCreateSystemDefaultDevice(),sourceDirectory,&sourceError);
         if(checks)report([NSString stringWithFormat:@"TARGET_SHADER_COMPILE: %@/%@；仅编译检查，实际绘制与反射待验证。",checks[@"compiled"],checks[@"total"]]);
         else report([NSString stringWithFormat:@"TARGET_SHADER_CHECK_FAILED: %@",sourceError.description]);
     } else report(@"TARGET_SHADER_CHECK_PENDING: 尚未提供目标 MSL 输入。");
@@ -104,9 +96,9 @@ int wonder_host_graphics_probe(void) {
     id<MTLDevice> device=MTLCreateSystemDefaultDevice();
     if(!device){report(@"GPU_CAPABILITY Metal device unavailable");return -1;}
     BOOL metal3=[device supportsFamily:MTLGPUFamilyMetal3];
-    BOOL bc=NO;if(@available(iOS 16.4,*))bc=device.supportsBCTextureCompression;
+    BOOL bc=device.supportsBCTextureCompression;
     report([NSString stringWithFormat:@"GPU_CAPABILITY name=%@ Metal3=%d Apple7=%d argumentBuffersTier=%lu BC=%d RAM=%llu OS=%@",device.name,metal3,[device supportsFamily:MTLGPUFamilyApple7],(unsigned long)device.argumentBuffersSupport,bc,NSProcessInfo.processInfo.physicalMemory,UIDevice.currentDevice.systemVersion]);
-    return metal3?1:0;
+    return metal3&&bc?1:0;   // the renderer needs both (graphics_gate.c)
 }
 
 extern uint64_t wonder_language_code(const char *);

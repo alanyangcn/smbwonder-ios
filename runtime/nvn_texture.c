@@ -4,7 +4,6 @@
 // created at first use by the render layer (METAL2-RENDER-PLAN.md section 4), not here.
 #include "nvn_texture.h"
 #include "nvn_fmt_mtl.h"
-#include "nvn_bcdec.h"
 #include "nvn_deswizzle.h"
 #include <stdatomic.h>
 #include <string.h>
@@ -149,8 +148,7 @@ uint32_t wonder_nvnTextureInitialize(void *texture, const void *builder) {
     if ((uint64_t)b->offset % L.align || (uint64_t)b->offset + L.size > view.size)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnTextureInitialize offset=%#llx size=%#llx align=%u pool=%#llx",
                         (unsigned long long)b->offset, (unsigned long long)L.size, L.align, (unsigned long long)view.size);
-    uint32_t mtl = 0; int mapping = nvn_fmt_to_mtl(b->desc.format, &mtl, NULL), bpp = 0; uint32_t unpacked = 0;
-    int bc = nvn_bc_unpacked((uint32_t)b->desc.format, &unpacked, &bpp);
+    uint32_t mtl = 0; int mapping = nvn_fmt_to_mtl(b->desc.format, &mtl, NULL);   // BC formats are sampled natively (Metal 3 GPUs)
     void *host = NULL;
     if (b->desc.flags & 1) {   // DISPLAY: host render target that the window presents
         if (b->desc.target != 1 || b->desc.levels != 1 || !display_format(b->desc.format))
@@ -167,7 +165,7 @@ uint32_t wonder_nvnTextureInitialize(void *texture, const void *builder) {
     wonder_nvn_report("NVN_TEXTURE_READY serial=%llu %ux%ux%u levels=%u target=%d format=%#x flags=%#x samples=%d pool_offset=%#llx size=%#llx metal=%u(%s)%s",
                       (unsigned long long)t->serial, b->desc.width, b->desc.height, b->desc.depth, b->desc.levels, b->desc.target,
                       (unsigned)b->desc.format, (unsigned)b->desc.flags, b->desc.samples, (unsigned long long)b->offset, (unsigned long long)L.size,
-                      bc ? unpacked : mtl, bc ? "BC->CPU decode" : mapping == 1 ? "exact" : mapping == 2 ? "substitute" : "expand/none",
+                      mtl, mapping == 1 ? "exact" : mapping == 2 ? "substitute" : "expand/none",
                       host ? " host=display" : "");
     return 1;
 }

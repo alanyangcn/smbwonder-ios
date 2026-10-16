@@ -1,6 +1,6 @@
 #pragma once
 // Translated-shader reflection (.refl, written by tools/wonder_shader_build.py next to <key>.metal).
-// Metal binding layout per stage (MSL 2.1, discrete slots): constant buffers / c1 / support in [[buffer(0..15)]],
+// Metal binding layout per stage (MSL 3.2, discrete slots): constant buffers / c1 / support in [[buffer(0..15)]],
 // vertex streams in [[buffer(16 + stream)]], textures/samplers at the translator's binding numbers.
 #include <stddef.h>
 #include <stdint.h>

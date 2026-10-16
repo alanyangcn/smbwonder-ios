@@ -1,4 +1,4 @@
-"""Offline shader build from a draw census: keys, facts, reflection lines, MSL 2.1 flags.
+"""Offline shader build from a draw census: keys, facts, reflection lines, MSL 3.2 flags.
 Pure helpers always run; the end-to-end build needs work/ tools and a census (WONDER_CENSUS or round53)."""
 from pathlib import Path
 import importlib.util, json, os, tempfile, unittest
@@ -114,7 +114,7 @@ class CensusBuild(unittest.TestCase):
     def test_depth_line_follows_census(self):
         self.assertIn('depth minus_one', self.refl('vs')); self.assertFalse(any(l.startswith('depth') for l in self.refl('fs')))
     def test_msl_21_flags(self):
-        for flag in ('--msl-ios', '--msl-version', '20100', '--msl-decoration-binding'): self.assertIn(flag, self.manifest['spirv_cross_command'])
+        for flag in ('--msl-ios', '--msl-version', '30200', '--msl-decoration-binding'): self.assertIn(flag, self.manifest['spirv_cross_command'])
         self.assertIn('gl_Position.z = fma(', (self.out / f"{self.keys['vs']}.metal").read_text())
     def test_manifest_hashes(self):
         import hashlib

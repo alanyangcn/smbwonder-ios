@@ -228,7 +228,7 @@ int main(void) {
     assert(slot("nvnProgramInitialize") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnProgramInitialize")));
     assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(program_memory, device) == 1);
     ((void (*)(void *, const char *))slot("nvnProgramSetDebugLabel"))(program_memory,"Startup shaders");
-    ((void (*)(void *, const char *))slot("nvnDeviceSetDebugLabel"))(device,"Wonder Metal2");
+    ((void (*)(void *, const char *))slot("nvnDeviceSetDebugLabel"))(device,"Wonder Metal3");
     const void *program_device; memcpy(&program_device, program_memory + 8, sizeof program_device); assert(program_device == device);
     for (unsigned i = 0x80; i < sizeof program_memory; i++) assert(program_memory[i] == 0xa5);
     assert(slot("nvnMemoryPoolSetDebugLabel") != wonder_nvn_unimplemented_thunk((unsigned)wonder_nvn_name_index("nvnMemoryPoolSetDebugLabel")));
@@ -525,7 +525,7 @@ int main(void) {
     ((void (*)(void *, int))slot("nvnTextureBuilderSetHeight"))(gtb, 64);
     ((void (*)(void *, int))slot("nvnTextureBuilderSetDepth"))(gtb, 1);
     ((void (*)(void *, int))slot("nvnTextureBuilderSetLevels"))(gtb, 3);
-    ((void (*)(void *, int))slot("nvnTextureBuilderSetFormat"))(gtb, 0x42);            // BC1: CPU decode on A11
+    ((void (*)(void *, int))slot("nvnTextureBuilderSetFormat"))(gtb, 0x42);            // BC1: sampled natively
     ((void (*)(void *, int, int, int, int))slot("nvnTextureBuilderSetSwizzle"))(gtb, 2, 3, 4, 1);
     ((void (*)(void *, int))slot("nvnTextureBuilderSetSamples"))(gtb, 0);
     ((void (*)(void *, int))slot("nvnTextureBuilderSetDepthStencilMode"))(gtb, 0);

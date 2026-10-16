@@ -58,7 +58,7 @@ uint32_t wonder_nvnDeviceInitialize(void *device, const void *builder) {
     memset(d, 0, sizeof *d);
     d->flags = b->flags; d->api_major = WONDER_NVN_API_MAJOR; d->api_minor = WONDER_NVN_API_MINOR_REPORTED;
     d->magic = DEVICE_MAGIC;
-    wonder_nvn_report("NVN_DEVICE_READY device=%p api=%d.%d flags=%#x host=metal2", device, d->api_major, d->api_minor, (unsigned)d->flags);
+    wonder_nvn_report("NVN_DEVICE_READY device=%p api=%d.%d flags=%#x host=metal3", device, d->api_major, d->api_minor, (unsigned)d->flags);
     return 1;
 }
 
