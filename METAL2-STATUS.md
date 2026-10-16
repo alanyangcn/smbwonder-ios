@@ -29,6 +29,12 @@
   - **文字根因（round138）**：文字顶点着色器 982e87b1faa0b87f 用两个间接跳转（BRX，c1 跳转表各 3 个目标）按顶点角选 UV 字段；Ryujinx 的 AST 优化器把每个 BRX 只保留一个目标，UV 取错 → 采样为 0 → 片元全部丢弃。DebugMode（不跑该优化器）三路分支都在。构建改为所有阶段 DebugMode（D2R 原本的默认）；196 个阶段在 Mac GPU 上全部编译通过。带 BRX 的其它着色器（粒子、材质）同样受益。
   - 性能：每个 draw 单独一个 render pass（附件整张 load/store）+ 每个 uniform 一块 64 KiB 拷贝分配，关卡每帧 141 个 draw 只有约 6 fps。改为同附件的连续 draw 合并为一个 render pass，拷贝统一进前置 blit、从 4 MiB 暂存块切窗口；其它 GPU 操作取命令缓冲时先收尾当前批（保持命令顺序），写存储缓冲或采样本批附件的 draw 结束本批。`HOST_MEMORY` 行报告 draws/passes 与 fps。
   - round139–140：**文字正常显示**（选角色界面中文/英文、按钮文字都在）；按键图标显示为"?"——Switch 共享字体第 5 类（任天堂扩展字体，私用区按键符号）在 iOS 上没有对应字体（功能差异，待自制图标字体）。标题界面合并 pass 后 59–60 fps。3D 采样纹理已支持；计算着色器 `1fb9d970e6bbceb8` 在 Metal 上实际执行（`NVN_DISPATCH_EXECUTED`）。进入关卡后 5–22 fps（普查扫描轮：缺着色器的 draw 被跳过、新着色器首次使用时在设备上编译），换场景时客体空指针 `main+0x8f68a8`（读 `[[x19+0x40]+0x38]`，调用方 main+0x1b97c8c 虚函数 +0x48），待查。
+  - round141–143：
+    - **换场景闪退**（main+0x8f68a8）：崩溃点在声音联动（SLink）的委托代码里，旁边就是声音区域的名字；同期日志显示**所有流式音频都打不开**——音频引擎用 `content://Sound/Resource/Stream/*.bwav`（双斜杠），宿主 RomFS 没有像 nn::fs 那样合并连续分隔符，一律 0x202。修复后 round143 越过原崩溃点（present 3300）继续运行。另修 SignalToAddress 类型 2（count ≤ 0 且有等待者时按 7.0.0+ 写 value−2）。
+    - **声音**：sdk 进程内 DSP 把 DeviceSink（0x13）当空操作（真机由 ADSP 固件送到输出设备）。宿主在每个命令列表处理后读出 DeviceSink 的输入（游戏的 MainAudioOut 读上采样器的 48 kHz 输出，2 声道），经 RemoteIO（48 kHz 立体声 float，SoloAmbient：静音键生效）输出。round143：输出回调 932 次仅 3 次欠载、环形缓冲约 19 ms。
+    - **性能**：采样纹理每次 draw 都对整块存储做 FNV 哈希（关卡里每帧上百 MB）→ 改为写保护脏页跟踪（`page_guard.c`：上传后把纹理页设为只读，CPU 写入触发异常→标脏→放开页、重试写入；romfs/存档读文件前先放开目标页）。关卡帧率 5 fps → **约 41 fps**（标题 60 fps）。
+    - **实际游玩**：脚本支持按住区间（`RIGHT@150-480`），`A/2.5@25-150,RIGHT@150-480,Y@150-480,A/1.5@151-480` 让角色在开场关卡里向右冲刺跳跃，开场标志动画正常出现。
+    - 仍缺：部分背景（远景天空、地面）仍是黑块/纯色——普查扫描轮次跳过的着色器，逐轮折叠；按键图标“?”（任天堂扩展字体）。
   - 脚本按键后 1.5 s 自动截图（`Documents/Present/present-<帧>.png`，日志 `HOST_PRESENT_CAPTURE ... requested`）。
   - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
