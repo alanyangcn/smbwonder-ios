@@ -25,9 +25,12 @@ static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.
 // Per-present summary (diagnostic: compares good and bad frames): draws encoded since the last present, their
 // program/count sequence hash, and clears.
 static _Atomic unsigned frame_draws, frame_index; static _Atomic uint64_t frame_hash = 1469598103934665603ull;
+// Every present advances the frame number the per-frame diagnostics use (WONDER_DRAW_LOG, WONDER_FRAME_DUMP_EVERY);
+// before round153 only WONDER_PRESENT_EVERY advanced it, so frame dumps never fired.
+void wonder_nvn_frame_advance(void) { atomic_fetch_add(&frame_index, 1); }
 void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash) {
     static unsigned clears_at_last; unsigned c = state.clears;
-    atomic_fetch_add(&frame_index, 1); *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
+    *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
     *clears = c - clears_at_last; clears_at_last = c;
 }
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).

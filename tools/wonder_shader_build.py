@@ -226,8 +226,14 @@ def reflect(census, stage_entry, job, res, msl, c1):
             lines.append(f"btex {r} {t['handle'] * 4} {t['binding']} {t['binding']} {sampler_type_name(t['type'])}")
             continue
         r = texture_slot(t['handle'], t['cbuf_slot'])
-        if r not in bound: raise ValueError(f"texture slot {r} is read but not bound to a registered texture in the census")
         if t['binding'] not in textures or t['binding'] not in samplers: raise ValueError(f"texture binding {t['binding']} missing from the MSL entry")
+        if r not in bound:
+            # Slot holding handle 0 when the census was taken (NVN's empty descriptor; the host binds an all-zero texture,
+            # nvn_queue.c resolve_texture). The sampling instruction encodes the dimension; a type the translator had to
+            # query (texture query, buffer fetch) would have left a note, rejected above. A texture the game binds there
+            # later must match this type or the draw stops by name (round152: 5 stages left out for this).
+            lines.append(f"tex {r} {t['binding']} {t['binding']} {sampler_type_name(t['type'])}")
+            continue
         # The type the MSL declares (the translator's SamplerType), not the census target: the font shader samples the
         # 2D glyph cache with an array instruction (round127). Only that mismatch is accepted (Maxwell reads layer 0).
         declared, bound_type = sampler_type_name(t['type']), job['tex'][str(r)]

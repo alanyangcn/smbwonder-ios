@@ -146,7 +146,7 @@ void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueuePresentTexture crop %d,%d %dx%d outside %ux%u", crop[0], crop[1], crop[2], crop[3], t->desc.width, t->desc.height);
     w->presented[index]++; wonder_host_after_gpu(release_texture, (void *)&w->released[index]);   // same command buffer as the present
     if (wonder_host_present(t->host, crop, w->interval)) wonder_nvn_stop("NVN_HOST_PRESENT_FAILED nvnQueuePresentTexture index=%d", index);
-    w->acquired &= ~(1ull << index); w->presents++;
+    w->acquired &= ~(1ull << index); w->presents++; wonder_nvn_frame_advance();
     { static int every = -1; if (every < 0) { const char *e = getenv("WONDER_PRESENT_EVERY"); every = e ? atoi(e) : 0; }
       if (every > 0) { unsigned draws, clears; uint64_t hash; wonder_nvn_frame_summary(&draws, &clears, &hash);
           wonder_nvn_report("NVN_FRAME present=%u index=%d draws=%u clears=%u hash=%016llx", w->presents, index, draws, clears, (unsigned long long)hash); } }
