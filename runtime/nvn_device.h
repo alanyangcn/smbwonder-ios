@@ -101,7 +101,7 @@ void wonder_host_texture_forget(uint64_t serial);   // nvnTextureFinalize: relea
 void wonder_host_unreserve(void *memory, size_t size);
 const void *wonder_nvn_queue_check(const void *queue, const char *who);
 // Program shaders keyed by NVNshaderStage (0 vertex, 1 fragment, 2 geometry, 3 tess control, 4 tess eval, 5 compute).
-struct wonder_nvn_program_shaders { uint64_t serial; uint32_t mask; uint64_t code[6], extra[6]; const void *control[6]; };
+struct wonder_nvn_program_shaders { uint64_t serial; uint32_t mask; uint64_t code[6], extra[6]; const void *control[6]; char key[6][17]; };   // key: wonder_nvn_shader_key at SetShaders
 void wonder_nvn_device_modes(int *depth_mode, int *window_origin);   // NVNdepthMode / NVNwindowOriginMode last set, -1 if never
 int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_shaders *out);
 // Shader evidence for the offline translator (nvn_bootstrap.c on device).

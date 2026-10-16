@@ -29,6 +29,14 @@ static const unsigned char *census_file(const char *name, size_t *size) {
     for (unsigned i = 0; i < census_count; i++) if (!strcmp(census_files[i].name, name)) { *size = census_files[i].size; return census_files[i].data; }
     return NULL;
 }
+// Stage key rule (round191), computed independently of the runtime: sha256(control[0:0x880] || code[0:length]) with
+// length = the u32 at control +0x704.
+static void expected_key(const unsigned char *control, const unsigned char *code, char key[17]) {
+    uint32_t length; memcpy(&length, control + 0x704, 4);
+    unsigned char *joined = malloc(0x880 + length); memcpy(joined, control, 0x880); memcpy(joined + 0x880, code, length);
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(joined, (CC_LONG)(0x880 + length), digest); free(joined);
+    for (int i = 0; i < 8; i++) sprintf(key + 2 * i, "%02x", digest[i]);
+}
 void wonder_host_resource_label(void *resource, const char *label) {last_labeled_resource=resource;last_resource_label=label;}
 int wonder_host_driver_ready(void) { return host_ready; }
 static int buffers, host_textures; static const void *native_layer = (const void *)0x281b8a400;
@@ -830,6 +838,16 @@ int main(void) {
             for (unsigned i = 0; i < 0x200; i++) cb_memory[0x100 + i] = (unsigned char)(i * 7 + 1);
             stages[0].code = code; stages[0].control = vs_control; stages[1].code = code + 0x100; stages[1].control = fs_control;
             assert(set_shaders(program_memory, 2, stages) == 1);
+            {   // Keys cover the code (round191): one control section with two code variants gives two keys.
+                struct wonder_nvn_program_shaders a, b; char want[17];
+                assert(wonder_nvn_program_snapshot(program_memory, &a)); expected_key(vs_control, cb_memory + 0x100, want); assert(!strcmp(a.key[0], want));
+                static _Alignas(16) unsigned char other[0x90];
+                assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(other, device) == 1);
+                struct { uint64_t code; const void *control; } same_control[1] = {{code + 0x80, vs_control}};   // other bytes as vertex code (the fill repeats every 0x100)
+                assert(set_shaders(other, 1, same_control) == 1 && wonder_nvn_program_snapshot(other, &b));
+                expected_key(vs_control, cb_memory + 0x180, want); assert(!strcmp(b.key[0], want) && strcmp(a.key[0], b.key[0]));
+                ((void (*)(void *))slot("nvnProgramFinalize"))(other);
+            }
             // Control memory below the advertised minimum (256, sdk+0x441460) is legal on the release driver: round71 passes 0x80.
             {
                 static _Alignas(16) unsigned char scb[0xa0]; static _Alignas(8) unsigned char sctl[0x80];
@@ -861,10 +879,9 @@ int main(void) {
             void (*dsubmit)(void *, int, const uint64_t *) = slot("nvnQueueSubmitCommands");
             EXPECT_STOP(dsubmit(queue, 1, &draw), "NVN_SHADER_MISSING 1 programs");
             assert(strstr(last_stop, "census=DrawCensus"));
-            unsigned char digest[CC_SHA256_DIGEST_LENGTH]; char key[17];
-            CC_SHA256(vs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key + 2 * i, "%02x", digest[i]);
+            char key[17]; expected_key(vs_control, cb_memory + 0x100, key);
             assert(strstr(last_stop, key));
-            char fs_key[17], dir[40], file[96]; CC_SHA256(fs_control, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(fs_key + 2 * i, "%02x", digest[i]);
+            char fs_key[17], dir[40], file[96]; expected_key(fs_control, cb_memory + 0x200, fs_key);
             snprintf(dir, sizeof dir, "%s-%s", key, fs_key);   // one census directory per program (vs-fs keys)
             size_t n; snprintf(file, sizeof file, "%s/stage-0.control.bin", dir);
             const unsigned char *bytes = census_file(file, &n); assert(bytes && n == 0x880 && !memcmp(bytes, vs_control, 0x880));
@@ -904,8 +921,7 @@ int main(void) {
                 unsigned clears_before = host_clears, draws_before = host_draws, files_before = census_count;
                 EXPECT_STOP(dsubmit(queue, 1, &batch), "NVN_SHADER_MISSING 2 programs");
                 assert(host_clears == clears_before && host_draws == draws_before);   // nothing after the first missing draw ran
-                char key2[17], fkey2[17], dir2[40]; CC_SHA256(vs2, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(key2 + 2 * i, "%02x", digest[i]);
-                CC_SHA256(fs2, 0x880, digest); for (int i = 0; i < 8; i++) sprintf(fkey2 + 2 * i, "%02x", digest[i]);
+                char key2[17], fkey2[17], dir2[40]; expected_key(vs2, cb_memory + 0x100, key2); expected_key(fs2, cb_memory + 0x200, fkey2);
                 snprintf(dir2, sizeof dir2, "%s-%s", key2, fkey2); snprintf(file, sizeof file, "%s/draw.json", dir2);
                 assert(census_file(file, &n) && census_count == files_before + 6);   // program 2's 5 files + index.txt; program 1 was written earlier
                 const unsigned char *index = NULL; size_t index_size = 0;
@@ -987,7 +1003,7 @@ int main(void) {
               assert(((uint32_t (*)(void *, const void *))slot("nvnProgramInitialize"))(cs_program, device) == 1);
               struct { uint64_t code; const void *control; } cst[1] = {{code, cs_control}};
               assert(set_shaders(cs_program, 1, cst) == 1);
-              wonder_nvn_shader_key(cs_control, fake_cs_key);
+              expected_key(cs_control, cb_memory + 0x100, fake_cs_key);
               void (*bind)(void *, const void *, int) = slot("nvnCommandBufferBindProgram");
               void (*disp)(void *, int, int, int) = slot("nvnCommandBufferDispatchCompute");
               void (*bind_ubo)(void *, int, int, uint64_t, size_t) = slot("nvnCommandBufferBindUniformBuffer");

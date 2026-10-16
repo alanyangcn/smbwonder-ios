@@ -6,8 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 static const char *const stage_names[6] = {"vs", "fs", "gs", "tcs", "tes", "cs"};
-void wonder_nvn_shader_key(const void *control, char key[17]) {
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256(control, WONDER_NVN_SHADER_CONTROL_SIZE, digest);
+void wonder_nvn_shader_key(const void *control, const void *code, char key[17]) {
+    uint32_t length; memcpy(&length, (const uint8_t *)control + WONDER_NVN_CONTROL_CODE_LENGTH, 4);
+    CC_SHA256_CTX c; CC_SHA256_Init(&c); CC_SHA256_Update(&c, control, WONDER_NVN_SHADER_CONTROL_SIZE);
+    if (length) CC_SHA256_Update(&c, code, length);
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(digest, &c);
     for (int i = 0; i < 8; i++) snprintf(key + 2 * i, 3, "%02x", digest[i]);
 }
 struct out { char *data; size_t size, cap; int failed; };
@@ -42,7 +45,7 @@ int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct w
     unsigned mask = s->has_program ? s->program.mask & (d->compute ? 0x20u : 0x1fu) : 0;   // a draw's graphics stages, or a dispatch's compute stage
     if (!mask) { snprintf(summary, summary_size, "census=none (no %s program bound)", d->compute ? "compute" : "graphics"); return 0; }
     char keys[6][17] = {{0}}, dir[40];
-    for (unsigned stage = 0; stage < 6; stage++) if (mask & (1u << stage)) wonder_nvn_shader_key(s->program.control[stage], keys[stage]);
+    for (unsigned stage = 0; stage < 6; stage++) if (mask & (1u << stage)) memcpy(keys[stage], s->program.key[stage], 17);
     if (d->compute) snprintf(dir, sizeof dir, "cs-%s", keys[5]);
     else snprintf(dir, sizeof dir, "%s-%s", keys[0][0] ? keys[0] : "none", keys[1][0] ? keys[1] : "none");
     if (already_written(dir)) { snprintf(summary, summary_size, "census=DrawCensus/%s (written earlier this run)", dir); return 0; }

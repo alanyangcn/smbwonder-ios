@@ -8,7 +8,8 @@ BNSH layout (relative to the 'BNSH' magic, as found in SecredUber.Product.100.pr
   program: +0x08 u64 stage info offsets[6] (vertex, hull, domain, geometry, fragment, compute; 0 = absent);
   stage info: +0x08 u64 control offset, +0x10 u64 code offset, +0x18 u32 code size, +0x1c u32 control size (0x880).
 The control section starts with 0x98761234 and the code with 0x12345678 (graphics) or 0x12345679 (compute). Keys are the first 16 hex digits of
-sha256(control[0:0x880]), as runtime/nvn_draw_census.h computes them.
+sha256(control[0:0x880] || code[0:length]) with length = the u32 at control +0x704, as runtime/nvn_draw_census.h computes them (round191:
+a control section alone is shared by stages with different code).
 Output (<out>/): stages/<key>.control.bin, stages/<key>.code.bin, programs.json {"programs": [{"vs","fs"} | {"cs"}],
 "sources": {key: romfs path}}, census/<program>/ (see write_census) and census-dirs.txt.
 Usage: extract_shaders.py <wonder-romfs.wrom> --out <dir>
@@ -30,6 +31,7 @@ def romfs_entries(path):
         at += length; offset += size
 
 def u32(b, o): return struct.unpack_from('<I', b, o)[0]
+def stage_key(control, code): return hashlib.sha256(control[:0x880] + code[:u32(control, 0x704)]).hexdigest()[:16]
 def u64(b, o): return struct.unpack_from('<Q', b, o)[0]
 
 def bnsh_programs(data, base):
@@ -92,7 +94,7 @@ def extract(romfs, out):
                 keys = {}
                 for s, pair in enumerate(stages):
                     if not pair: continue
-                    control, code = pair; key = hashlib.sha256(control[:0x880]).hexdigest()[:16]; keys[STAGE_NAMES[s]] = key
+                    control, code = pair; key = stage_key(control, code); keys[STAGE_NAMES[s]] = key
                     if key not in sources:
                         sources[key] = name
                         (out / 'stages' / f'{key}.control.bin').write_bytes(control); (out / 'stages' / f'{key}.code.bin').write_bytes(code)

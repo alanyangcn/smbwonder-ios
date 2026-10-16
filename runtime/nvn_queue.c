@@ -284,7 +284,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     int depth_mode, origin; wonder_nvn_device_modes(&depth_mode, &origin);
     if (origin != 1) { snprintf(why, sizeof why, "window origin %d (only UPPER_LEFT matches the translated shaders)", origin); replay_stop(opcode, why); }
     static struct wonder_host_draw d; memset(&d, 0, sizeof d);
-    wonder_nvn_shader_key(draw_state.program.control[0], d.vs_key); wonder_nvn_shader_key(draw_state.program.control[1], d.fs_key);
+    memcpy(d.vs_key, draw_state.program.key[0], 17); memcpy(d.fs_key, draw_state.program.key[1], 17);
     if (!wonder_host_shader_available(d.vs_key) || !wonder_host_shader_available(d.fs_key)) {
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
         char pair[40]; snprintf(pair, sizeof pair, "%s-%s", d.vs_key, d.fs_key); note_missing(pair);
@@ -503,7 +503,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
         snprintf(why, sizeof why, "dispatch without a bound compute shader (stages %#x)", draw_state.program.mask); replay_stop(opcode, why);
     }
     static struct wonder_host_dispatch x; memset(&x, 0, sizeof x);
-    wonder_nvn_shader_key(draw_state.program.control[5], x.key);
+    memcpy(x.key, draw_state.program.key[5], 17);
     {   // Diagnostic (WONDER_SKIP_CS=<kernel key prefix>[,...]): leave the listed dispatches out (round177: does kernel
         // 45bc61e5, run since the offline build, make the game stop issuing colour passes?)
         const char *list = getenv("WONDER_SKIP_CS");
@@ -731,14 +731,14 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         else take = (bits & p.mask & 0x20) ? 0x20 : 0x1f;
         for (unsigned st = 0; st < 6; st++) if (take >> st & 1) {
             if (p.mask >> st & 1) { draw_state.program.code[st] = p.code[st]; draw_state.program.control[st] = p.control[st];
-                                    draw_state.program.extra[st] = p.extra[st]; draw_state.program.mask |= 1u << st; }
-            else { draw_state.program.code[st] = 0; draw_state.program.control[st] = NULL; draw_state.program.extra[st] = 0; draw_state.program.mask &= ~(1u << st); }
+                                    draw_state.program.extra[st] = p.extra[st]; memcpy(draw_state.program.key[st], p.key[st], 17); draw_state.program.mask |= 1u << st; }
+            else { draw_state.program.code[st] = 0; draw_state.program.control[st] = NULL; draw_state.program.extra[st] = 0; draw_state.program.key[st][0] = 0; draw_state.program.mask &= ~(1u << st); }
         }
         draw_state.program.serial = p.serial; draw_state.has_program = draw_state.program.mask != 0;
         {   // Diagnostic (WONDER_TRACE_VS): replayed binds of listed vertex shaders, and whether a draw follows (draw() logs it)
             const char *list = getenv("WONDER_TRACE_VS");
             if (list && *list && (draw_state.program.mask & 1)) {
-                char vs[17]; wonder_nvn_shader_key(draw_state.program.control[0], vs); trace_replay_vs = 0;
+                const char *vs = draw_state.program.key[0]; trace_replay_vs = 0;
                 for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) trace_replay_vs = 1; q += n; if (*q == ',') q++; }
                 static _Atomic unsigned logged;
                 if (trace_replay_vs && atomic_fetch_add(&logged, 1) < 200)

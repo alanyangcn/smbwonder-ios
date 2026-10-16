@@ -294,12 +294,26 @@ def reflect(census, stage_entry, job, res, msl, c1):
             lines.append(f"fout {color} {job['fout'].get(str(color), 'float')}")
     return '\n'.join(lines) + '\n'
 
+def stage_key(control, code):
+    """Stage key (runtime/nvn_draw_census.h): first 16 hex digits of sha256(control[0:0x880] || code[0:length]), length =
+    the u32 at control +0x704. Round191: 1395 control sections are shared by stages with different code."""
+    length = int.from_bytes(control[0x704:0x708], 'little')
+    if len(code) < length: raise ValueError(f'code is {len(code)} bytes, the control says {length}')
+    return sha(control[:0x880] + code[:length])[:16]
+
+def rekey(directory, census):
+    """Censuses written before round191 name stages by the control-only key: recompute every stage key from its bytes."""
+    for entry in census['program']['stages']:
+        control = (directory / f"stage-{entry['index']}.control.bin").read_bytes()
+        code = (directory / f"stage-{entry['index']}.code.bin").read_bytes()
+        entry['key'] = stage_key(control, code)
+
 def stage_job(directory, census, entry, tmp):
     """Census stage -> translator job (code written to tmp); ValueError when the stage cannot be built faithfully."""
     key = entry['key']
     control = (directory / f"stage-{entry['index']}.control.bin").read_bytes()
     code = (directory / f"stage-{entry['index']}.code.bin").read_bytes()
-    if sha(control[:0x880])[:16] != key: raise ValueError(f'{key}: control bytes do not hash to the census key')
+    if stage_key(control, code) != key: raise ValueError(f'{key}: control and code bytes do not hash to the stage key')
     # Graphics code = NVN header 0x30 (magic 78563412) + SPH 0x50 + instructions; the translator takes SPH + instructions.
     # Compute code = a 0x100-byte header (magic 79563412, the rest zero) + instructions (round136 cs-1fb9d970e6bbceb8:
     # instructions 0x4000 bytes from +0x100, c1 at +0x4100; the 58 compute controls in Lib/agl, Lib/gsys and Effect all
@@ -321,6 +335,8 @@ def build(census_dirs, out):
         tmp = Path(tmp)
         for directory in map(Path, census_dirs):
             raw = (directory / 'draw.json').read_bytes(); census = json.loads(raw); censuses.append(census)
+            try: rekey(directory, census)
+            except (OSError, ValueError) as error: early_failed[f'census {directory}'] = {'stage': '-', 'reason': str(error)[:300], 'census_sha256': sha(raw)}; continue
             for entry in census['program']['stages']:
                 key = entry['key']
                 if key in sources or key in early_failed: continue

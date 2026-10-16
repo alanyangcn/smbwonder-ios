@@ -274,7 +274,7 @@ static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct { const void *cb; char vs[17]; } trace_bound[64];
 static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *s) {
     static int on = -1; if (on < 0) on = getenv("WONDER_TRACE_VS") != NULL; if (!on) return;
-    char key[17] = ""; if (s && (s->mask & 1) && s->control[0]) wonder_nvn_shader_key(s->control[0], key);
+    char key[17] = ""; if (s && (s->mask & 1) && s->control[0]) memcpy(key, s->key[0], 17);
     pthread_mutex_lock(&trace_lock); int slot = -1;
     for (int i = 0; i < 64 && slot < 0; i++) if (trace_bound[i].cb == cb) slot = i;
     for (int i = 0; i < 64 && slot < 0; i++) if (!trace_bound[i].cb) slot = i;

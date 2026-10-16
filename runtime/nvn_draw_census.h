@@ -4,7 +4,10 @@
 // buffers, textures/samplers resolved through the bound pools, render targets, fixed-function state, depth/origin
 // modes) plus stage-<n>.control.bin (0x880 bytes) and stage-<n>.code.bin (control +0x704 bytes from the code
 // address: NVN header 0x30 + SPH 0x50 + instructions + c1; +0x700 is where c1 starts).
-// Key = first 16 hex digits of sha256(control[0:0x880]) (same rule as D2R dm_ctl_sha16).
+// Key = first 16 hex digits of sha256(control[0:0x880] || code[0:length]), length = the u32 at control +0x704 (round191:
+// 1395 of SecredUber's 6494 control sections are shared by stages whose code differs, 2552 extra code variants; a
+// control-only key ran the course hedges' depth pre-pass b4c6c67e with another variant's code, -c4[8].y in place of
+// +c4[8].x, so their EQUAL colour passes never matched).
 #include "nvn_texture.h"
 #include "nvn_state.h"
 #include "nvn_commands.h"
@@ -29,7 +32,8 @@ struct wonder_nvn_draw_call { const char *name; int primitive, index_type, count
 // shared memory bytes at +0x710 (0x400 where the shader uses shared memory, 0 otherwise).
 #define WONDER_NVN_CONTROL_LOCAL_SIZE 0x748
 #define WONDER_NVN_CONTROL_SHARED_SIZE 0x710
-void wonder_nvn_shader_key(const void *control, char key[17]);
+#define WONDER_NVN_CONTROL_CODE_LENGTH 0x704
+void wonder_nvn_shader_key(const void *control, const void *code, char key[17]);   // code: the stage's code bytes (length from the control)
 // 1 = census written now, 0 = nothing written (no program bound, or this program already written this run), -1 = a write failed.
 // summary receives "census=DrawCensus vs=<key> fs=<key>" (or the reason nothing was written).
 int wonder_nvn_draw_census(const struct wonder_nvn_draw_state *s, const struct wonder_nvn_draw_call *d, char *summary, size_t summary_size);

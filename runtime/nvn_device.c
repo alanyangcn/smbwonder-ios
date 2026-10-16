@@ -678,8 +678,12 @@ static uint32_t program_set_shaders(void *program, int count, const uint8_t *sta
         if (magic != SHADER_CONTROL_MAGIC || stage > 5)
             wonder_nvn_stop("NVN_UNSUPPORTED %s stage %d control magic=%#x stage=%u", who, i, magic, stage);
         if (next.mask & (1u << stage)) wonder_nvn_stop("NVN_INVALID_ARGUMENT %s duplicate shader stage %u", who, stage);
-        struct wonder_nvn_pool_view view; wonder_nvn_address_span(code, 4, &view);   // code must live in a GPU pool
+        uint32_t length; memcpy(&length, control + WONDER_NVN_CONTROL_CODE_LENGTH, 4);
+        struct wonder_nvn_pool_view view; wonder_nvn_address_span(code, length ? length : 4, &view);   // code must live in a GPU pool
+        if (length && (view.size < length || !view.memory))
+            wonder_nvn_stop("NVN_INVALID_ARGUMENT %s stage %d code=%#llx length %#x is not readable in one pool", who, i, (unsigned long long)code, length);
         next.mask |= 1u << stage; next.code[stage] = code; next.control[stage] = control; next.extra[stage] = extra;
+        wonder_nvn_shader_key(control, view.memory, next.key[stage]);
     }
     static _Atomic uint64_t serial;
     next.serial = atomic_fetch_add(&serial, 1) + 1;
@@ -691,7 +695,7 @@ static uint32_t program_set_shaders(void *program, int count, const uint8_t *sta
         // the course hedge's colour programs?)
         const char *list = getenv("WONDER_TRACE_VS");
         if (list && *list && (next.mask & 1)) {
-            char vs[17], fs[17] = "-"; wonder_nvn_shader_key(next.control[0], vs); if (next.mask & 2) wonder_nvn_shader_key(next.control[1], fs);
+            const char *vs = next.key[0], *fs = (next.mask & 2) ? next.key[1] : "-";
             for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) {
                 extern void (*wonder_nvn_frames_hook)(uint64_t fp, uint64_t lr, char *out, size_t size);
                 char chain[700] = "";

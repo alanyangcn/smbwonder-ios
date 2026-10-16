@@ -1,7 +1,7 @@
 """Offline shader build from a draw census: keys, facts, reflection lines, MSL 3.2 flags.
 Pure helpers always run; the end-to-end build needs work/ tools and a census (WONDER_CENSUS or round53)."""
 from pathlib import Path
-import importlib.util, json, os, tempfile, unittest
+import hashlib, importlib.util, json, os, tempfile, unittest
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('wonder_shader_build', ROOT / 'tools/wonder_shader_build.py')
 build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
@@ -98,13 +98,23 @@ class PureHelpers(unittest.TestCase):
     def test_texture_target_names(self):
         self.assertEqual(build.texture_type(1), '2d'); self.assertEqual(build.texture_type(8), 'cube'); self.assertEqual(build.texture_type(4), '2darray')
 
+class StageKey(unittest.TestCase):
+    def test_key_covers_code(self):
+        """Round191: one control section with two code variants (as SecredUber's 1395 shared controls) gives two keys."""
+        control = bytearray(0x880); control[0x704:0x708] = (8).to_bytes(4, 'little')
+        a, b = build.stage_key(bytes(control), b'\x78\x56\x34\x12AAAA'), build.stage_key(bytes(control), b'\x78\x56\x34\x12BBBB')
+        self.assertNotEqual(a, b)
+        self.assertEqual(a, hashlib.sha256(bytes(control) + b'\x78\x56\x34\x12AAAA').hexdigest()[:16])
+        self.assertEqual(build.stage_key(bytes(control), b'\x78\x56\x34\x12AAAAtail'), a)   # bytes past the length do not count
+        with self.assertRaises(ValueError): build.stage_key(bytes(control), b'short')
+
 @unittest.skipUnless(TOOLS and (CENSUS / 'draw.json').exists(), 'needs work/ translator, spirv-cross and a draw census')
 class CensusBuild(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory(); cls.out = Path(cls.tmp.name)
         build.build([CENSUS], cls.out)
-        cls.census = json.loads((CENSUS / 'draw.json').read_text())
+        cls.census = json.loads((CENSUS / 'draw.json').read_text()); build.rekey(CENSUS, cls.census)   # round191 keys cover the code
         cls.manifest = json.loads((cls.out / 'manifest.json').read_text())
         cls.keys = {s['name']: s['key'] for s in cls.census['program']['stages']}
     @classmethod
