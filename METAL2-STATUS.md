@@ -34,7 +34,11 @@
     - **声音**：sdk 进程内 DSP 把 DeviceSink（0x13）当空操作（真机由 ADSP 固件送到输出设备）。宿主在每个命令列表处理后读出 DeviceSink 的输入（游戏的 MainAudioOut 读上采样器的 48 kHz 输出，2 声道），经 RemoteIO（48 kHz 立体声 float，SoloAmbient：静音键生效）输出。round143：输出回调 932 次仅 3 次欠载、环形缓冲约 19 ms。
     - **性能**：采样纹理每次 draw 都对整块存储做 FNV 哈希（关卡里每帧上百 MB）→ 改为写保护脏页跟踪（`page_guard.c`：上传后把纹理页设为只读，CPU 写入触发异常→标脏→放开页、重试写入；romfs/存档读文件前先放开目标页）。关卡帧率 5 fps → **约 41 fps**（标题 60 fps）。
     - **实际游玩**：脚本支持按住区间（`RIGHT@150-480`），`A/2.5@25-150,RIGHT@150-480,Y@150-480,A/1.5@151-480` 让角色在开场关卡里向右冲刺跳跃，开场标志动画正常出现。
-    - 仍缺：部分背景（远景天空、地面）仍是黑块/纯色——普查扫描轮次跳过的着色器，逐轮折叠；按键图标“?”（任天堂扩展字体）。
+    - 仍缺：部分背景（远景天空、地面）仍是黑块/纯色；按键图标“?”（任天堂扩展字体）。
+  - round144–145（继续追换场景闪退）：
+    - 闪退仍在（round145 在开场标志后的场景切换，present ~6300；round144 同处变成停在加载转圈）。绑定对象由 main+0x5775dc 初始化：按 `Model/<名>.bfres`（main+0x41d16c，格式串 main+0x2a7e4b2）在 `"DistanceView"` 类别里找已加载模型，找不到就把 +0x40 留空，之后 main+0x8f68a8 不判空直接取。`"DistanceView"` 是远景（DV）模块（main+0x657b44 创建的单例，vtable 0x35f0510，与崩溃对象同一类族）。
+    - **关键事实**：开场关卡的远景主模型 `Model/DVHajimariSougen.bfres.zs`（15 MB）、`DVCommonEnkeiCastleFlower`（8.6 MB）、`DVHajimariSougenWonderDokan` 在 RomFS 里都有，游戏**从未打开**（同组小文件 `…Anm` 却读了；20 MB 的其它文件正常读取）——截图里的大片黑块正是远景层。所以根因是远景模块没有去加载它的模型（不是读文件失败）；崩溃与黑背景同源。下一步：找远景模块启用/加载模型的条件（它读的设置、内存块或 GPU 能力查询）。
+    - 加载转圈时的“轮询”线程 0x1029/0x1020 是消息循环（main+0x66bf10 → 处理函数 vtable+0x88）里的 SleepThread，属正常空转；`KERNEL_RUNNING` 现已带宿主符号与 SleepThread 的客体调用链。崩溃时转储 x0–x28 与 x19 对象（`GUEST_FAULT_REGS` / `GUEST_FAULT_X19`）。
   - 脚本按键后 1.5 s 自动截图（`Documents/Present/present-<帧>.png`，日志 `HOST_PRESENT_CAPTURE ... requested`）。
   - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
