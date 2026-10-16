@@ -6,6 +6,7 @@
 #include "dm.h"
 #include "sysreg_emul.h"
 #include "page_guard.h"
+#include "access_watch.h"
 #include <stdatomic.h>
 #include <signal.h>
 #include <stdio.h>
@@ -70,6 +71,15 @@ static void handler(int sig, siginfo_t *info, void *context) {
     // kill() from the SDK abort observer (sdk_services.c) re-delivers a fault process-wide; the faulting
     // instruction re-executes and reaches this handler on its own thread, so user-sent copies are ignored.
     if (info->si_code == SI_USER) return;
+    if (sig == SIGSEGV || sig == SIGBUS) {   // diagnostic access watch (access_watch.c): log who touched the page, then go on
+        char label[48];
+        if (wonder_access_fault((uintptr_t)info->si_addr, label, sizeof label)) {
+            ucontext_t *u = context; char where[160], caller[160];
+            host_describe(where, sizeof where, u->uc_mcontext->__ss.__pc); host_describe(caller, sizeof caller, u->uc_mcontext->__ss.__lr);
+            LOG("HOST_ACCESS_WATCH %s address=%p pc=%s lr=%s", label, info->si_addr, where, caller);
+            return;
+        }
+    }
     if ((sig == SIGSEGV || sig == SIGBUS) && wonder_guard_fault((uintptr_t)info->si_addr)) return;   // write-watched page (page_guard.c)
     ucontext_t *uc = context;
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;

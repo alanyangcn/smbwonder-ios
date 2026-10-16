@@ -4,6 +4,7 @@
 // copies/downsamples/clears, non-timestamp counters (TIMESTAMP and TIMESTAMP_TOP run), conditional rendering: replay stops by name before any
 // of them is skipped or faked. Host backend: host_graphics.m (device) or the test harness.
 #include "gpu_gate.h"
+#include "access_watch.h"
 #include "nvn_commands.h"
 #include "nvn_tex.h"
 #include "nvn_draw_census.h"
@@ -118,6 +119,24 @@ static void *target_texture(const struct wonder_nvn_texture_snapshot *s, unsigne
     if (!(fit == 1 || (fit == 2 && depth))) replay_stop(opcode, "render target format has no exact Metal render format");
     void *host = wonder_host_render_target(t, mtl);
     if (!host) replay_stop(opcode, "host render target creation failed");
+    {   // Diagnostic (WONDER_WATCH_RT=<W>x<H>[,...]): the pool memory of render targets of those sizes is access-watched
+        // (access_watch.h), once per storage: does the CPU read what the GPU renders there? (round180)
+        const char *list = getenv("WONDER_WATCH_RT");
+        if (list && *list) {
+            char size[24]; snprintf(size, sizeof size, "%ux%u", t->desc.width, t->desc.height);
+            int listed = 0; for (const char *q = list; *q && !listed; ) { size_t n = strcspn(q, ","); listed = n == strlen(size) && !strncmp(q, size, n); q += n; if (*q == ',') q++; }
+            static struct { const void *pool; int64_t offset; } armed[128]; static unsigned narmed;
+            int known = 0; for (unsigned i = 0; i < narmed && !known; i++) known = armed[i].pool == t->pool && armed[i].offset == t->offset;
+            if (listed && !known && narmed < 128) {
+                struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->pool, (uint64_t)t->offset, t->size, &v);
+                char label[48]; snprintf(label, sizeof label, "rt %s fmt %#x serial %llu", size, t->desc.format, (unsigned long long)t->serial);
+                if (v.memory && wonder_access_watch(v.memory, t->size, label)) {
+                    armed[narmed].pool = t->pool; armed[narmed].offset = t->offset; narmed++;
+                    wonder_nvn_report("NVN_WATCH_RT armed %s at %p size %#llx", label, v.memory, (unsigned long long)t->size);
+                }
+            }
+        }
+    }
     return host;
 }
 static void view_level_slice(const struct wonder_nvn_texture_snapshot *s, int *level, int *slice) {
