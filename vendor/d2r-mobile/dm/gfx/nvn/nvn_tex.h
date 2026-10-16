@@ -15,6 +15,10 @@ typedef struct {
     unsigned tileH, tileD;                // 块高 / 块深（log2 GOB 数） | Block height / block depth (log2 of the GOB count)
 } nvn_texlayout;
 
+// Pitch (linear) layout: NVN_TEXTURE_FLAGS_LINEAR (0x10) or NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET (0x40). Wonder round158:
+// 64x1 RGBA16F sky tables flagged 0x40 alone hold their 512 bytes in row order (block-linear reading kept only the
+// first 64 bytes, so the scene's ambient light was black and far terrain showed only the blue fog colour).
+static inline int nvn_tex_is_linear(const nvn_texdesc *d) { return (d->flags & 0x50) != 0; }
 void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o);
 uint64_t nvn_tex_level_offset(const nvn_texdesc *d, unsigned level);
 int nvn_fmt_bpb(int format, int *bw, int *bh);   // 每块字节（0 = 未知格式），块宽高 | Bytes per block (0 = unknown format), block width and height

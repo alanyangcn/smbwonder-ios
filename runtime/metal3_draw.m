@@ -196,7 +196,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     // Pitch-linear, single-level 2D textures are views of the pool's own MTLBuffer: CPU writes (the font glyph cache,
     // 16 MiB, rewritten as text appears) reach the GPU without an upload, and nothing is hashed per draw (hashing it
     // on every text draw stalled every screen with text, round128).
-    if (!tex && (t->desc.flags & 0x10) && (t->desc.target == 1 || t->desc.target == 7) && t->desc.levels <= 1 && d->tex[stage][slot].storage_buffer) {
+    if (!tex && nvn_tex_is_linear(&t->desc) && (t->desc.target == 1 || t->desc.target == 7) && t->desc.levels <= 1 && d->tex[stage][slot].storage_buffer) {
         NSNumber *key = @(t->serial);
         pthread_mutex_lock(&sampled_lock); if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; }
         tex = sampled[key]; pthread_mutex_unlock(&sampled_lock);
@@ -223,7 +223,7 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         }
     }
     if (!tex) {
-        int target = t->desc.target, linear = (t->desc.flags & 0x10) != 0;   // NVN_TEXTURE_FLAGS_LINEAR: pitch layout, desc.stride bytes per row
+        int target = t->desc.target, linear = nvn_tex_is_linear(&t->desc);   // NVN_TEXTURE_FLAGS_LINEAR / LINEAR_RENDER_TARGET: pitch layout, desc.stride bytes per row
         if (target != 1 && target != 2 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 3D / 2D array / rectangle so far)", target);
         if (linear && (target == 2 || target == 4 || t->desc.levels > 1)) unsupported(d, "pitch-linear texture with layers, depth or mips, serial", (long)t->serial);
         if (!d->tex[stage][slot].storage) unsupported(d, "sampled texture without CPU storage, serial", (long)t->serial);
