@@ -723,6 +723,21 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
         }
     }
 }
+// Diagnostic lists of fragment key prefixes ("a,b,c") in an environment variable; logs the first match per variable.
+static int diag_fs_listed(const struct wonder_host_draw *d, const char *var) {
+    const char *list = getenv(var); if (!list || !*list) return 0;
+    for (const char *p = list; *p; ) {
+        size_t n = strcspn(p, ",");
+        if (n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n)) {
+            static NSMutableSet *seen; if (!seen) seen = [NSMutableSet set];
+            NSString *k = [NSString stringWithFormat:@"%s:%s", var, d->fs_key];
+            if (![seen containsObject:k]) { [seen addObject:k]; fprintf(stderr, "HOST_DIAG %s applies to fs=%s vs=%s\n", var, d->fs_key, d->vs_key); }
+            return 1;
+        }
+        p += n; if (*p == ',') p++;
+    }
+    return 0;
+}
 int wonder_host_draw(const struct wonder_host_draw *d) {
     if (!device) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED no Metal device (vs=%s fs=%s)", d->vs_key, d->fs_key);
     // Fixed-function checks that need shader-side emulation are refused, not approximated.
@@ -816,6 +831,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_LEQUAL"); on = e && *e == '1'; }
         if (on && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled) dd.depthCompareFunction = MTLCompareFunctionLessEqual;
     }
+    if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) dd.depthCompareFunction = MTLCompareFunctionAlways;   // diagnostic: depth test off for listed fragment shaders
     NSData *ds_key = [NSData dataWithBytes:(uint32_t[]){(uint32_t)dd.depthCompareFunction, dd.depthWriteEnabled} length:8];
     id<MTLDepthStencilState> dss = depth_states[ds_key];
     if (!dss) { dss = [device newDepthStencilStateWithDescriptor:dd]; depth_states[ds_key] = dss; }
@@ -936,6 +952,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     x.index_type = d->index_type; x.count = d->count; x.first = d->first; x.instances = d->instances; x.base_instance = d->base_instance; x.base_vertex = d->base_vertex;
     memcpy(x.blend_color, d->blend_color, sizeof x.blend_color);
     x.depth_clamp = d->depth_clamp; x.bias = d->depth_bias_enabled; x.bias_units = d->depth_bias; x.bias_slope = d->depth_bias_slope; x.bias_clamp = d->depth_bias_clamp;
+    if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) cull = MTLCullModeNone;   // diagnostic (with the depth test above)
     x.cull = cull; x.winding = winding; x.viewport = vp; x.scissor = scissor; x.primitive = primitive; x.itype = itype; x.ib_offset = ib_offset; x.uses_default = uses_default;
     NSString *label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
     NSArray *vbufs = bufs[0], *fbufs = bufs[1], *vtex = stage_textures[0], *ftex = stage_textures[1], *vsmp = stage_samplers[0], *fsmp = stage_samplers[1];
