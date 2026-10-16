@@ -383,6 +383,7 @@ static id<MTLSamplerState> sampler_state(const struct wonder_host_draw *d, const
         else unsupported(d, "sampler reduction filter (needs iOS 26)", m->reduction);
     }
     sd.maxAnisotropy = m->anisotropy >= 1 ? (NSUInteger)m->anisotropy : 1;
+    sd.supportArgumentBuffers = YES;   // samplers 16.. are referenced from an argument buffer (smpov)
     if (m->compare_mode) sd.compareFunction = compare(d, m->compare_func);
     s = [device newSamplerStateWithDescriptor:sd];
     if (!s) unsupported(d, "sampler creation", 0);
@@ -486,6 +487,7 @@ struct draw_copy { __unsafe_unretained id<MTLBuffer> src; NSUInteger src_offset;
 struct draw_encoding {
     NSUInteger index[2][32], offset[2][32]; int nb[2];
     uint8_t tex_index[2][40], smp_index[2][40]; int ntex[2];
+    int smp_overflow[2]; uint64_t smp_ids[2][32];   // samplers 16..47: MTLResourceIDs set as bytes at [[buffer(smp_overflow)]]
     NSUInteger stream_index[16], stream_offset[16]; int nstreams;
     int index_type, count, first, instances, base_instance, base_vertex, bias, uses_default, depth_clamp;
     float blend_color[4], bias_units, bias_slope, bias_clamp;
@@ -901,7 +903,12 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ntex; i++) {
         [stage_textures[stage] addObject:textures[stage][i]]; [stage_samplers[stage] addObject:sampler_states[stage][i]];
         x.tex_index[stage][i] = refl[stage]->tex[i].texture; x.smp_index[stage][i] = refl[stage]->tex[i].sampler; x.ntex[stage] = refl[stage]->ntex;
+        if (x.smp_index[stage][i] >= 16) {
+            if (refl[stage]->smp_overflow < 0 || x.smp_index[stage][i] >= 48) unsupported(d, "sampler binding past 15 without an argument buffer", x.smp_index[stage][i]);
+            id<MTLSamplerState> st = sampler_states[stage][i]; x.smp_ids[stage][x.smp_index[stage][i] - 16] = st.gpuResourceID._impl;
+        }
     }
+    for (int stage = 0; stage < 2; stage++) x.smp_overflow[stage] = refl[stage]->smp_overflow;
     NSMutableArray *streams = [NSMutableArray array];
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
         id<MTLBuffer> b = stream_copies[s] ?: (__bridge id<MTLBuffer>)d->stream[s].span.buffer;
@@ -935,9 +942,12 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
             else [e setVertexBuffer:vbufs[i] offset:x.offset[stage][i] atIndex:x.index[stage][i]];
         }
         for (int stage = 0; stage < 2; stage++) for (int i = 0; i < x.ntex[stage]; i++) {
-            if (stage) { [e setFragmentTexture:ftex[i] atIndex:x.tex_index[stage][i]]; [e setFragmentSamplerState:fsmp[i] atIndex:x.smp_index[stage][i]]; }
-            else { [e setVertexTexture:vtex[i] atIndex:x.tex_index[stage][i]]; [e setVertexSamplerState:vsmp[i] atIndex:x.smp_index[stage][i]]; }
+            int si = x.smp_index[stage][i];
+            if (stage) { [e setFragmentTexture:ftex[i] atIndex:x.tex_index[stage][i]]; if (si < 16) [e setFragmentSamplerState:fsmp[i] atIndex:si]; }
+            else { [e setVertexTexture:vtex[i] atIndex:x.tex_index[stage][i]]; if (si < 16) [e setVertexSamplerState:vsmp[i] atIndex:si]; }
         }
+        if (x.smp_overflow[1] >= 0) [e setFragmentBytes:x.smp_ids[1] length:sizeof x.smp_ids[1] atIndex:(NSUInteger)x.smp_overflow[1]];
+        if (x.smp_overflow[0] >= 0) [e setVertexBytes:x.smp_ids[0] length:sizeof x.smp_ids[0] atIndex:(NSUInteger)x.smp_overflow[0]];
         if (x.uses_default) [e setVertexBuffer:zeros offset:0 atIndex:WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
         for (int i = 0; i < x.nstreams; i++) [e setVertexBuffer:streams[i] offset:x.stream_offset[i] atIndex:x.stream_index[i]];
         if (x.index_type < 0) [e drawPrimitives:x.primitive vertexStart:(NSUInteger)x.first vertexCount:(NSUInteger)x.count instanceCount:(NSUInteger)x.instances baseInstance:(NSUInteger)x.base_instance];

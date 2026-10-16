@@ -13,6 +13,7 @@ struct wonder_shader_refl {
     int stage;                                               // 0 vertex, 1 fragment, 5 compute (NVNshaderStage)
     int ncbuf; struct { uint8_t slot, buffer; } cbuf[14];    // NVN uniform slot r -> [[buffer(n)]]
     int support;                                             // Ryujinx support buffer [[buffer(n)]], -1 = none
+    int smp_overflow;                                        // samplers 16..47: argument buffer [[buffer(n)]] of MTLResourceIDs (smpov), -1 = none
     int c1_buffer; uint16_t c1_len; uint8_t c1[4096];         // shader's own constants (c[1]) -> [[buffer(n)]], -1 = none
     // NVN texture slot r -> [[texture]] / [[sampler]]; bindless entries (handle read from uniform slot ubo_slot at byte
     // offset) use slots 32 + n.

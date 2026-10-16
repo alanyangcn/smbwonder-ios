@@ -20,7 +20,7 @@ int wonder_shader_format_class(int f) {
     }
 }
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *r, char *err, size_t n) {
-    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
+    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->smp_overflow = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
     size_t at = 0; unsigned line_no = 0;
     while (at < size) {
         size_t end = at; while (end < size && text[end] != '\n') end++;
@@ -65,6 +65,9 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
         } else if (!strcmp(kind, "support")) {
             if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= buffers) return fail(err, n, "support line %u: bad buffer", line_no);
             r->support = a;
+        } else if (!strcmp(kind, "smpov")) {   // samplers 16.. read from an argument buffer (wonder_shader_build.py sampler_overflow)
+            if (sscanf(line, "smpov %d", &a) != 1 || a < 0 || a >= buffers) return fail(err, n, "smpov line %u: bad buffer", line_no);
+            r->smp_overflow = a;
         } else if (!strcmp(kind, "c1")) {
             if (sscanf(line, "c1 %d %8199s", &a, word) != 2 || a < 0 || a >= buffers) return fail(err, n, "c1 line %u: bad buffer", line_no);
             size_t hex = strcmp(word, "-") ? strlen(word) : 0;
@@ -86,15 +89,15 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
                 r->drv0_buffer = b;
             } else r->drv_read |= (uint8_t)(1u << a);
         } else if (!strcmp(kind, "tex")) {
-            if (sscanf(line, "tex %d %d %d %15s", &a, &b, &c, word) != 4 || a < 0 || a > 31 || b < 0 || b > 95 || c < 0 || c > 15 || r->ntex >= 40)
-                return fail(err, n, "tex line %u: slot 0..31, texture 0..95, sampler 0..15", line_no);
+            if (sscanf(line, "tex %d %d %d %15s", &a, &b, &c, word) != 4 || a < 0 || a > 31 || b < 0 || b > 95 || c < 0 || c > 47 || (c > 15 && r->smp_overflow < 0) || r->ntex >= 40)
+                return fail(err, n, "tex line %u: slot 0..31, texture 0..95, sampler 0..15 (16..47 after an smpov line)", line_no);
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "tex line %u: unknown texture type '%s'", line_no, word);
             r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)a, (uint8_t)b, (uint8_t)c, (uint8_t)t, 0, 0, 0}; r->ntex++;
         } else if (!strcmp(kind, "btex")) {
             int ubo = -1, offset = -1, tx = -1, sm = -1, bindless = 0;
             for (int i = 0; i < r->ntex; i++) bindless += r->tex[i].bindless;
             if (sscanf(line, "btex %d %d %d %d %15s", &ubo, &offset, &tx, &sm, word) != 5 || ubo < 0 || ubo > 13 || offset < 0 || offset > 0x10000 - 4 || (offset & 3) ||
-                tx < 0 || tx > 95 || sm < 0 || sm > 15 || r->ntex >= 40 || bindless >= 8)
+                tx < 0 || tx > 95 || sm < 0 || sm > 47 || (sm > 15 && r->smp_overflow < 0) || r->ntex >= 40 || bindless >= 8)
                 return fail(err, n, "btex line %u: uniform slot 0..13, offset within 64 KiB, at most 8", line_no);
             int t = texture_type_of(word); if (t < 0) return fail(err, n, "btex line %u: unknown texture type '%s'", line_no, word);
             r->tex[r->ntex] = (struct wonder_shader_tex){(uint8_t)(32 + bindless), (uint8_t)tx, (uint8_t)sm, (uint8_t)t, 1, (uint8_t)ubo, (uint16_t)offset}; r->ntex++;

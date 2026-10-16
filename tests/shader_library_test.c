@@ -63,6 +63,11 @@ int main(void) {
     assert(!parse("stage ps\ndrv 2\n", &r, err) && r.drv_read == 4 && r.drv0_buffer == -1);              // c[2] at run time: not fillable
     assert(parse("stage ps\ndrv 2 3\n", &r, err) && strstr(err, "drv"));
     assert(parse("stage vs\ndrv 0 15\n", &r, err) && strstr(err, "drv"));                                 // vertex buffers 0..14
+    // Samplers past 15 only after an smpov line (round163: argument buffer of sampler MTLResourceIDs).
+    assert(parse("stage ps\ntex 0 1 16 2d\n", &r, err) && strstr(err, "sampler 0..15"));
+    assert(!parse("stage ps\nsmpov 30\ntex 0 1 16 2d\n", &r, err) && r.smp_overflow == 30 && r.tex[0].sampler == 16);
+    assert(parse("stage ps\nsmpov 30\ntex 0 1 48 2d\n", &r, err));
+    assert(!parse("stage ps\ntex 0 1 1 2d\n", &r, err) && r.smp_overflow == -1);
     // NVN format component classes (nvn.h: ...UI uint, ...I sint, everything else float).
     assert(wonder_shader_format_class(0x27) == WONDER_SHADER_UINT && wonder_shader_format_class(0x3E) == WONDER_SHADER_UINT);   // RGBA8UI, RGB10A2UI
     assert(wonder_shader_format_class(0x30) == WONDER_SHADER_SINT && wonder_shader_format_class(0x6A) == WONDER_SHADER_SINT);   // RGBA32I, RGB10A2I

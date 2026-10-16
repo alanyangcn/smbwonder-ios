@@ -155,14 +155,38 @@ def pad_vertex_outputs(msl, wanted):
     extra = ''.join(f'\n    {t} wonder_unwritten_locn{loc} [[user(locn{loc})]];' for loc, t in sorted(needed.items()) if loc not in written)
     return msl[:m.end(2)] + extra + msl[m.end(2):]
 
+SAMPLER_SLOTS = 16   # Metal's per-stage sampler bindings; more go through an argument buffer (sampler_overflow)
+
+def sampler_overflow(msl):
+    """Samplers [[sampler(16..47)]] of a fragment entry move into an argument buffer `constant WonderSamplers&` at the
+    highest free [[buffer(n)]]: the host writes their MTLResourceIDs there (round163: course ground fs 5fdc2502 binds
+    17 samplers; left out, its draws were skipped and the ground showed the clear colour). Returns (msl, buffer or None)."""
+    m = re.search(r'^(fragment) \w+ main0\((.*)\)$', msl, re.M)
+    if not m: return msl, None
+    params = m.group(2)
+    over = [(name, int(i)) for name, i in re.findall(r', sampler (\w+) \[\[sampler\((\d+)\)\]\]', params) if int(i) >= SAMPLER_SLOTS]
+    if not over: return msl, None
+    if max(i for _, i in over) > 47: raise ValueError('sampler binding beyond 47')
+    used = {int(b) for b in re.findall(r'\[\[buffer\((\d+)\)\]\]', params)}
+    free = [b for b in range(30, -1, -1) if b not in used]
+    if not free: raise ValueError('no free [[buffer(n)]] for the sampler argument buffer')
+    buffer = free[0]; count = max(i for _, i in over) - SAMPLER_SLOTS + 1
+    for name, i in over: params = params.replace(f', sampler {name} [[sampler({i})]]', '')
+    params += f', constant WonderSamplers& wonder_smp [[buffer({buffer})]]'
+    head, body = msl[:m.start()], msl[m.end():]
+    for name, i in over: body = re.sub(rf'\b{name}\b', f'wonder_smp.s[{i - SAMPLER_SLOTS}]', body)
+    decl = f'struct WonderSamplers\n{{\n    sampler s[{count}];\n}};\n// wonder_sampler_overflow {buffer} ' + ','.join(str(i) for _, i in over) + '\n\n'
+    return head + decl + f'{m.group(1)} main0_out main0({params})' + body, buffer
+
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
     m = re.search(r'^(vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
     if not m: raise ValueError('no vertex/fragment/kernel main0 entry in MSL')
     params = m.group(2)
+    ov = re.search(r'^// wonder_sampler_overflow (\d+) ([\d,]+)$', msl, re.M)
     return ({int(b) for b in re.findall(r'\[\[buffer\((\d+)\)\]\]', params)},
             {int(b) for b in re.findall(r'\[\[texture\((\d+)\)\]\]', params)},
-            {int(b) for b in re.findall(r'\[\[sampler\((\d+)\)\]\]', params)},
+            {int(b) for b in re.findall(r'\[\[sampler\((\d+)\)\]\]', params)} | ({int(i) for i in ov.group(2).split(',')} if ov else set()),
             sorted(int(a) for a in re.findall(r'\[\[attribute\((\d+)\)\]\]', msl)))
 
 def job_for(census, stage_entry, code_path):
@@ -196,8 +220,10 @@ def reflect(census, stage_entry, job, res, msl, c1):
     buffers, textures, samplers, attributes = entry_bindings(msl)
     # Metal limits per stage: 31 textures, 16 samplers (round153: 12 offline stages bind samplers past 15).
     if any(t > 30 for t in textures): raise ValueError(f'texture binding {max(textures)} beyond Metal [[texture(30)]]')
-    if any(s_ > 15 for s_ in samplers): raise ValueError(f'sampler binding {max(samplers)} beyond Metal\'s 16 samplers per stage')
+    ov = re.search(r'^// wonder_sampler_overflow (\d+) ', msl, re.M)
+    if not ov and any(s_ > 15 for s_ in samplers): raise ValueError(f'sampler binding {max(samplers)} beyond Metal\'s 16 samplers per stage')
     stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set()
+    if ov: lines.append(f'smpov {ov.group(1)}'); used.add(int(ov.group(1)))   # samplers 16.. in the argument buffer (sampler_overflow)
     if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
     if job['stage'] == 'cs': lines += ['local ' + ' '.join(map(str, job['local'])), f"shared {job['shared']}"]
     for cb in res['cbufs']:
@@ -325,6 +351,7 @@ def build(census_dirs, out):
                 res = json.loads((tmp / f'{key}.res.json').read_text())
                 if res['notes']: raise ValueError(f'translator notes {res["notes"]}')
                 msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
+                msl, _ = sampler_overflow(msl)
                 refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
             except (ValueError, subprocess.CalledProcessError) as error:
                 manifest['failed'][key] = {'stage': job['stage'], 'reason': str(error)[:300], 'census_sha256': census_sha}
