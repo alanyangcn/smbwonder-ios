@@ -34,6 +34,38 @@ static void host_describe(char *out, size_t n, uint64_t pc) {   // guest module 
         else snprintf(out, n, "%s+%#llx", base, (unsigned long long)(pc - (uint64_t)d.dli_fbase));
     } else snprintf(out, n, "%#llx", (unsigned long long)pc);
 }
+// Guest fault evidence: x0..x28, and for each register and each of the first 16 words of the object x19 points to (C++
+// `this` in most callee frames) the C string at that address when it is readable and printable (round143: which model a
+// failed "Model/%s.bfres" lookup wanted).
+static int safe_read(uint64_t address, void *out, size_t size) {
+    vm_size_t got = 0;
+    return address && vm_read_overwrite(mach_task_self(), (vm_address_t)address, size, (vm_address_t)out, &got) == KERN_SUCCESS && got == size;
+}
+static void printable(uint64_t address, char *out, size_t n) {
+    char b[48]; out[0] = 0;
+    if (!safe_read(address, b, sizeof b - 1)) return;
+    b[sizeof b - 1] = 0; size_t len = 0;
+    while (len < sizeof b - 1 && b[len] >= 0x20 && b[len] < 0x7f) len++;
+    if (len >= 4 && (b[len] == 0 || len == sizeof b - 1)) snprintf(out, n, " \"%.*s\"", (int)len, b);
+}
+static void dump_registers(ucontext_t *uc) {
+    char line[900]; int k = 0;
+    for (int i = 0; i < 29; i++) {
+        char str[64]; uint64_t v = uc->uc_mcontext->__ss.__x[i]; printable(v, str, sizeof str);
+        k += snprintf(line + k, sizeof line - k, " x%d=%#llx%s", i, (unsigned long long)v, str);
+        if (k > 700 || i == 28) { LOG("GUEST_FAULT_REGS%s", line); k = 0; line[0] = 0; }
+    }
+    uint64_t object = uc->uc_mcontext->__ss.__x[19], words[16];
+    if (safe_read(object, words, sizeof words)) {
+        k = 0;
+        for (int i = 0; i < 16; i++) {
+            char str[64]; printable(words[i], str, sizeof str);
+            uint64_t inner = 0; char str2[64] = ""; if (safe_read(words[i], &inner, 8)) printable(inner, str2, sizeof str2);
+            k += snprintf(line + k, sizeof line - k, " +%#x=%#llx%s%s", i * 8, (unsigned long long)words[i], str, str2[0] ? str2 : "");
+        }
+        LOG("GUEST_FAULT_X19%s", line);
+    }
+}
 static void handler(int sig, siginfo_t *info, void *context) {
     // kill() from the SDK abort observer (sdk_services.c) re-delivers a fault process-wide; the faulting
     // instruction re-executes and reaches this handler on its own thread, so user-sent copies are ignored.
@@ -83,6 +115,7 @@ static void handler(int sig, siginfo_t *info, void *context) {
         if (frame[0] <= fp) break; fp = frame[0];
     }
     char reason[256];
+    dump_registers(uc);
     snprintf(reason, sizeof reason, "GUEST_FAULT signal %d at %s (address %p, caller %s)", sig, where, info->si_addr, caller);
     wonder_game_report_stop(reason);   // first stop only; then park this guest thread on its signal stack
     for (;;) pause();
