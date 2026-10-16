@@ -465,6 +465,13 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
     }
     static struct wonder_host_dispatch x; memset(&x, 0, sizeof x);
     wonder_nvn_shader_key(draw_state.program.control[5], x.key);
+    {   // Diagnostic (WONDER_SKIP_CS=<kernel key prefix>[,...]): leave the listed dispatches out (round177: does kernel
+        // 45bc61e5, run since the offline build, make the game stop issuing colour passes?)
+        const char *list = getenv("WONDER_SKIP_CS");
+        for (const char *q = list; q && *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, x.key, n)) {
+            static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 4) wonder_nvn_report("NVN_SKIP_CS %s (diagnostic)", x.key);
+            return; } q += n; if (*q == ',') q++; }
+    }
     if (!wonder_host_shader_available(x.key)) {
         wonder_nvn_draw_census(&draw_state, &call, summary, sizeof summary);
         char pair[40]; snprintf(pair, sizeof pair, "cs-%s", x.key); note_missing(pair);
