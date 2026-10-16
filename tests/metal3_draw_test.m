@@ -30,10 +30,11 @@ static void wrong_stage(void) { wonder_host_shader_function("aaaaaaaaaaaaaaaa", 
 // Guest threads run on small stacks; Metal's compiler must not run on them (round84: ___chkstk_darwin overflow).
 #include <pthread.h>
 struct small_stack_job { const char *dir; int ok; };
+static int manifest_stage(NSString *name) { return [name isEqual:@"cs"] ? 5 : [name isEqual:@"ps"] ? 1 : 0; }   // NVNshaderStage
 static void *compile_all(void *arg) {
     struct small_stack_job *job = arg;
     NSDictionary *m = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%s/manifest.json", job->dir]] options:0 error:nil];
-    for (NSString *key in m[@"keys"]) wonder_host_shader_function(key.UTF8String, [m[@"keys"][key][@"stage"] isEqual:@"ps"]);
+    for (NSString *key in m[@"keys"]) wonder_host_shader_function(key.UTF8String, manifest_stage(m[@"keys"][key][@"stage"]));
     job->ok = 1; return NULL;
 }
 static void positive(int argc, char **argv) {
@@ -59,9 +60,9 @@ static void positive(int argc, char **argv) {
         assert(!pthread_create(&th, &attr, compile_all, &job)); pthread_join(th, NULL); assert(job.ok);
         NSDictionary *m = [NSJSONSerialization JSONObjectWithData:[NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%s/manifest.json", argv[3]]] options:0 error:nil];
         for (NSString *key in m[@"keys"]) {
-            int stage = [m[@"keys"][key][@"stage"] isEqual:@"ps"];
+            int stage = manifest_stage(m[@"keys"][key][@"stage"]);
             id<MTLFunction> fn = (__bridge id<MTLFunction>)wonder_host_shader_function(key.UTF8String, stage);
-            assert(fn.functionType == (stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex));
+            assert(fn.functionType == (stage == 5 ? MTLFunctionTypeKernel : stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex));
             assert(wonder_host_shader_refl(key.UTF8String)->stage == stage);
         }
     }
