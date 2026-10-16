@@ -1180,12 +1180,58 @@ int wonder_host_clear_depth_stencil_rect(void *texture, int level, int slice, in
 // ---------- Render target readback (evidence) ----------
 int wonder_host_readback_png(void *texture, int level, int slice, const char *path_c) { return wonder_host_readback_png_rect(texture, level, slice, NULL, path_c); }
 // rect {x, y, w, h} within the level (NULL = the whole level): presents are saved as their crop rectangle, as displayed.
+// Other colour / depth formats (diagnostic frame dumps, round153: R11G11B10F, RGBA16F, R16F, R8, depth): the level /
+// slice is drawn into an RGBA8 texture first (colour clamped to 0..1, alpha 1; depth as grey). Integer formats: 2.
+static NSString *const readback_source = @"#include <metal_stdlib>\nusing namespace metal;\n"
+    "struct V { float4 p [[position]]; float2 uv; };\n"
+    "vertex V rb_vs(uint id [[vertex_id]]) { float2 c = float2(id & 1, id >> 1); V o; o.p = float4(c.x * 2 - 1, 1 - c.y * 2, 0, 1); o.uv = c; return o; }\n"
+    "fragment float4 rb_color(V i [[stage_in]], texture2d<float> t [[texture(0)]]) { uint2 q = uint2(i.uv * float2(t.get_width(), t.get_height())); return float4(saturate(t.read(q).rgb), 1); }\n"
+    "fragment float4 rb_depth(V i [[stage_in]], depth2d<float> t [[texture(0)]]) { uint2 q = uint2(i.uv * float2(t.get_width(), t.get_height())); float d = t.read(q); return float4(d, d, d, 1); }\n";
+static id<MTLTexture> readback_convert(id<MTLTexture> t, int level, int slice) {
+    static id<MTLRenderPipelineState> color, depth;
+    if (!color) {
+        NSError *error = nil; id<MTLLibrary> lib = [device newLibraryWithSource:readback_source options:nil error:&error]; if (!lib) return nil;
+        for (int k = 0; k < 2; k++) {
+            MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new]; d.vertexFunction = [lib newFunctionWithName:@"rb_vs"];
+            d.fragmentFunction = [lib newFunctionWithName:k ? @"rb_depth" : @"rb_color"]; d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+            id<MTLRenderPipelineState> p = [device newRenderPipelineStateWithDescriptor:d error:&error]; if (!p) return nil;
+            if (k) depth = p; else color = p;
+        }
+    }
+    MTLPixelFormat f = t.pixelFormat;
+    int is_depth = f == MTLPixelFormatDepth32Float || f == MTLPixelFormatDepth16Unorm || f == MTLPixelFormatDepth32Float_Stencil8 || f == MTLPixelFormatDepth24Unorm_Stencil8;
+    if (!is_depth && (f == MTLPixelFormatStencil8 || f == MTLPixelFormatX32_Stencil8)) return nil;
+    id<MTLTexture> view = [t newTextureViewWithPixelFormat:f textureType:MTLTextureType2D levels:NSMakeRange((NSUInteger)level, 1) slices:NSMakeRange((NSUInteger)slice, 1)];
+    if (!view) return nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:view.width height:view.height mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> out = [device newTextureWithDescriptor:td]; if (!out) return nil;
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = out; pass.colorAttachments[0].loadAction = MTLLoadActionDontCare; pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
+    [e setRenderPipelineState:is_depth ? depth : color]; [e setFragmentTexture:view atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4]; [e endEncoding];
+    return out;
+}
+static int integer_format(MTLPixelFormat f) {
+    switch (f) {
+    case MTLPixelFormatR8Uint: case MTLPixelFormatR8Sint: case MTLPixelFormatR16Uint: case MTLPixelFormatR16Sint: case MTLPixelFormatR32Uint: case MTLPixelFormatR32Sint:
+    case MTLPixelFormatRG8Uint: case MTLPixelFormatRG8Sint: case MTLPixelFormatRG16Uint: case MTLPixelFormatRG16Sint: case MTLPixelFormatRG32Uint: case MTLPixelFormatRG32Sint:
+    case MTLPixelFormatRGBA8Uint: case MTLPixelFormatRGBA8Sint: case MTLPixelFormatRGBA16Uint: case MTLPixelFormatRGBA16Sint: case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGBA32Sint:
+    case MTLPixelFormatRGB10A2Uint: return 1;
+    default: return 0;
+    }
+}
 int wonder_host_readback_png_rect(void *texture, int level, int slice, const int rect[4], const char *path_c) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture;
     if (!t || !device || !path_c) return 1;
     MTLPixelFormat f = t.pixelFormat;
-    int bgra = f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB;
-    if (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB) return 2;
+    int bgra = f == MTLPixelFormatBGRA8Unorm || f == MTLPixelFormatBGRA8Unorm_sRGB, converted = 0;
+    if (!bgra && f != MTLPixelFormatRGBA8Unorm && f != MTLPixelFormatRGBA8Unorm_sRGB) {
+        if (integer_format(f) || f == MTLPixelFormatStencil8) return 2;
+        converted = 1;
+    }
     NSUInteger lw = MAX((NSUInteger)1, t.width >> level), lh = MAX((NSUInteger)1, t.height >> level), x0 = 0, y0 = 0, w = lw, h = lh;
     if (rect) {
         if (rect[0] < 0 || rect[1] < 0 || rect[2] <= 0 || rect[3] <= 0 || (NSUInteger)rect[0] + (NSUInteger)rect[2] > lw || (NSUInteger)rect[1] + (NSUInteger)rect[3] > lh) return 3;
@@ -1195,6 +1241,11 @@ int wonder_host_readback_png_rect(void *texture, int level, int slice, const int
     id<MTLBuffer> out = [device newBufferWithLength:pitch * h options:MTLResourceStorageModeShared];
     NSString *path = [NSString stringWithUTF8String:path_c];
     wonder_host_replay_lock();
+    if (converted) {
+        t = readback_convert(t, level, slice);
+        if (!t) { wonder_host_replay_unlock(); return 2; }
+        level = 0; slice = 0;
+    }
     id<MTLCommandBuffer> cb = (__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer();
     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
     [b copyFromTexture:t sourceSlice:(NSUInteger)slice sourceLevel:(NSUInteger)level sourceOrigin:MTLOriginMake(x0, y0, 0) sourceSize:MTLSizeMake(w, h, 1)

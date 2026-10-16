@@ -303,12 +303,17 @@ int main(int argc, char **argv) {
         }
         if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array") && strcmp(mode, "default_attr")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
-        if (!strcmp(mode, "draw")) assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
+        char zpng[1024]; snprintf(zpng, sizeof zpng, "%s/depth.png", argc > 2 ? argv[2] : "/tmp");
+        if (!strcmp(mode, "draw")) {
+            assert(wonder_host_readback_png((__bridge void *)color, 0, 0, png) == 0);
+            unlink(zpng); assert(wonder_host_readback_png((__bridge void *)depth, 0, 0, zpng) == 0);   // depth drawn as grey (round153 frame dumps)
+        }
         id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared], zb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
         id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
         [b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
         [b copyFromTexture:depth sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:zb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
         [b endEncoding]; [pending commit]; [pending waitUntilCompleted]; assert(pending.status == MTLCommandBufferStatusCompleted);
+        if (!strcmp(mode, "draw")) { for (int i = 0; i < 200 && access(zpng, R_OK); i++) usleep(5000); assert(!access(zpng, R_OK)); }
         const uint8_t *px = rb.contents; const float *z = zb.contents;
         const uint8_t *centre = px + (32 * 64 + 32) * 4, *corner = px;
         printf("centre %u %u %u %u depth %g; corner %u %u %u %u depth %g\n", centre[0], centre[1], centre[2], centre[3], z[32 * 64 + 32], corner[0], corner[1], corner[2], corner[3], z[0]);
