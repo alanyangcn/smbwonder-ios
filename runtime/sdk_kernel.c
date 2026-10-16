@@ -64,6 +64,9 @@ void wonder_kernel_init(uint64_t bytes) {
     // Report the console pool when the heap region can hold the heap the game derives from it
     // (pool - system resource - image - VAMM reservation); otherwise shrink the pool to fit.
     POOL_SIZE=CONSOLE_APPLICATION_POOL;
+    // Diagnostic only (round146: the 1034 MiB resource heap cannot place the 48 MiB DVHajimariSougen model): a larger
+    // reported application pool, to test whether the far-view load failures are a memory budget difference.
+    { const char *e=getenv("WONDER_POOL_MIB"); if(e&&atoi(e)>0){ POOL_SIZE=(uint64_t)atoi(e)<<20; LOG("SDK_KERNEL WONDER_POOL_MIB override: pool=%s MiB (diagnostic)",e); } }
     uint64_t fit=image_size+heap_capacity+WONDER_VAMM_RESERVATION+WONDER_SYSTEM_RESOURCE_SIZE;
     if(POOL_SIZE>fit)POOL_SIZE=fit;
     alias_bits=calloc(ALIAS_SIZE>>15,1);alias_host=calloc(ALIAS_SIZE>>14,sizeof *alias_host);
