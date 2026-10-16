@@ -5,8 +5,10 @@
 // packets with snapshotted arguments; replay (nvn_queue.c) executes or stops by name.
 #include "nvn_commands.h"
 #include "command_store.h"
+#include "nvn_draw_census.h"
 #include <string.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #define COMMAND_BUFFER_SIZE 0xa0
 #define MAX_SEGMENTS 64
@@ -265,6 +267,33 @@ void wonder_nvnCommandBufferBindVertexStreamState(void *cb, int count, const voi
     if (count && !streams) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferBindVertexStreamState streams=NULL");
     const uint64_t a[] = {(uint64_t)count}; rec(cb, WONDER_NVN_CMD_BIND_VERTEX_STREAM, a, 1, streams, (size_t)count * 8);
 }
+// Diagnostic (WONDER_TRACE_VS=<vertex key prefix>[,...]): draws recorded while such a vertex shader is bound log the
+// guest call chain at record time (round172: the course hedge's colour programs are never replayed; are they recorded?).
+void (*wonder_nvn_frames_hook)(uint64_t fp, uint64_t lr, char *out, size_t size);   // sdk_startup.c wonder_guest_frames
+static pthread_mutex_t trace_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { const void *cb; char vs[17]; } trace_bound[64];
+static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *s) {
+    static int on = -1; if (on < 0) on = getenv("WONDER_TRACE_VS") != NULL; if (!on) return;
+    char key[17] = ""; if (s && (s->mask & 1) && s->control[0]) wonder_nvn_shader_key(s->control[0], key);
+    pthread_mutex_lock(&trace_lock); int slot = -1;
+    for (int i = 0; i < 64 && slot < 0; i++) if (trace_bound[i].cb == cb) slot = i;
+    for (int i = 0; i < 64 && slot < 0; i++) if (!trace_bound[i].cb) slot = i;
+    if (slot < 0) slot = (int)(((uintptr_t)cb >> 4) & 63);
+    trace_bound[slot].cb = cb; memcpy(trace_bound[slot].vs, key, sizeof key);
+    pthread_mutex_unlock(&trace_lock);
+}
+static void trace_draw(const void *cb, const char *what, int count) {
+    const char *list = getenv("WONDER_TRACE_VS"); if (!list || !*list) return;
+    char vs[17] = ""; pthread_mutex_lock(&trace_lock);
+    for (int i = 0; i < 64; i++) if (trace_bound[i].cb == cb) { memcpy(vs, trace_bound[i].vs, sizeof vs); break; }
+    pthread_mutex_unlock(&trace_lock);
+    int match = 0; for (const char *p = list; *p && !match; ) { size_t n = strcspn(p, ","); match = n && vs[0] && n <= strlen(vs) && !strncmp(p, vs, n); p += n; if (*p == ',') p++; }
+    if (!match) return;
+    static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) >= 400) return;
+    char chain[700] = "";
+    if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), chain, sizeof chain);
+    wonder_nvn_report("NVN_TRACE_DRAW vs=%s %s count=%d cb=%p chain=%s", vs, what, count, cb, chain);
+}
 // NVNshaderStageBits: VERTEX 1, TESS_CONTROL 2, TESS_EVALUATION 4, GEOMETRY 8, FRAGMENT 0x10, COMPUTE 0x20.
 void wonder_nvnCommandBufferBindProgram(void *cb, const void *program, int stage_bits) {
     if ((unsigned)stage_bits & ~0x3fu) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferBindProgram stages=%#x", stage_bits);
@@ -273,6 +302,7 @@ void wonder_nvnCommandBufferBindProgram(void *cb, const void *program, int stage
         wonder_nvn_stop("NVN_INVALID_STATE nvnCommandBufferBindProgram program=%p has no shaders", program);
     const uint64_t a[] = {(uint64_t)(unsigned)stage_bits, (uintptr_t)program};
     rec(cb, WONDER_NVN_CMD_BIND_PROGRAM, a, 2, &shaders, sizeof shaders);
+    if (!program || !(stage_bits & 0x20)) trace_bind(cb, program ? &shaders : NULL);
 }
 void wonder_nvnCommandBufferBindVertexBuffer(void *cb, int index, uint64_t address, size_t size) {
     need_range(index, 0, 15, "nvnCommandBufferBindVertexBuffer", "index"); need_address(address, size, "nvnCommandBufferBindVertexBuffer");
@@ -421,6 +451,7 @@ void wonder_nvnCommandBufferDrawElementsInstanced(void *cb, int mode, int type, 
     if (count < 0 || base_instance < 0 || instances < 0) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnCommandBufferDrawElementsInstanced");
     REC(cb, WONDER_NVN_CMD_DRAW_ELEMENTS_INSTANCED, (uint64_t)mode, (uint64_t)type, (uint64_t)count, address, (uint64_t)(int64_t)base_vertex,
         (uint64_t)base_instance, (uint64_t)instances);
+    trace_draw(cb, "DrawElementsInstanced", count);
 }
 
 // ---------- Counters / reports ----------

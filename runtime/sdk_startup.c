@@ -38,6 +38,8 @@ void wonder_guest_frames(uint64_t fp,uint64_t lr,char *out,size_t size){
         fp=frame[0]; pc=frame[1];
     }
 }
+extern void (*wonder_nvn_frames_hook)(uint64_t fp,uint64_t lr,char *out,size_t size);
+__attribute__((constructor)) static void install_frames_hook(void){ wonder_nvn_frames_hook=wonder_guest_frames; }   // nvn_commands.c WONDER_TRACE_VS
 uint64_t svc_dispatch(int number,uint64_t *regs,uint64_t original) {
     if(wonder_game_stopped()){LOG("GUEST_PARKED svc=%#x pc=%#llx (guest already stopped)",number,original);wonder_game_thread_park();}
     unsigned seen=svc_seen[number&0xff]++;
