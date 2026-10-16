@@ -24,10 +24,10 @@ struct replay_state {
 static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.0f}};
 // Per-present summary (diagnostic: compares good and bad frames): draws encoded since the last present, their
 // program/count sequence hash, and clears.
-static _Atomic unsigned frame_draws; static _Atomic uint64_t frame_hash = 1469598103934665603ull;
+static _Atomic unsigned frame_draws, frame_index; static _Atomic uint64_t frame_hash = 1469598103934665603ull;
 void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash) {
     static unsigned clears_at_last; unsigned c = state.clears;
-    *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
+    atomic_fetch_add(&frame_index, 1); *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
     *clears = c - clears_at_last; clears_at_last = c;
 }
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
@@ -281,6 +281,24 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     if (!first_draw_captured && !first_draw_pending)
         for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
     submit_draws++;
+    { // Diagnostic (WONDER_DRAW_LOG=<first>-<last> present numbers, with WONDER_PRESENT_EVERY): every draw's targets and
+      // textures by storage, to compare frames that execute the same draw sequence.
+      static int first = -1, last = -1;
+      if (first < 0) { const char *e = getenv("WONDER_DRAW_LOG"); first = 0; last = -1; if (e) sscanf(e, "%d-%d", &first, &last); }
+      unsigned f = atomic_load(&frame_index) + 1;
+      if ((int)f >= first && (int)f <= last) {
+          char line[1024]; int n = snprintf(line, sizeof line, "NVN_DRAW_LOG present=%u %.8s-%.8s prim=%d count=%d", f, d.vs_key, d.fs_key, d.primitive, call.count);
+          for (int i = 0; i < 9 && n < (int)sizeof line - 80; i++) if (d.targets[i].valid) {
+              const struct wonder_nvn_texture *t = &d.targets[i].texture;
+              n += snprintf(line + n, sizeof line - n, " rt%d=%llu:%ux%u@%p+%#llx:%#x", i, (unsigned long long)t->serial, t->desc.width, t->desc.height, t->pool, (unsigned long long)t->offset, t->desc.format);
+          }
+          for (int st = 0; st < 2; st++) for (int i = 0; i < 40 && n < (int)sizeof line - 80; i++) if (d.tex_mask[st] >> i & 1) {
+              const struct wonder_nvn_texture *t = &d.tex[st][i].texture.texture;
+              n += snprintf(line + n, sizeof line - n, " t%d.%d=%llu:%ux%u@%p+%#llx:%#x", st, i, (unsigned long long)t->serial, t->desc.width, t->desc.height, t->pool, (unsigned long long)t->offset, t->desc.format);
+          }
+          wonder_nvn_report("%s", line);
+      }
+    }
     { uint64_t h = atomic_load(&frame_hash); for (const char *k = d.vs_key; *k; k++) h = (h ^ (uint8_t)*k) * 1099511628211ull;
       for (const char *k = d.fs_key; *k; k++) h = (h ^ (uint8_t)*k) * 1099511628211ull;
       h = (h ^ (uint32_t)call.count) * 1099511628211ull; atomic_store(&frame_hash, h); atomic_fetch_add(&frame_draws, 1); }
