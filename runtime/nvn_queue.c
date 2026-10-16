@@ -157,6 +157,11 @@ static void write_report(void *arg) {
     if (r->timestamp) {
         struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
         uint64_t data[2] = {0, (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec};   // NVNcounterData {counter, timestamp ns}
+        {   // Diagnostic (WONDER_DIAG_FREEZE_TS=1): every GPU timestamp reads the same value, so measured GPU time is 0
+            // (round185: does the game's dynamic resolution / quality drop the course hedges' colour passes?)
+            static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DIAG_FREEZE_TS"); on = e && *e == '1'; }
+            static uint64_t frozen; if (on) { if (!frozen) frozen = data[1]; data[1] = frozen; }
+        }
         memcpy(view.memory, data, sizeof data);
     } else memcpy(view.memory, &r->value, 4);
     free(r);
