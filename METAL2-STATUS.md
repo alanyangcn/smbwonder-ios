@@ -28,6 +28,7 @@
   - round138：加载页又卡住（60 fps、无文件读取、所有工作线程在 main+0x66bf24 空闲），与 round134 相同；round136 慢速时反而通过——与时序有关。新增 `KERNEL_RUNNING`：每 ~30 s 采样未阻塞客体线程的 pc 与调用链（挂起读寄存器后立即恢复），定位它轮询的条件。
   - **文字根因（round138）**：文字顶点着色器 982e87b1faa0b87f 用两个间接跳转（BRX，c1 跳转表各 3 个目标）按顶点角选 UV 字段；Ryujinx 的 AST 优化器把每个 BRX 只保留一个目标，UV 取错 → 采样为 0 → 片元全部丢弃。DebugMode（不跑该优化器）三路分支都在。构建改为所有阶段 DebugMode（D2R 原本的默认）；196 个阶段在 Mac GPU 上全部编译通过。带 BRX 的其它着色器（粒子、材质）同样受益。
   - 性能：每个 draw 单独一个 render pass（附件整张 load/store）+ 每个 uniform 一块 64 KiB 拷贝分配，关卡每帧 141 个 draw 只有约 6 fps。改为同附件的连续 draw 合并为一个 render pass，拷贝统一进前置 blit、从 4 MiB 暂存块切窗口；其它 GPU 操作取命令缓冲时先收尾当前批（保持命令顺序），写存储缓冲或采样本批附件的 draw 结束本批。`HOST_MEMORY` 行报告 draws/passes 与 fps。
+  - round139–140：**文字正常显示**（选角色界面中文/英文、按钮文字都在）；按键图标显示为"?"——Switch 共享字体第 5 类（任天堂扩展字体，私用区按键符号）在 iOS 上没有对应字体（功能差异，待自制图标字体）。标题界面合并 pass 后 59–60 fps。3D 采样纹理已支持；计算着色器 `1fb9d970e6bbceb8` 在 Metal 上实际执行（`NVN_DISPATCH_EXECUTED`）。进入关卡后 5–22 fps（普查扫描轮：缺着色器的 draw 被跳过、新着色器首次使用时在设备上编译），换场景时客体空指针 `main+0x8f68a8`（读 `[[x19+0x40]+0x38]`，调用方 main+0x1b97c8c 虚函数 +0x48），待查。
   - 脚本按键后 1.5 s 自动截图（`Documents/Present/present-<帧>.png`，日志 `HOST_PRESENT_CAPTURE ... requested`）。
   - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
