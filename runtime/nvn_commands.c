@@ -292,6 +292,10 @@ static void trace_bind(const void *cb, const struct wonder_nvn_program_shaders *
         for (const char *c = chain; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull;
         pthread_mutex_lock(&trace_lock); int fresh = nseen < 400; for (unsigned i = 0; i < nseen && fresh; i++) fresh = seen[i] != h; if (fresh) seen[nseen++] = h; pthread_mutex_unlock(&trace_lock);
         if (fresh) wonder_nvn_report("NVN_TRACE_RECORD_BIND vs=%s cb=%p chain=%s", key, cb, chain);
+        {   // Diagnostic under LLDB only (WONDER_TRACE_TRAP=<count>): stop the first <count> matching binds with a trap
+            static _Atomic int left = -1; if (left < 0) { const char *e = getenv("WONDER_TRACE_TRAP"); left = e ? atoi(e) : 0; }
+            if (atomic_load(&left) > 0 && atomic_fetch_sub(&left, 1) > 0) __builtin_debugtrap();
+        }
     }
 }
 static void trace_draw(const void *cb, const char *what, int count) {

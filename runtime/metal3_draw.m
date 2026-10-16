@@ -837,6 +837,13 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         // pre-pass + EQUAL colour passes failing on Depth32Float?)
         static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_LEQUAL"); on = e && *e == '1'; }
         if (on && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled) dd.depthCompareFunction = MTLCompareFunctionLessEqual;
+        // WONDER_DEPTH_EQUAL_AS=always|gequal (round188): the course hedges' colour pass runs on the CPU side
+        // (main+0x1e555a0 -> 0xe5fe0 returns true, 0x606fc issues it) but with a vertex shader other than the pre-pass
+        // 1451a723; does its EQUAL test fail because the two translated shaders' positions differ in the last bit?
+        static int as = -1;
+        if (as < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_AS"); as = !e ? 0 : !strcmp(e, "always") ? 1 : !strcmp(e, "gequal") ? 2 : 0; }
+        if (as && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled)
+            dd.depthCompareFunction = as == 1 ? MTLCompareFunctionAlways : MTLCompareFunctionGreaterEqual;
     }
     if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) dd.depthCompareFunction = MTLCompareFunctionAlways;   // diagnostic: depth test off for listed fragment shaders
     NSData *ds_key = [NSData dataWithBytes:(uint32_t[]){(uint32_t)dd.depthCompareFunction, dd.depthWriteEnabled} length:8];
