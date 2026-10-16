@@ -5,6 +5,7 @@
 // alternate signal stack because guest stacks can be a single 4 KiB page.
 #include "dm.h"
 #include "sysreg_emul.h"
+#include "page_guard.h"
 #include <stdatomic.h>
 #include <signal.h>
 #include <stdio.h>
@@ -37,6 +38,7 @@ static void handler(int sig, siginfo_t *info, void *context) {
     // kill() from the SDK abort observer (sdk_services.c) re-delivers a fault process-wide; the faulting
     // instruction re-executes and reaches this handler on its own thread, so user-sent copies are ignored.
     if (info->si_code == SI_USER) return;
+    if ((sig == SIGSEGV || sig == SIGBUS) && wonder_guard_fault((uintptr_t)info->si_addr)) return;   // write-watched page (page_guard.c)
     ucontext_t *uc = context;
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
     if (!module_of((void *)pc)) {   // not guest code: log where (host symbol + frame chain), restore and re-raise
@@ -85,7 +87,9 @@ static void handler(int sig, siginfo_t *info, void *context) {
     wonder_game_report_stop(reason);   // first stop only; then park this guest thread on its signal stack
     for (;;) pause();
 }
+extern int (*wonder_services_fault_filter)(uintptr_t address);   // sdk_services.c abort observer
 void wonder_crash_install(void) {
+    wonder_services_fault_filter = wonder_guard_fault;
     struct sigaction a; memset(&a, 0, sizeof a);
     a.sa_sigaction = handler; a.sa_flags = SA_SIGINFO | SA_ONSTACK; sigemptyset(&a.sa_mask);
     for (int i = 0; i < 4; i++) if (sigaction(signals[i], &a, &previous[i])) die("crash handler install failed");

@@ -19,7 +19,12 @@ static int error_key_valid;
 static struct {pid_t process;int dlc_count;int online_allowed;} environment;
 static struct sigaction previous[3];
 static const int observed_signals[]={SIGABRT,SIGBUS,SIGSEGV};
-static void observe_abort(int number) {
+// Write-watch faults (page_guard.c) are not crashes: the watched page opens and the write is retried. A hook set by
+// crash_report.c (wonder_crash_install), so this file links without the guard.
+int (*wonder_services_fault_filter)(uintptr_t address);
+static void observe_abort(int number, siginfo_t *info, void *context) {
+    (void)context;
+    if ((number == SIGSEGV || number == SIGBUS) && info && wonder_services_fault_filter && wonder_services_fault_filter((uintptr_t)info->si_addr)) return;
     static const char message[]="SDK_HOST_ABORT_OBSERVER: fatal signal\n";
     if(log_fd>=0)(void)write(log_fd,message,sizeof message-1);
     (void)write(STDERR_FILENO,message,sizeof message-1);
@@ -70,7 +75,7 @@ int wonder_service_initialize(enum wonder_service service) {
     case WONDER_PARENTAL:
         environment.online_allowed=0;break; // No Nintendo account policy available: online operations are denied.
     case WONDER_ABORT: {
-        struct sigaction action={0};action.sa_handler=observe_abort;sigemptyset(&action.sa_mask);
+        struct sigaction action={0};action.sa_sigaction=observe_abort;action.sa_flags=SA_SIGINFO|SA_ONSTACK;sigemptyset(&action.sa_mask);
         for(unsigned i=0;i<3;i++) { if(sigaction(observed_signals[i],&action,&previous[i])){
             int error=errno;while(i){--i;sigaction(observed_signals[i],&previous[i],NULL);}return error;
         }}

@@ -1,3 +1,4 @@
+#include "page_guard.h"
 #include "hle.h"
 #include "romfs.h"
 #include "savedata.h"
@@ -18,6 +19,7 @@ HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci","Open host save data files
     r=wonder_romfs_open(out,path,mode);LOG("ROMFS_OPEN path=%s mode=%d result=%#x handle=%#llx",path,mode,r,(unsigned long long)(r?0:*out));return r;
 }
 static Result read_file(size_t *out,uint64_t h,int64_t offset,void *buf,size_t size){
+    wonder_guard_release(buf,size);   // pread into a write-watched page would fail with EFAULT (page_guard.h)
     if(wonder_save_owns_handle(h))return wonder_save_read(out,h,offset,buf,size);
     Result r=wonder_romfs_read(out,h,offset,buf,size);LOG("ROMFS_READ h=%#llx offset=%#llx request=%zu actual=%zu result=%#x",(unsigned long long)h,(unsigned long long)offset,size,r?0:*out,r);return r;
 }

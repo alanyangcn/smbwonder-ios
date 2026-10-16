@@ -261,9 +261,10 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
   }
   extern size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial); uint64_t gserial=0; size_t glyphs=wonder_nvn_glyph_cache_nonzero(&gserial);
   extern void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes); unsigned bd, bp; wonder_host_draw_batch_stats(&bd,&bp);
-  static unsigned last_bd, last_bp; static double last_t; double now=CACurrentMediaTime();
-  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
-          bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0);
+  static unsigned last_bd, last_bp, last_hv; static double last_t; extern unsigned wonder_host_draw_sampled_validations(void); extern unsigned wonder_guard_count(void); double now=CACurrentMediaTime();
+  fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f texture_hashes=%u watched=%u\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
+          bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0,wonder_host_draw_sampled_validations()-last_hv,wonder_guard_count());
+  last_hv=wonder_host_draw_sampled_validations();
   last_bd=bd; last_bp=bp; last_t=now;
  }
  if(present_setup()) return EIO;

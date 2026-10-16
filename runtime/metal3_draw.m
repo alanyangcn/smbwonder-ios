@@ -107,6 +107,7 @@ int wonder_host_shader_available(const char key_c[17]) {
 // draws use is mapped; anything else stops by name instead of being approximated.
 #include "nvn_fmt_mtl.h"
 #include "nvn_deswizzle.h"
+#include "page_guard.h"
 _Noreturn static void unsupported(const struct wonder_host_draw *d, const char *what, long value) {
     wonder_nvn_stop("NVN_DRAW_UNSUPPORTED %s %ld (vs=%s fs=%s)", what, value, d->vs_key, d->fs_key);
 }
@@ -171,10 +172,14 @@ static id<MTLTexture> attachment(const struct wonder_host_draw *d, const struct 
 #endif
 static uint64_t fnv64(const uint8_t *p, uint64_t n) { uint64_t h = 1469598103934665603ull; for (uint64_t i = 0; i < n; i++) h = (h ^ p[i]) * 1099511628211ull; return h; }
 // CPU-uploaded copies of sampled textures by serial; nvnTextureFinalize drops them (guest threads, hence the lock).
-static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutableDictionary<NSNumber *, NSNumber *> *sampled_hash;
+static NSMutableDictionary<NSNumber *, id<MTLTexture>> *sampled; static NSMutableDictionary<NSNumber *, NSNumber *> *sampled_hash, *sampled_guard;
+static _Atomic unsigned sampled_validations;   // hashes of CPU texture storage (diagnostic: HOST_MEMORY)
+unsigned wonder_host_draw_sampled_validations(void) { return atomic_load(&sampled_validations); }
 static pthread_mutex_t sampled_lock = PTHREAD_MUTEX_INITIALIZER;
 void wonder_host_draw_forget_sampled(uint64_t serial) {
-    pthread_mutex_lock(&sampled_lock); [sampled removeObjectForKey:@(serial)]; [sampled_hash removeObjectForKey:@(serial)]; pthread_mutex_unlock(&sampled_lock);
+    pthread_mutex_lock(&sampled_lock); uint32_t guard = [sampled_guard[@(serial)] unsignedIntValue];
+    [sampled removeObjectForKey:@(serial)]; [sampled_hash removeObjectForKey:@(serial)]; [sampled_guard removeObjectForKey:@(serial)]; pthread_mutex_unlock(&sampled_lock);
+    if (guard) wonder_guard_forget(guard);
 }
 unsigned wonder_host_draw_sampled_count(void) { pthread_mutex_lock(&sampled_lock); unsigned n = (unsigned)sampled.count; pthread_mutex_unlock(&sampled_lock); return n; }
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
@@ -225,12 +230,23 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
         // BC1-7 map exactly and are sampled natively (the graphics gate requires supportsBCTextureCompression).
         uint32_t mtl = 0; int fit = nvn_fmt_to_mtl(t->desc.format, &mtl, NULL);
         if (fit != 1) unsupported(d, "sampled texture format", t->desc.format);
-        uint64_t hash = fnv64(d->tex[stage][slot].storage, d->tex[stage][slot].storage_size);
+        // Re-validated only after a CPU write to its pool pages (page_guard.h): protect first, then hash, so a write in
+        // between still marks it dirty for the next draw.
         NSNumber *key = @(t->serial);
         pthread_mutex_lock(&sampled_lock);
-        if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; }
-        tex = sampled[key]; int stale = !tex || sampled_hash[key].unsignedLongLongValue != hash;
+        if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; sampled_guard = [NSMutableDictionary dictionary]; }
+        tex = sampled[key]; uint32_t guard = [sampled_guard[key] unsignedIntValue]; NSNumber *known = sampled_hash[key];
         pthread_mutex_unlock(&sampled_lock);
+        int stale = 0; uint64_t hash = 0;
+        if (!tex || !guard || wonder_guard_dirty(guard)) {
+            if (guard) wonder_guard_rearm(guard);
+            else if ((guard = wonder_guard_watch(d->tex[stage][slot].storage, (size_t)d->tex[stage][slot].storage_size))) {
+                pthread_mutex_lock(&sampled_lock); sampled_guard[key] = @(guard); pthread_mutex_unlock(&sampled_lock);
+            }
+            hash = fnv64(d->tex[stage][slot].storage, d->tex[stage][slot].storage_size);
+            stale = !tex || known.unsignedLongLongValue != hash;
+            atomic_fetch_add(&sampled_validations, 1);
+        }
         if (stale) {
             MTLPixelFormat pf = (MTLPixelFormat)mtl;
             NSUInteger layers = target == 4 ? (t->desc.depth ? t->desc.depth : 1) : 1;

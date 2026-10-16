@@ -9,10 +9,12 @@
 //    AudioRendererImpl::ExecuteAudioRendererRendering does (sdk+0x20ccd4..0x20ccf4), and dsp::Wait
 //    paces AudioRenderSystemManager::ThreadFunction to the 5 ms DSP frame on the host clock;
 //  - answers the audio-device queries for an iPhone speaker (handheld built-in speaker, stereo).
-// Output: the final mix stays in renderer memory (silent sink with real-time pacing). Routing the device
-// sink to iOS audio output is the next audio step.
+// Output: the device sink's input mix buffers are read after each command list (audio_sink.c) and played through a
+// RemoteIO unit (host_audio.m).
 #include "hle.h"
 #include "kernel_events.h"
+#include "audio_sink.h"
+void wonder_host_audio_push(const float *stereo, int frames);   // host_audio.m
 #include <mach/mach_time.h>
 #include <stdatomic.h>
 #include <string.h>
@@ -77,7 +79,11 @@ HLE_FORCE("_ZN2nn5audio3dsp4WaitEv", "Host DSP: block until the next 5 ms DSP fr
     next_deadline += ns_to_abs(DSP_FRAME_NS);
     if (mach_absolute_time() > next_deadline + ns_to_abs(20 * DSP_FRAME_NS)) next_deadline = mach_absolute_time();   // resync after a stall
     uint64_t frames = atomic_fetch_add(&dsp_frames, 1) + 1;
-    if (frames == 1 || frames % 2000 == 0) LOG("HOST_AUDIO_DSP_FRAME frames=%llu lists=%llu", frames, (unsigned long long)atomic_load(&dsp_lists));
+    if (frames == 1 || frames % 2000 == 0) {
+        void wonder_host_audio_stats(uint64_t *, uint64_t *, uint32_t *); uint64_t under, calls; uint32_t fill; wonder_host_audio_stats(&under, &calls, &fill);
+        LOG("HOST_AUDIO_DSP_FRAME frames=%llu lists=%llu output callbacks=%llu underruns=%llu ring=%u", frames, (unsigned long long)atomic_load(&dsp_lists),
+            (unsigned long long)calls, (unsigned long long)under, fill);
+    }
 }
 // sdk+0x20c8f4: SendCommandBuffer(session, command list address, size, time limit, reset, start tick).
 // Addresses are CPU addresses (dsp::MapUserPointer is the identity in this in-process configuration).
@@ -90,6 +96,15 @@ HLE_FORCE("_ZN2nn5audio3dsp17SendCommandBufferEimmibm", "Host DSP: run the sdk's
     clp_set_time_max(processor, 0xffffffffu);
     clp_setup_fn(processor, (const void *)address, (unsigned long)size);
     clp_process_fn(processor);
+    // DeviceSink is a no-op in the sdk's processor (jump table entry 0x13 -> sdk+0x222920, the next-command label):
+    // the final mix goes to iOS from here.
+    static float frame[2 * 1024]; struct wonder_audio_sink_info info; char why[200];
+    int frames = wonder_audio_sink_extract((const void *)address, (size_t)size, frame, 1024, &info, why, sizeof why);
+    if (frames < 0) die("audio device sink unsupported: %s (sink '%s' channels %d inputs %d,%d rate %d samples %d)", why, info.name, info.channels, info.inputs[0], info.inputs[1], info.rate, info.samples);
+    if (frames > 0) wonder_host_audio_push(frame, frames);
+    static _Atomic int sink_logged;
+    if (frames > 0 && !atomic_exchange(&sink_logged, 1))
+        LOG("HOST_AUDIO_SINK '%s' channels=%d inputs=%d,%d rate=%d samples=%d", info.name, info.channels, info.inputs[0], info.inputs[1], info.rate, info.samples);
     signal_active_renderers();   // the server signals its renderer event right after sending (sdk+0x20c908)
     uint64_t lists = atomic_fetch_add(&dsp_lists, 1) + 1;
     if (lists <= 4) LOG("HOST_AUDIO_DSP_LIST session=%d address=%#llx size=%#llx time_limit=%d reset=%u tick=%llu",

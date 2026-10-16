@@ -68,7 +68,16 @@ static void positive(int argc, char **argv) {
         }
     }
 }
+#include "page_guard.h"
+#include <signal.h>
+// The texture cache write-watches pool storage (page_guard.h); the app's fault handler opens watched pages, so does this.
+static void guard_handler(int sig, siginfo_t *info, void *ctx) { (void)ctx; if (wonder_guard_fault((uintptr_t)info->si_addr)) return; signal(sig, SIG_DFL); raise(sig); }
+static void install_guard_handler(void) {
+    struct sigaction a; memset(&a, 0, sizeof a); a.sa_sigaction = guard_handler; a.sa_flags = SA_SIGINFO; sigemptyset(&a.sa_mask);
+    sigaction(SIGSEGV, &a, NULL); sigaction(SIGBUS, &a, NULL);
+}
 int main(int argc, char **argv) {
+    install_guard_handler();
     @autoreleasepool {
         id<MTLDevice> device = MTLCreateSystemDefaultDevice(); if (!device) return 77;
         if (argc < 3) return 2;
