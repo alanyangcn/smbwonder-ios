@@ -18,7 +18,7 @@ extern const uint64_t wonder_nvn_unimpl_stubs[WONDER_NVN_NAME_COUNT];
 
 // Per-call NVN reports are rate limited (log_throttle.h); WONDER_NVN_VERBOSE=1 prints every line.
 void wonder_nvn_report(const char *format, ...) {
-    char line[512]; va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
+    char line[1024]; va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
     static int verbose = -1; if (verbose < 0) { const char *v = getenv("WONDER_NVN_VERBOSE"); verbose = v && *v && strcmp(v, "0"); }
     unsigned long count = 0;
     if (verbose || wonder_log_throttle(line, &count)) {

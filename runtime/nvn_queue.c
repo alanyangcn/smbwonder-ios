@@ -43,7 +43,8 @@ static void make_cpu_visible(uint64_t address, uint64_t size) {
     ubo_update_count = 0; ubo_update_overflow = 0;
 }
 // Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
-static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages; }
+static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width; unsigned program_stages;
+                float offset_factor, offset_units, offset_clamp; }
     raster = {.sample_mask = 0xffffffffu, .line_width = 1.0f};
 // Census-only: after the first draw whose program has no translated shaders, the rest of the submit only tracks state and
 // writes a census for every further missing program; no GPU work of this submit runs after that point, and the submit
@@ -139,7 +140,10 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     if (raster.depth_clamp) replay_stop(opcode, "depth clamp is enabled (not executed yet)");
     if (raster.sample_mask != 0xffffffffu) { snprintf(why, sizeof why, "sample mask %#x is not all samples", raster.sample_mask); replay_stop(opcode, why); }
     if ((call.primitive == 1 || call.primitive == 2 || call.primitive == 3) && raster.line_width != 1.0f) replay_stop(opcode, "line width other than 1 (Metal draws 1-pixel lines)");
-    if ((draw_state.states_set & 8) && draw_state.polygon.offset_en) replay_stop(opcode, "polygon offset (depth bias) is not executed yet");
+    // Polygon offset: the enable bit of the polygon mode (POINT 1, LINE 2, FILL 4 for modes 0..2) applies to triangles,
+    // with SetPolygonOffsetClamp's GL-style factor (slope) / units (constant) / clamp, which Metal takes as is.
+    int bias = (draw_state.states_set & 8) && (draw_state.polygon.offset_en >> draw_state.polygon.mode & 1) &&
+               ((call.primitive >= 4 && call.primitive <= 9) || call.primitive == 12 || call.primitive == 13);   // triangle kinds
     int depth_mode, origin; wonder_nvn_device_modes(&depth_mode, &origin);
     if (origin != 1) { snprintf(why, sizeof why, "window origin %d (only UPPER_LEFT matches the translated shaders)", origin); replay_stop(opcode, why); }
     static struct wonder_host_draw d; memset(&d, 0, sizeof d);
@@ -209,6 +213,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                 struct wonder_nvn_pool_view v; wonder_nvn_pool_span(t->texture.pool, (uint64_t)t->texture.offset, t->texture.size, &v);
                 if (v.size < t->texture.size || !v.memory) { snprintf(why, sizeof why, "texture stage %d slot %d storage is not CPU-resolvable", stage, slot); replay_stop(opcode, why); }
                 d.tex[stage][slot].storage = v.memory; d.tex[stage][slot].storage_size = t->texture.size;
+                d.tex[stage][slot].storage_buffer = v.host_buffer; d.tex[stage][slot].storage_buffer_offset = v.host_offset;
             }
         }
     }
@@ -229,6 +234,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     d.nattr = d.vr->nattr;
     d.primitive = call.primitive; d.index_type = call.index_type; d.count = call.count; d.first = call.first;
     d.base_vertex = call.base_vertex; d.instances = call.instances; d.base_instance = call.base_instance;
+    d.depth_bias_enabled = bias; d.depth_bias = raster.offset_units; d.depth_bias_slope = raster.offset_factor; d.depth_bias_clamp = raster.offset_clamp;
     if (call.indirect_address) replay_stop(opcode, "indirect draws are not executed yet");
     if (call.index_type >= 0) {
         d.index = span_of(opcode, call.index_address, (uint64_t)call.count << call.index_type);
@@ -284,6 +290,25 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
     memcpy(d.depth_range, state.depth_range, sizeof d.depth_range);
     memcpy(d.scissor, state.scissor, sizeof d.scissor); d.scissor_set = state.scissor_set;
     d.depth_mode = depth_mode; d.window_origin = origin;
+    // Diagnostic (round128: text never visible): the font shaders' instanced draws, their per-glyph storage records
+    // (64 bytes each: transform, uv rect, colour, layer at +40) and the c3 transform rows.
+    if (!strcmp(d.fs_key, "929a2e26d5411dce") || !strcmp(d.fs_key, "60ac11859809685a")) {
+        static _Atomic int logged; int n = atomic_fetch_add(&logged, 1);
+        if (n < 6) {
+            uint64_t sa = draw_state.storage_buffer[0][0].address, ss = draw_state.storage_buffer[0][0].size;
+            uint64_t ua = draw_state.uniform_buffer[0][0].address, us = draw_state.uniform_buffer[0][0].size;
+            char line[900]; int k = snprintf(line, sizeof line, "HOST_TEXT_DRAW #%d %s-%s prim=%d count=%d first=%d instances=%d base_instance=%d sbuf=%#llx+%#llx c3=%#llx+%#llx",
+                n, d.vs_key, d.fs_key, call.primitive, call.count, call.first, call.instances, call.base_instance,
+                (unsigned long long)sa, (unsigned long long)ss, (unsigned long long)ua, (unsigned long long)us);
+            if (sa && ss >= 64) { make_cpu_visible(sa, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(sa, 64, &v); const float *f = (const float *)v.memory; const int32_t *iv = (const int32_t *)v.memory;
+                k += snprintf(line + k, sizeof line - k, " inst0=[%g %g %g %g | %g %g %g %g | %#x %#x layer=%d %d | %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], iv[8], iv[9], iv[10], iv[11], f[12], f[13], f[14], f[15]); }
+            if (ua && us >= 64) { make_cpu_visible(ua, 64); struct wonder_nvn_pool_view v; wonder_nvn_address_span(ua, 64, &v); const float *f = (const float *)v.memory;
+                k += snprintf(line + k, sizeof line - k, " c3=[%g %g %g %g / %g %g %g %g / %g %g %g %g / %g %g %g %g]", f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13], f[14], f[15]); }
+            for (int i = 0; i < d.color_count && i < 1; i++) if (d.targets[i].valid)
+                k += snprintf(line + k, sizeof line - k, " rt0=%llu:%ux%u fmt=%#x", (unsigned long long)d.targets[i].texture.serial, d.targets[i].texture.desc.width, d.targets[i].texture.desc.height, d.targets[i].texture.desc.format);
+            wonder_nvn_report("%s", line);
+        }
+    }
     if (wonder_host_draw(&d)) replay_stop(opcode, "host draw encoding failed");
     if (!first_draw_captured && !first_draw_pending)
         for (int i = 0; i < d.color_count; i++) if (d.targets[i].valid) { first_draw_target = d.targets[i]; first_draw_pending = 1; break; }
@@ -357,6 +382,9 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (c->a[0] == 0 && c->a[1] >= 1) { memcpy(state.viewport, blob, 16); state.viewport_set = 1; }
         break;
     case WONDER_NVN_CMD_SET_RASTERIZER_DISCARD: raster.rasterizer_discard = c->a[0] != 0; break;
+    case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP: {
+        uint32_t f = (uint32_t)c->a[0], u = (uint32_t)c->a[1], k = (uint32_t)c->a[2];
+        memcpy(&raster.offset_factor, &f, 4); memcpy(&raster.offset_units, &u, 4); memcpy(&raster.offset_clamp, &k, 4); break; }
     case WONDER_NVN_CMD_SET_DEPTH_CLAMP: raster.depth_clamp = c->a[0] != 0; break;
     case WONDER_NVN_CMD_SET_SAMPLE_MASK: raster.sample_mask = (uint32_t)c->a[0]; break;
     case WONDER_NVN_CMD_SET_LINE_WIDTH: raster.line_width = f32(c->a[0]); break;
@@ -487,7 +515,6 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     case WONDER_NVN_CMD_SET_ALPHA_REF: case WONDER_NVN_CMD_SET_CONSERVATIVE_RASTER:
     case WONDER_NVN_CMD_SET_DEPTH_BOUNDS:
     case WONDER_NVN_CMD_SET_PATCH_SIZE: case WONDER_NVN_CMD_SET_POINT_SIZE:
-    case WONDER_NVN_CMD_SET_POLYGON_OFFSET_CLAMP:
     case WONDER_NVN_CMD_SET_SHADER_SCRATCH: case WONDER_NVN_CMD_SET_STENCIL_MASK: case WONDER_NVN_CMD_SET_STENCIL_REF:
     case WONDER_NVN_CMD_SET_STENCIL_VALUE_MASK:
         break;

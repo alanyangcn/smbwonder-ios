@@ -187,6 +187,35 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (v && v->set_depth_stencil && v->depth_stencil_mode && t->desc.format >= 0x31 && t->desc.format <= 0x36) unsupported(d, "stencil texturing view on serial", (long)t->serial);
     id<MTLTexture> gpu = (__bridge id<MTLTexture>)wonder_host_render_target_existing(t);
     id<MTLTexture> tex = gpu;
+    // Pitch-linear, single-level 2D textures are views of the pool's own MTLBuffer: CPU writes (the font glyph cache,
+    // 16 MiB, rewritten as text appears) reach the GPU without an upload, and nothing is hashed per draw (hashing it
+    // on every text draw stalled every screen with text, round128).
+    if (!tex && (t->desc.flags & 0x10) && (t->desc.target == 1 || t->desc.target == 7) && t->desc.levels <= 1 && d->tex[stage][slot].storage_buffer) {
+        NSNumber *key = @(t->serial);
+        pthread_mutex_lock(&sampled_lock); if (!sampled) { sampled = [NSMutableDictionary dictionary]; sampled_hash = [NSMutableDictionary dictionary]; }
+        tex = sampled[key]; pthread_mutex_unlock(&sampled_lock);
+        if (!tex) {
+            uint32_t mtl = 0;
+            if (nvn_fmt_to_mtl(t->desc.format, &mtl, NULL) == 1) {
+                int bw, bh, bpb = nvn_fmt_bpb(t->desc.format, &bw, &bh);
+                uint32_t row = (uint32_t)((t->desc.width + (uint32_t)bw - 1) / (uint32_t)bw * (uint32_t)bpb), stride = t->desc.stride ? t->desc.stride : row;
+                NSUInteger align = [device minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)mtl];
+                uint64_t offset = d->tex[stage][slot].storage_buffer_offset;
+                if (bw == 1 && bh == 1 && stride >= row && align && offset % align == 0 && stride % align == 0 &&
+                    (uint64_t)stride * t->desc.height <= d->tex[stage][slot].storage_size) {
+                    id<MTLBuffer> pool = (__bridge id<MTLBuffer>)d->tex[stage][slot].storage_buffer;
+                    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)mtl width:t->desc.width height:t->desc.height mipmapped:NO];
+                    td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView; td.storageMode = pool.storageMode; td.cpuCacheMode = pool.cpuCacheMode; td.hazardTrackingMode = pool.hazardTrackingMode;
+                    tex = [pool newTextureWithDescriptor:td offset:offset bytesPerRow:stride];
+                    if (tex) {
+                        tex.label = [NSString stringWithFormat:@"NVN linear %llu %ux%u fmt %#x (pool buffer)", (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.format];
+                        pthread_mutex_lock(&sampled_lock); sampled[key] = tex; pthread_mutex_unlock(&sampled_lock);
+                        fprintf(stderr, "HOST_TEXTURE_LINEAR_ZERO_COPY serial=%llu %ux%u fmt=%#x stride=%u\n", (unsigned long long)t->serial, t->desc.width, t->desc.height, t->desc.format, stride);
+                    }
+                }
+            }
+        }
+    }
     if (!tex) {
         int target = t->desc.target, linear = (t->desc.flags & 0x10) != 0;   // NVN_TEXTURE_FLAGS_LINEAR: pitch layout, desc.stride bytes per row
         if (target != 1 && target != 4 && target != 7) unsupported(d, "sampled texture target (2D / 2D array / rectangle so far)", target);
@@ -537,6 +566,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // NVN front face (CW 0 / CCW 1) is defined on clip-space winding; with UPPER_LEFT origin Metal's framebuffer winding
     // matches the GL clip-control convention, so the NVN value maps directly (pinned by the back-face GPU test).
     [e setFrontFacingWinding:(d->states_set & 8) && d->polygon.front == 0 ? MTLWindingClockwise : MTLWindingCounterClockwise];
+    if (d->depth_bias_enabled) [e setDepthBias:d->depth_bias slopeScale:d->depth_bias_slope clamp:d->depth_bias_clamp];
     MTLViewport vp = {0, 0, (double)width, (double)height, d->depth_range[0], d->depth_range[1]};
     if (d->viewport_set) { vp.originX = d->viewport[0]; vp.originY = d->viewport[1]; vp.width = d->viewport[2]; vp.height = d->viewport[3]; }
     [e setViewport:vp];

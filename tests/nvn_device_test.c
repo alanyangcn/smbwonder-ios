@@ -967,16 +967,20 @@ int main(void) {
             ((void (*)(void *))slot("nvnCommandBufferBeginRecording"))(dcb);
             ((void (*)(void *, const void *, int))slot("nvnCommandBufferBindProgram"))(dcb, program_memory, 0x11);
             uint64_t rebind = ((uint64_t (*)(void *))slot("nvnCommandBufferEndRecording"))(dcb); dsubmit(queue, 1, &rebind);
-            // Rasterizer discard, depth clamp, sample mask, polygon offset: recorded and refused.
+            // Rasterizer discard, depth clamp, sample mask: recorded and refused. Polygon offset reaches the host draw.
             void (*u32cmd)(void *, uint32_t);
             u32cmd = slot("nvnCommandBufferSetRasterizerDiscard"); REVIEW_STOP(u32cmd(dcb, 1), "rasterizer discard"); REVIEW_OK(u32cmd(dcb, 0));
             u32cmd = slot("nvnCommandBufferSetDepthClamp"); REVIEW_STOP(u32cmd(dcb, 1), "depth clamp"); REVIEW_OK(u32cmd(dcb, 0));
             void (*mask)(void *, int) = slot("nvnCommandBufferSetSampleMask"); REVIEW_STOP(mask(dcb, 1), "sample mask"); REVIEW_OK(mask(dcb, -1));
             unsigned char poly[4]; ((void (*)(void *))slot("nvnPolygonStateSetDefaults"))(poly);
             ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 4);
-            REVIEW_STOP(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly), "polygon offset");
+            REVIEW_OK((((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly),
+                       ((void (*)(void *, float, float, float))slot("nvnCommandBufferSetPolygonOffsetClamp"))(dcb, 1.5f, 4.0f, 0.25f)));
+            assert(last_draw.depth_bias_enabled && last_draw.depth_bias_slope == 1.5f && last_draw.depth_bias == 4.0f && last_draw.depth_bias_clamp == 0.25f);
+            ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 2);   // LINE only: no bias on filled triangles
+            REVIEW_OK(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly)); assert(!last_draw.depth_bias_enabled);
             ((void (*)(void *, int))slot("nvnPolygonStateSetPolygonOffsetEnables"))(poly, 0);
-            REVIEW_OK(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly));
+            REVIEW_OK(((void (*)(void *, const void *))slot("nvnCommandBufferBindPolygonState"))(dcb, poly)); assert(!last_draw.depth_bias_enabled);
             // Primitive restart: an index equal to the restart value (index 5 here) cannot be honoured on a list.
             uint16_t *idx = (uint16_t *)(cb_memory + 0x9200); uint16_t saved[6]; memcpy(saved, idx, sizeof saved);
             for (int i = 0; i < 6; i++) idx[i] = (uint16_t)i;

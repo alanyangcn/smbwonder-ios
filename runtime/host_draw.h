@@ -18,12 +18,14 @@ struct wonder_host_draw {
     struct wonder_host_span ubo[2][14];                                               // [stage][NVN uniform slot], read slots only
     struct wonder_host_span sbuf[2][16];                                              // [stage][NVN storage slot], used slots only
     struct { struct wonder_nvn_texture_registration texture; struct wonder_nvn_sampler_state sampler;
-             const uint8_t *storage; uint64_t storage_size; } tex[2][40]; uint64_t tex_mask[2];   // slots 32.. = bindless; storage: pool bytes (TX1 layout)
+             const uint8_t *storage; uint64_t storage_size;
+             void *storage_buffer; uint64_t storage_buffer_offset; } tex[2][40]; uint64_t tex_mask[2];   // storage_buffer: the pool's MTLBuffer   // slots 32.. = bindless; storage: pool bytes (TX1 layout)
     wonder_nvn_blend_state blend[8]; uint8_t blend_set; float blend_color[4];   // SetBlendColor (constant blend factors)
     wonder_nvn_color_state color; wonder_nvn_channel_mask_state channel_mask; wonder_nvn_depth_stencil_state depth_stencil;
     wonder_nvn_polygon_state polygon; wonder_nvn_multisample_state multisample; uint8_t states_set;   // bits as wonder_nvn_draw_state
     float viewport[4]; int viewport_set; float depth_range[2]; int scissor[4]; int scissor_set;
     int depth_mode, window_origin;
+    int depth_bias_enabled; float depth_bias, depth_bias_slope, depth_bias_clamp;   // NVN polygon offset (units, factor, clamp)
 };
 int wonder_host_shader_available(const char key[17]);                       // 1 = in the bundled shader build
 void *wonder_host_shader_function(const char key[17], int stage);           // id<MTLFunction>; stops by name on failure
