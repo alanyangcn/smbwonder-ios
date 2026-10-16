@@ -60,6 +60,7 @@ fetch(){
   if grep -q 'HOST_FIRST_DRAW_CAPTURE' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
     pull Documents/FirstDraw/target-0.png || true
   fi
+  for f in $(grep -o 'Documents/Text/text-[0-9]*\.png' "$OUT/Documents/loader-probe.log" 2>/dev/null | sort -u); do pull "$f" || true; done
   if grep -q 'Documents/Present/present-' "$OUT/Documents/loader-probe.log" 2>/dev/null; then
     for f in $(grep -o 'Present/present-[0-9]*\.png' "$OUT/Documents/loader-probe.log" | sort -u); do
       pull "Documents/$f" || true

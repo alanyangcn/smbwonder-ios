@@ -60,6 +60,11 @@ static char missing_pairs[256][34];   // dedup independent of the (truncated) me
 static unsigned submit_draws; static char submit_programs[256];
 // The first executed draw's colour target is read back (evidence) after the submit that holds it.
 static struct wonder_nvn_texture_snapshot first_draw_target; static int first_draw_pending, first_draw_captured;
+// Text targets captured after their submit (diagnostic, round132: text still invisible).
+void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target, const char *name);
+int wonder_host_copy_texture(const struct wonder_nvn_texture_snapshot *s, const struct wonder_nvn_copy_region *sr,
+                             const struct wonder_nvn_texture_snapshot *d, const struct wonder_nvn_copy_region *dr, int flags, char *why, size_t n);
+static struct wonder_nvn_texture_snapshot text_targets[3]; static int text_pending;
 // One submitter at a time (Wonder submits from its render thread). An owner flag instead of a mutex keeps a
 // stopped replay from wedging later submissions on the same thread (tests resubmit after expected stops).
 static _Atomic(pthread_t *) replay_owner;
@@ -311,6 +316,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (fb) { make_cpu_visible(fb, 4); struct wonder_nvn_pool_view v; wonder_nvn_address_span(fb, 4, &v); k += snprintf(line + k, sizeof line - k, " fs_c4.x=%#x", *(const uint32_t *)v.memory); }
             k += snprintf(line + k, sizeof line - k, " blend_en=%#x blend0=%u/%u/%u %u/%u/%u mask=%#x depth=%u/%u/%u", d.color.blend_en, d.blend[0].src_rgb, d.blend[0].dst_rgb, d.blend[0].eq_rgb,
                           d.blend[0].src_a, d.blend[0].dst_a, d.blend[0].eq_a, d.channel_mask.mask, d.depth_stencil.dt, d.depth_stencil.dw, d.depth_stencil.df);
+            if (n < 3 && d.targets[0].valid && text_pending < 3) text_targets[text_pending++] = d.targets[0];
             for (int i = 0; i < d.color_count && i < 1; i++) if (d.targets[i].valid)
                 k += snprintf(line + k, sizeof line - k, " rt0=%llu:%ux%u fmt=%#x", (unsigned long long)d.targets[i].texture.serial, d.targets[i].texture.desc.width, d.targets[i].texture.desc.height, d.targets[i].texture.desc.format);
             wonder_nvn_report("%s", line);
@@ -547,7 +553,15 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
     case WONDER_NVN_CMD_DISPATCH: case WONDER_NVN_CMD_DISPATCH_INDIRECT:
         replay_stop(opcode, "compute execution needs translated shaders");
-    case WONDER_NVN_CMD_CLEAR_TEXTURE: case WONDER_NVN_CMD_COPY_TEXTURE_TO_BUFFER: case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE:
+    case WONDER_NVN_CMD_COPY_TEXTURE_TO_TEXTURE: {
+        struct { struct wonder_nvn_texture_snapshot s, d; struct wonder_nvn_copy_region sr, dr; } blob;
+        if (c->blob_size != sizeof blob) replay_stop(opcode, "malformed copy record");
+        memcpy(&blob, wonder_nvn_cmd_blob(c), sizeof blob);
+        char why[200];
+        if (wonder_host_copy_texture(&blob.s, &blob.sr, &blob.d, &blob.dr, (int)c->a[0], why, sizeof why)) replay_stop(opcode, why);
+        break;
+    }
+    case WONDER_NVN_CMD_CLEAR_TEXTURE: case WONDER_NVN_CMD_COPY_TEXTURE_TO_BUFFER:
     case WONDER_NVN_CMD_DOWNSAMPLE:
         replay_stop(opcode, "texture upload/coherence path not implemented");
     default:
@@ -590,6 +604,11 @@ static void submit_on_replay_stack(void *arg) {
         missing_list[0] = 0;
     }
     if (first_draw_pending) { first_draw_pending = 0; first_draw_captured = 1; wonder_host_capture_first_draw(&first_draw_target); }
+    if (text_pending) {
+        static int captured; char name[40];
+        for (int i = 0; i < text_pending && i < 3; i++) { snprintf(name, sizeof name, "Text/text-%d.png", captured++); wonder_host_capture_target(&text_targets[i], name); }
+        text_pending = 0;
+    }
     // Diagnostic (WONDER_SUBMIT_SYNC=1): wait for the GPU after every submit, to tell CPU/GPU memory races from
     // wrong rendering.
     { static int sync = -1; if (sync < 0) { const char *e = getenv("WONDER_SUBMIT_SYNC"); sync = e && *e == '1'; }

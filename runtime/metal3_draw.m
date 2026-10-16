@@ -653,6 +653,32 @@ static NSString *const clear_source = @"#include <metal_stdlib>\nusing namespace
     "struct V { float4 p [[position]]; };\n"
     "vertex V clear_vs(uint id [[vertex_id]]) { V o; o.p = float4(id == 1 ? 3.0 : -1.0, id == 2 ? 3.0 : -1.0, 0.0, 1.0); return o; }\n"
     "fragment float4 clear_fs(constant float4 &c [[buffer(0)]]) { return c; }\n";
+// nvnCommandBufferCopyTextureToTexture between GPU-resident textures (round132, in a course): same-size regions as a
+// Metal blit, layer by layer. A CPU-only source or a scaled copy is refused by name in *why.
+int wonder_host_copy_texture(const struct wonder_nvn_texture_snapshot *s, const struct wonder_nvn_copy_region *sr,
+                             const struct wonder_nvn_texture_snapshot *d, const struct wonder_nvn_copy_region *dr, int flags, char *why, size_t n) {
+    id<MTLTexture> st = (__bridge id<MTLTexture>)wonder_host_render_target_existing(&s->texture);
+    if (!st) { snprintf(why, n, "copy source serial %llu is not GPU-resident (CPU texture %ux%u fmt %#x)", (unsigned long long)s->texture.serial, s->texture.desc.width, s->texture.desc.height, s->texture.desc.format); return -1; }
+    uint32_t mtl = 0; if (nvn_fmt_to_mtl(d->texture.desc.format, &mtl, NULL) != 1) { snprintf(why, n, "copy destination format %#x", d->texture.desc.format); return -1; }
+    id<MTLTexture> dt = (__bridge id<MTLTexture>)wonder_host_render_target(&d->texture, mtl);
+    if (!dt) { snprintf(why, n, "copy destination serial %llu has no GPU texture", (unsigned long long)d->texture.serial); return -1; }
+    if (sr->width != dr->width || sr->height != dr->height || sr->depth != dr->depth) {
+        snprintf(why, n, "scaled copy %dx%dx%d -> %dx%dx%d flags %#x", sr->width, sr->height, sr->depth, dr->width, dr->height, dr->depth, flags); return -1; }
+    if (st.pixelFormat != dt.pixelFormat) { snprintf(why, n, "copy between formats %lu -> %lu", (unsigned long)st.pixelFormat, (unsigned long)dt.pixelFormat); return -1; }
+    if (sr->width <= 0 || sr->height <= 0 || sr->depth <= 0 || sr->x < 0 || sr->y < 0 || dr->x < 0 || dr->y < 0) { snprintf(why, n, "copy region %d,%d %dx%d", sr->x, sr->y, sr->width, sr->height); return -1; }
+    NSUInteger sl = s->has_view && s->view.set_levels ? s->view.base_level : 0, dl = d->has_view && d->view.set_levels ? d->view.base_level : 0;
+    NSUInteger ss = (s->has_view && s->view.set_layers ? s->view.min_layer : 0) + (NSUInteger)sr->z, ds = (d->has_view && d->view.set_layers ? d->view.min_layer : 0) + (NSUInteger)dr->z;
+    int is3d = st.textureType == MTLTextureType3D;
+    wonder_host_replay_lock();
+    id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
+    for (int z = 0; z < (is3d ? 1 : sr->depth); z++)
+        [b copyFromTexture:st sourceSlice:ss + (NSUInteger)z sourceLevel:sl sourceOrigin:MTLOriginMake((NSUInteger)sr->x, (NSUInteger)sr->y, is3d ? (NSUInteger)sr->z : 0)
+                sourceSize:MTLSizeMake((NSUInteger)sr->width, (NSUInteger)sr->height, is3d ? (NSUInteger)sr->depth : 1)
+                 toTexture:dt destinationSlice:ds + (NSUInteger)z destinationLevel:dl destinationOrigin:MTLOriginMake((NSUInteger)dr->x, (NSUInteger)dr->y, is3d ? (NSUInteger)dr->z : 0)];
+    [b endEncoding];
+    wonder_host_replay_unlock();
+    return 0;
+}
 int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba[4], unsigned mask, const int rect[4]) {
     id<MTLTexture> t = (__bridge id<MTLTexture>)texture; if (!t || !device) return 1;
     static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pipelines_by_key; static id<MTLLibrary> library;

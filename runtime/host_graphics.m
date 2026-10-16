@@ -273,6 +273,16 @@ void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *ta
  fprintf(stderr,"HOST_FIRST_DRAW_CAPTURE serial=%llu format=%#x %ux%u result=%d\n",(unsigned long long)target->texture.serial,target->texture.desc.format,target->texture.desc.width,target->texture.desc.height,r);
 }
 
+// Diagnostic capture of a render target into Documents/<name> (after its submit; e.g. Text/text-0.png).
+void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target,const char *name){
+ void *t=wonder_host_render_target_existing(&target->texture);
+ NSString *path=[NSHomeDirectory() stringByAppendingPathComponent:[@"Documents" stringByAppendingPathComponent:@(name)]];
+ [NSFileManager.defaultManager createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+ int level=target->has_view&&target->view.set_levels?target->view.base_level:0, slice=target->has_view&&target->view.set_layers?target->view.min_layer:0;
+ int r=t?wonder_host_readback_png(t,level,slice,path.fileSystemRepresentation):-1;
+ fprintf(stderr,"HOST_TARGET_CAPTURE Documents/%s serial=%llu format=%#x %ux%u result=%d\n",name,(unsigned long long)target->texture.serial,target->texture.desc.format,target->texture.desc.width,target->texture.desc.height,r);
+}
+
 // ---------- Host replay thread ----------
 static pthread_mutex_t job_lock=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t job_ready=PTHREAD_COND_INITIALIZER, job_done=PTHREAD_COND_INITIALIZER;
 static void (*job_fn)(void *); static void *job_arg; static int job_pending, job_finished; static pthread_t replay_thread;

@@ -76,6 +76,11 @@ void wonder_host_run_on_replay_stack(void (*fn)(void *), void *arg) { fn(arg); }
 int wonder_host_gpu_error(char *out, size_t size) { if (!fake_gpu_error) return 0; snprintf(out, size, "%s", fake_gpu_error); return 1; }
 static unsigned first_draw_captures; static struct wonder_nvn_texture_snapshot first_draw_target;
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target) { first_draw_target = *target; first_draw_captures++; }
+void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target, const char *name) { (void)target; (void)name; }
+static unsigned host_copies;
+int wonder_host_copy_texture(const struct wonder_nvn_texture_snapshot *s, const struct wonder_nvn_copy_region *sr,
+                             const struct wonder_nvn_texture_snapshot *d, const struct wonder_nvn_copy_region *dr, int flags, char *why, size_t n) {
+    (void)s; (void)sr; (void)d; (void)dr; (void)flags; (void)why; (void)n; host_copies++; return 0; }
 // Fake replay backend: records operations; CPU callbacks run when pending work is "committed".
 static unsigned host_clears, host_depth_clears, host_fills, host_writes, host_presents, host_targets;
 static float host_last_clear[4]; static void *pending_fn[64]; static void *pending_arg[64]; static unsigned pending_count;
@@ -734,12 +739,17 @@ int main(void) {
         ((void (*)(void *, uint32_t, uint64_t))slot("nvnCommandBufferReportValue"))(qcb, 0xabcd, (uintptr_t)report);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0, (uintptr_t)stamp);
         ((void (*)(void *, int, uint64_t))slot("nvnCommandBufferReportCounter"))(qcb, 0x10, (uintptr_t)stamp_top);   // TIMESTAMP_TOP
+        {   // CopyTextureToTexture reaches the host copy (round132): display texture 0 -> display texture 1, 64x32 at the origin.
+            const int region[6] = {0, 0, 0, 64, 32, 1};
+            ((void (*)(void *, const void *, const void *, const void *, const void *, const void *, const void *, int))slot("nvnCommandBufferCopyTextureToTexture"))(
+                qcb, textures[0], NULL, region, textures[1], NULL, region, 0);
+        }
         ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x10);
         ((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x101);   // bit 8 exists in SDK 55 (sdk+0x478fc8); round73 uses it
         EXPECT_STOP(((void (*)(void *, int))slot("nvnCommandBufferBarrier"))(qcb, 0x200), "NVN_INVALID_ARGUMENT");
         ((void (*)(void *, int))slot("nvnCommandBufferSetTiledCacheAction"))(qcb, 1);
         uint64_t frame = end(qcb);
-        submit(queue, 1, &frame);
+        submit(queue, 1, &frame); assert(host_copies == 1);   // the CopyTextureToTexture above
         assert(host_clears == 1 && host_last_clear[2] == 1.0f && host_writes == 1 && report[0] == 0);   // reports wait for the GPU
         int (*sync_wait)(const void *, uint64_t) = slot("nvnSyncWait");
         static _Alignas(16) unsigned char fence_sync[0x40];
@@ -783,7 +793,7 @@ int main(void) {
         uint64_t samples = end(qcb);
         EXPECT_STOP(submit(queue, 1, &samples), "counter type 0x1 (SAMPLES_PASSED)");
         uint64_t bogus = 0x999; EXPECT_STOP(submit(queue, 1, &bogus), "NVN_INVALID_HANDLE");
-        submit(queue, 1, &frame);                                                                        // replay state survives stops
+        submit(queue, 1, &frame); assert(host_copies == 2);   // resubmitted: the copy runs again                                                                        // replay state survives stops
         assert(host_clears == 2);
         wonder_host_flush();
     }
