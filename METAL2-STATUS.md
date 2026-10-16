@@ -43,6 +43,15 @@
   - 文字：round135 `HOST_TEXT_SAMPLER` 采样器正常（无比较、LOD -1000..1000、min3 mag1），问题不在采样器。
 - 测试：`metal3_encode_test` 的渲染目标替身改用真实描述符（原来用 2D 纹理冒充 cube，AMD 上碰巧通过，Apple GPU 验证层拒绝）。宿主测试 98 项通过（2 项跳过）。
 
+  - round146–180（2026-10-16/17，换场景闪退已修，画面问题持续追）：
+    - **换场景闪退/远景纯色已修**：alias 区只剩约 40 MiB，VAMM 堆为 DV 模型申请地址区失败（0x1803）；alias 区改为占满剩余地址空间（5376 MiB）。
+    - 停名修复：纹理视图换目标类型（2D↔2D 数组等）、深度钳制（MTLDepthClipModeClamp）、0 号纹理句柄=空槽（读 0）、2D 数组被 2D 指令采样读第 0 层、后台禁止提交 GPU（gpu_gate.c：resign 起等待 active）、CPU boost 在实时线程上保留实时策略、轮次环境写入 Documents/launch-env.txt（主屏启动同配置）。
+    - **着色器全量离线构建**：tools/extract_shaders.py 从 RomFS 的 BNSH（bfsha/esetb/blarc/sarc）取出 7575 个程序；与普查合并共构建 6463 个阶段，留下 107 个（指令需绑定贴图类型的顶点阶段）。离线阶段的顶点属性/输出按 float，宿主逐次绘制核对格式类别（不符按名停）。超过 16 个采样器的 12 个阶段改走参数缓冲（smpov）。agl/gsys 的 sharcb 尚未解析（仍靠普查）。
+    - LINEAR_RENDER_TARGET(0x40) 贴图按线性布局读（天空查找表 64x1 RGBA16F 原来只读到前 64 字节）；顶点位置加 [[invariant]] + preserveInvariance。
+    - 诊断工具：WONDER_FRAME_DUMP_EVERY / WONDER_DRAW_DUMP（逐程序画面+深度）/ WONDER_TEX_DUMP_FS（贴图各级+alpha+常量与顶点数据）/ WONDER_DIAG_NODEPTH_FS / WONDER_SKIP_CS / WONDER_TRACE_VS（记录时绑定调用链、回放绑定/绘制）/ NVN_RENDER_ENABLE 计数。
+    - **仍未解决：关卡前景灌木、斜坡草、音符块所在区域显示为清屏蓝色**。已确认：深度预通道（如 1451a723-2e8b0a9c，写深度+ID）每帧都画，同一网格的颜色通道（7c598128-571c2316，EQUAL）与低分辨率层通道（bc0e5f06-0f000c1e）**游戏根本没录制**（记录时追踪 0 次；round136 首次进关时曾录制）。排除：采样器上限、D24 精度（EQUAL→LEQUAL 无效）、CPU/GPU 竞争（SUBMIT_SYNC 无效）、条件渲染（0 次跳过绘制）、计算着色器 cs-45bc61e5。所有绘制都经 main+0x16b8fc→main+0x77b8d4（绑定材质程序）；渲染主循环 main+0x1108a0 按层调用 main+0x16b1f0 画各层清单——灌木颜色没进任何层的清单，下一步逆向分类/剔除逻辑。
+    - 已知：从桌面切走后有时被系统以 signal 15 结束（另一个项目 zelda-la-mobile 同机安装/启动 App 时也会挤掉本 App）。
+
 ## 首帧推进（2026-10-15，持续进行）
 
 项目已独立为 `~/funny/smbwonder-ios`，Git 分支 `first-game-frame`。执行计划在 `docs/superpowers/plans/2026-10-15-first-game-frame.md`。
