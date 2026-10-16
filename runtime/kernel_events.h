@@ -12,3 +12,6 @@ uint32_t wonder_threads_register_current(int prio, int core, void (*prepare)(voi
 // Host kernel objects behind ordinary handles (CloseHandle invokes close(obj)).
 uint32_t wonder_handle_new_object(uint32_t kind, void *obj, void (*close)(void *));
 void *wonder_handle_object(uint32_t handle, uint32_t kind);
+// Diagnostics: log every guest thread blocked longer than min_ns (KERNEL_WAIT lines), frames formatted by the hook.
+#include <stddef.h>
+void wonder_kernel_dump_waits(int64_t min_ns, void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size));

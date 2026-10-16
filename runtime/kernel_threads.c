@@ -48,6 +48,7 @@ struct thr {
     pthread_t pt; pthread_cond_t cv;
     jmp_buf host_exit; int host_exit_ready;
     int wkind, woke; uint64_t waddr, wkey, wseq; uint32_t wtag; int64_t wres;
+    uint64_t wfp, wlr; int64_t wstart; uint32_t wsvc;   // where and when the current wait began (diagnostics)
     struct thr *next, *all;
 };
 static pthread_mutex_t G = PTHREAD_MUTEX_INITIALIZER;
@@ -61,7 +62,7 @@ static void (*report_hook)(const char *line);
 static void report(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void report(const char *fmt, ...) {
     if (!report_hook) return;
-    char line[256]; va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); report_hook(line);
+    char line[512]; va_list a; va_start(a, fmt); vsnprintf(line, sizeof line, fmt, a); va_end(a); report_hook(line);
 }
 static void make_key(void) { pthread_key_create(&key_thread, NULL); }
 
@@ -104,8 +105,9 @@ static struct thr *pick(int kind, uint64_t a) {   // kernel order: lower priorit
     return b;
 }
 static void wake(struct thr *t, int64_t res) { unlink_wait(t); t->wkind = W_NONE; t->woke = 1; t->wres = res; pthread_cond_signal(&t->cv); }
+static int64_t mono_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec; }
 static int64_t block(struct thr *t, int kind, int64_t ns) {   // ns<0 forever, 0 immediate timeout
-    t->wkind = kind; t->woke = 0; t->next = waiting; waiting = t; t->wseq = ++wait_seq;
+    t->wkind = kind; t->woke = 0; t->next = waiting; waiting = t; t->wseq = ++wait_seq; t->wstart = mono_ns();
     if (ns == 0) { unlink_wait(t); t->wkind = W_NONE; return R_TIMEOUT; }
     struct timespec dl;
     if (ns > 0) { clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += ns / 1000000000; dl.tv_nsec += ns % 1000000000;
@@ -137,7 +139,7 @@ static void lock_acquire_for(struct thr *t, uint64_t addr, uint32_t tag) {
         if (v == 0) { if (cas32(addr, &v, tag)) { wake(t, 0); return; } continue; }
         if (cas32(addr, &v, v | WAITERS_BIT)) break;
     }
-    t->wkind = W_LOCK; t->waddr = addr; t->wtag = tag; t->wseq = ++wait_seq;
+    t->wkind = W_LOCK; t->waddr = addr; t->wtag = tag; t->wseq = ++wait_seq; t->wstart = mono_ns();
 }
 
 // ---------- threads ----------
@@ -176,6 +178,24 @@ static struct thr *new_thread(void) {
     struct thr *t = calloc(1, sizeof *t);
     if (t) pthread_cond_init(&t->cv, NULL);
     return t;
+}
+// Diagnostics: every guest thread blocked longer than min_ns, with the guest frame chain where it began waiting
+// (frames formatted by the caller's hook, which knows the modules).
+void wonder_kernel_dump_waits(int64_t min_ns, void (*frames)(uint64_t fp, uint64_t lr, char *out, size_t size)) {
+    static const char *const kinds[] = {"none", "lock", "condvar", "address", "sync"};
+    pthread_mutex_lock(&G);
+    int64_t now = mono_ns(); unsigned n = 0, total = 0;
+    for (struct thr *t = waiting; t; t = t->next) {
+        total++;
+        if (now - t->wstart < min_ns) continue;
+        char chain[200] = ""; if (frames) frames(t->wfp, t->wlr, chain, sizeof chain);
+        report("KERNEL_WAIT thread=%#x id=%#llx prio=%d core=%d %s svc=%#x addr=%#llx key=%#llx tag=%#x waited_ms=%lld at %s",
+               t->handle, (unsigned long long)t->id, t->prio, t->core, kinds[t->wkind < 5 ? t->wkind : 0], t->wsvc,
+               (unsigned long long)t->waddr, (unsigned long long)t->wkey, t->wtag, (long long)((now - t->wstart) / 1000000), chain);
+        n++;
+    }
+    report("KERNEL_WAIT_SUMMARY waiting=%u reported=%u (blocked >= %lld ms)", total, n, (long long)(min_ns / 1000000));
+    pthread_mutex_unlock(&G);
 }
 uint32_t wonder_threads_register_current(int prio, int core, void (*prepare)(void), void (*enter)(uint64_t, uint64_t, uint64_t),
                                          void (*reporter)(const char *)) {
@@ -261,6 +281,7 @@ int wonder_event_call(int number, uint64_t *r) {
     }
     // Every caller of these SVCs must be a registered guest thread; anything else is a host defect.
     if (!me) { report("KERNEL_NON_GUEST_CALLER svc=%#x", number); return 0; }
+    if (number == 0x18 || number == 0x1A || number == 0x1C || number == 0x34) { me->wfp = r[29]; me->wlr = r[30]; me->wsvc = (uint32_t)number; }
     switch (number) {
     case 0x08: r[0] = create_thread(r); return 1;
     case 0x09: {

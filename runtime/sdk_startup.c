@@ -19,6 +19,17 @@ static void *required(const char *name) {
 static _Atomic unsigned svc_seen[256];
 int wonder_game_stopped(void);
 _Noreturn void wonder_game_thread_park(void);
+// Guest frame chain as "main+0x.. main+0x.." from a frame pointer and the link register (KERNEL_WAIT diagnostics).
+void wonder_guest_frames(uint64_t fp,uint64_t lr,char *out,size_t size){
+    size_t n=0; out[0]=0; uint64_t pc=lr;
+    for(unsigned depth=0;depth<8&&n+24<size;depth++){
+        module_t *m=module_of((void *)pc);
+        n+=(size_t)snprintf(out+n,size-n,m?"%s+%#llx ":"%#llx ",m?m->name:"",(unsigned long long)(m?pc-(uint64_t)m->base:pc));
+        uint64_t frame[2]; vm_size_t count=0;
+        if(!fp||(fp&15)||vm_read_overwrite(mach_task_self(),fp,sizeof frame,(vm_address_t)frame,&count)!=KERN_SUCCESS||count!=sizeof frame||frame[0]<=fp)break;
+        fp=frame[0]; pc=frame[1];
+    }
+}
 uint64_t svc_dispatch(int number,uint64_t *regs,uint64_t original) {
     if(wonder_game_stopped()){LOG("GUEST_PARKED svc=%#x pc=%#llx (guest already stopped)",number,original);wonder_game_thread_park();}
     unsigned seen=svc_seen[number&0xff]++;

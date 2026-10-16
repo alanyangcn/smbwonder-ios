@@ -236,6 +236,10 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  static unsigned presents; if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
   task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; uint64_t footprint=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0;
   pthread_mutex_lock(&replay_mutex); unsigned targets=wonder_storage_count(); pthread_mutex_unlock(&replay_mutex);
+  if(presents%1800==0){   // every ~30 s: guest threads blocked >= 5 s (a stalled load names its waiter)
+   extern void wonder_guest_frames(uint64_t,uint64_t,char *,size_t);
+   wonder_kernel_dump_waits(INT64_C(5000000000),wonder_guest_frames);
+  }
   extern size_t wonder_nvn_glyph_cache_nonzero(uint64_t *serial); uint64_t gserial=0; size_t glyphs=wonder_nvn_glyph_cache_nonzero(&gserial);
   fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs);
  }
