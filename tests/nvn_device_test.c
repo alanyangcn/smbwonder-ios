@@ -1211,6 +1211,9 @@ int main(void) {
         assert(forgotten_pool == (const void *)wt_pool);   // GPU textures stored in the pool go with it
         assert(released_resources == before + 1);
         EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
+        // Its memory no longer resolves; the stop names the finalized pool (round208).
+        { struct wonder_nvn_pool_view v; EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
+          assert(strstr(last_stop, "+0x100")); }
     }
     puts("NVN_STRICT_BOOTSTRAP_OK");
 }

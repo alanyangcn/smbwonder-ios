@@ -2,6 +2,7 @@
 // Host objects live inside the guest-owned NVN storage; a magic word guards every use.
 #include "nvn_draw_census.h"
 #include <stdatomic.h>
+#include <stdio.h>
 #include "nvn_device.h"
 #include "command_store.h"
 #include "nvn_names.h"
@@ -302,6 +303,11 @@ const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_
     pthread_mutex_unlock(&pool_registry_lock);
     return pool;
 }
+// The last pools the game finalized (round208: a replayed draw read a uniform buffer whose pool was gone), named in
+// NVN_INVALID_ADDRESS with the game's call chain at the finalize.
+#define FREED_POOLS 64
+static struct freed_pool { const void *pool; uint64_t lo, hi; char chain[400]; } freed_pools[FREED_POOLS]; static unsigned freed_next;
+void (*wonder_nvn_stop_context)(char *out, size_t size);
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {
     static __thread struct pool_range last; static __thread uint64_t last_generation;
     const struct memory_pool *pool = NULL;
@@ -313,7 +319,21 @@ void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_
         if (pool) { last = (struct pool_range){(uintptr_t)pool->memory, (uintptr_t)pool->memory + pool->size, pool}; last_generation = generation; }
         pthread_mutex_unlock(&pool_registry_lock);
     }
-    if (!pool) wonder_nvn_stop("NVN_INVALID_ADDRESS resource=%#llx size=%#llx", (unsigned long long)address, (unsigned long long)size);
+    if (!pool) {   // round208: say whether the address belonged to a finalized pool, and where the replay was
+        char where[160] = "", freed[600] = "";
+        if (wonder_nvn_stop_context) wonder_nvn_stop_context(where, sizeof where);
+        pthread_mutex_lock(&pool_registry_lock);
+        for (unsigned i = 0; i < FREED_POOLS; i++) {
+            const struct freed_pool *f = &freed_pools[(freed_next + FREED_POOLS - 1 - i) % FREED_POOLS];
+            if (f->hi && address >= f->lo && address < f->hi) {
+                snprintf(freed, sizeof freed, "; it was in pool %p+%#llx (%#llx bytes) finalized %u pool finalizes ago from %s",
+                         f->pool, (unsigned long long)(address - f->lo), (unsigned long long)(f->hi - f->lo), i, f->chain);
+                break;
+            }
+        }
+        pthread_mutex_unlock(&pool_registry_lock);
+        wonder_nvn_stop("NVN_INVALID_ADDRESS resource=%#llx size=%#llx%s%s%s", (unsigned long long)address, (unsigned long long)size, where[0] ? " at " : "", where, freed);
+    }
     if (pool->flags & 8) wonder_nvn_stop("NVN_INVALID_ADDRESS GPU_NO_ACCESS pool");
     wonder_nvn_pool_span(pool, address - (uintptr_t)pool->memory, size, view);
     view->flags = pool->flags;
@@ -648,6 +668,10 @@ void wonder_nvnMemoryPoolFinalize(void *pool) {
                 }
     for (struct pool_registration **p = &pool_registry; *p; p = &(*p)->next)
         if ((*p)->pool == m) { struct pool_registration *dead = *p; *p = dead->next; free(dead); break; }
+    {   struct freed_pool *f = &freed_pools[freed_next++ % FREED_POOLS];
+        f->pool = pool; f->lo = (uintptr_t)m->memory; f->hi = (uintptr_t)m->memory + m->size; f->chain[0] = 0;
+        extern void (*wonder_nvn_frames_hook)(uint64_t fp, uint64_t lr, char *out, size_t size);
+        if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), f->chain, sizeof f->chain); }
     rebuild_pool_index();
     pthread_mutex_unlock(&pool_registry_lock);
     wonder_host_pool_forget(pool);

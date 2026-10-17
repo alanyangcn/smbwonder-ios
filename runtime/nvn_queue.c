@@ -630,8 +630,13 @@ static void replay_handle(uint64_t handle, unsigned depth) {
     if (depth > 8) wonder_nvn_stop("NVN_INVALID_COMMAND CallCommands nesting deeper than 8");
     wonder_nvn_command_walk(handle, replay_visit, (void *)(uintptr_t)depth);
 }
+static unsigned replay_opcode;
+static void replay_where(char *out, size_t size) {
+    snprintf(out, size, "replay submit %u command %u (%s)", state.submits, state.commands, replay_opcode ? wonder_nvn_command_name(replay_opcode) : "-");
+}
+__attribute__((constructor)) static void install_replay_where(void) { wonder_nvn_stop_context = replay_where; }
 static void replay_visit(unsigned opcode, const void *payload, size_t size, void *context) {
-    (void)size; state.commands++;
+    (void)size; state.commands++; replay_opcode = opcode;
     if (census_only) switch (opcode) {   // GPU work after the first missing program does not run in this submit
     case WONDER_NVN_CMD_CLEAR_COLOR: case WONDER_NVN_CMD_CLEAR_DEPTH_STENCIL: case WONDER_NVN_CMD_CLEAR_BUFFER: case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER:
     case WONDER_NVN_CMD_REPORT_COUNTER: case WONDER_NVN_CMD_REPORT_VALUE: case WONDER_NVN_CMD_RESET_COUNTER: case WONDER_NVN_CMD_CLEAR_TEXTURE:

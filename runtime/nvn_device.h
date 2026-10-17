@@ -89,6 +89,7 @@ extern const unsigned wonder_nvn_command_count;
 
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view);
 const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_t *size);   // registered pool holding address (diagnostics), NULL if none
+extern void (*wonder_nvn_stop_context)(char *out, size_t size);   // describes the replay position for address stops (set by nvn_queue.c)
 
 void wonder_host_resource_label(void *resource, const char *label);
 
