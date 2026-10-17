@@ -126,6 +126,12 @@ void wonder_host_note_submit(unsigned submit){
  b.label=[NSString stringWithFormat:@"Wonder NVN submits %u-%u",pending_first_submit,pending_last_submit];
  pthread_mutex_unlock(&replay_mutex);
 }
+// Scene entered the background (LoaderProbe.m): release what can be made again, and log the footprint around it.
+static uint64_t footprint_bytes(void){ task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; return task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0; }
+void wonder_host_enter_background(void){
+ uint64_t before=footprint_bytes(); unsigned count=0; size_t bytes=wonder_host_draw_purge_sampled(&count);
+ fprintf(stderr,"HOST_BACKGROUND_PURGE sampled_textures=%u (%.0f MB) footprint %.0f -> %.0f MB\n",count,bytes/1048576.0,before/1048576.0,footprint_bytes()/1048576.0);
+}
 void wonder_host_flush(void){ pthread_mutex_lock(&replay_mutex); commit_locked(); pthread_mutex_unlock(&replay_mutex); }
 // Waits for the GPU and for the completion handlers registered before this point (report writes, sync signals):
 // handlers of one command buffer run in registration order, so a final handler signals when they are all done.
@@ -353,6 +359,9 @@ static void *replay_thread_main(void *unused){
  for(;;){
   pthread_mutex_lock(&job_lock); uint64_t ti=now_ns(); while(!job_head) pthread_cond_wait(&job_ready,&job_lock); atomic_fetch_add(&acct_idle_ns,now_ns()-ti);
   struct replay_job *j=job_head; pthread_mutex_unlock(&job_lock);
+  // round229: no replay work while the app is in the background (iOS refuses its GPU work); a job queued before the
+  // scene resigned waits here for the app to be active again.
+  { extern uint64_t wonder_gpu_gate_wait(void); uint64_t waited=wonder_gpu_gate_wait(); if(waited) fprintf(stderr,"HOST_REPLAY_GATE job waited %.1f s for the app to become active\n",waited/1e9); }
   @autoreleasepool { j->fn(j->arg); }   // a stop inside exits this thread; the guest is parked by the stop
   pthread_mutex_lock(&job_lock);
   job_head=j->next; if(!job_head) job_tail=NULL; job_count--;

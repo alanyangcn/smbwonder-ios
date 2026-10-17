@@ -173,7 +173,9 @@ uint64_t wonder_host_language(void) {
 // GPU submissions wait from resign to active (gpu_gate.h): iOS refuses GPU work once the app is in the background.
 - (void)sceneDidBecomeActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE active t=%.3f\n",now_ns()/1e9);wonder_applet_focus(1);wonder_gpu_gate_set(1); }
 - (void)sceneWillResignActive:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE resign t=%.3f\n",now_ns()/1e9);wonder_gpu_gate_set(0);wonder_applet_focus(2); }
-- (void)sceneDidEnterBackground:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE background t=%.3f\n",now_ns()/1e9);wonder_applet_focus(3); }
+- (void)sceneDidEnterBackground:(UIScene *)scene { (void)scene;fprintf(stderr,"HOST_LIFECYCLE background t=%.3f\n",now_ns()/1e9);wonder_applet_focus(3);
+    // round229: while suspended the app keeps only what cannot be made again (iOS reclaims the largest suspended apps first)
+    extern void wonder_host_enter_background(void); wonder_host_enter_background(); }
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
     (void)session; (void)options;
     if (![scene isKindOfClass:UIWindowScene.class] || self.window) return;

@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 // Metal 3 draw backend (MSL 3.2): translated shader library (this file) and, later, draw encoding.
 // Shaders come from tools/wonder_shader_build.py: <key>.metal + <key>.refl + manifest.json (sha256 of both), bundled in
 // the app at dm/shaders. A missing, edited, mis-staged or non-compiling shader stops by name with its key.
@@ -9,6 +10,7 @@ void wonder_host_shader_set_directory(const char *directory);        // director
 void *wonder_host_shader_function(const char key[17], int stage);    // id<MTLFunction>, cached for the process
 void wonder_host_draw_forget_sampled(uint64_t serial);              // drops the CPU-uploaded copy of a finalized texture
 unsigned wonder_host_draw_sampled_count(void);
+size_t wonder_host_draw_purge_sampled(unsigned *count);   // background: drop the CPU-uploaded texture copies (bytes freed)
 int wonder_host_border_color(const float rgba[4]);                  // MTLSamplerBorderColor, or -1 when Metal has no such colour
 int wonder_host_border_address_mode(const float rgba[4]);           // MTLSamplerAddressMode for CLAMP_TO_BORDER, or -1
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);

@@ -235,6 +235,18 @@ void wonder_host_draw_forget_sampled(uint64_t serial) {
     [sampled removeObjectForKey:@(serial)]; [sampled_hash removeObjectForKey:@(serial)]; [sampled_guard removeObjectForKey:@(serial)]; pthread_mutex_unlock(&sampled_lock);
     if (guard) wonder_guard_forget(guard);
 }
+// Background (round229): the CPU-uploaded sampled textures are copies of guest memory, made again on their next draw;
+// releasing them while the app is suspended lowers its footprint (iOS reclaims the largest suspended apps first).
+// Zero-copy linear views over pool buffers own no memory and are dropped too. Returns the bytes the textures held.
+size_t wonder_host_draw_purge_sampled(unsigned *count) {
+    pthread_mutex_lock(&sampled_lock);
+    size_t bytes = 0; for (id<MTLTexture> t in sampled.allValues) if (!t.buffer) bytes += t.allocatedSize;
+    NSArray<NSNumber *> *guards = sampled_guard.allValues; *count = (unsigned)sampled.count;
+    [sampled removeAllObjects]; [sampled_hash removeAllObjects]; [sampled_guard removeAllObjects];
+    pthread_mutex_unlock(&sampled_lock);
+    for (NSNumber *g in guards) if (g.unsignedIntValue) wonder_guard_forget(g.unsignedIntValue);
+    return bytes;
+}
 unsigned wonder_host_draw_sampled_count(void) { pthread_mutex_lock(&sampled_lock); unsigned n = (unsigned)sampled.count; pthread_mutex_unlock(&sampled_lock); return n; }
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
     const struct wonder_nvn_texture *t = &d->tex[stage][slot].texture.texture;

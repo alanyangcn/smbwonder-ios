@@ -350,6 +350,12 @@ int main(int argc, char **argv) {
         CFDataRef pixels = CGDataProviderCopyData(CGImageGetDataProvider(image)); const uint8_t *p = CFDataGetBytePtr(pixels) + 32 * CGImageGetBytesPerRow(image) + 32 * 4;
         assert(p[0] == centre[0] && p[1] == centre[1] && p[2] == centre[2]);
         CFRelease(pixels); CGImageRelease(image); CFRelease(src);
+        {   // round229: the background purge drops the CPU-uploaded copy (made again on the next draw)
+            assert(wonder_host_draw_sampled_count() == 1);
+            unsigned purged = 0; size_t bytes = wonder_host_draw_purge_sampled(&purged);
+            assert(purged == 1 && bytes > 0 && wonder_host_draw_sampled_count() == 0);
+            assert(wonder_host_draw(&d) == 0 && wonder_host_draw_sampled_count() == 1);
+        }
         puts("metal3 encode draw OK");
     }
     return 0;
