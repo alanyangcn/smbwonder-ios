@@ -73,7 +73,7 @@
     - **屏幕帧率显示（round216）**：左上角显示最近半秒的呈现帧率（runtime/fps_meter.c，WONDER_FPS=0 隐藏）。
     - **未绑定存储缓冲（round213–215）**：大地图上片元程序读未绑定的存储槽 0 → 绑定 64 KiB 全零块（Maxwell 空槽读 0）；计算派发写未绑定槽 0 → 写入单独的 64 KiB 丢弃块（同模拟器的哑缓冲）。玩家确认 round214 后原处不再卡。
     - **世界地图帧率（round217–223）**：关卡选择界面原约 15–31 fps 且曾闪烁。查明：(1) 闪烁来自时间戳——游戏用 GPU 时间戳测 GPU 耗时、据此调画质；宿主原在 GPU 完成时取 CPU 时钟，随每次等 GPU 跳变，画质来回切（冻结时间戳诊断即不闪）。现按 Ryujinx/yuzu 的 fast GPU time：回放到该命令时的时刻 ÷256，整条记录已知 → 条件渲染全部不再等 GPU（WONDER_FAST_CONDITIONAL 默认开）。(2) 提交改为异步：回放线程是有序任务队列（提交/fence/present/flush），游戏线程不再等每帧回放（WONDER_ASYNC_SUBMIT=0 退回同步）。(3) 主要成本：每次绘制把读的每个常量缓冲复制进清零的 64 KiB 窗口（每帧约 4000 次 blit、约 256 MB 填充）。全部 11249 个阶段的常量读取都是字面下标（动态下标已由 guard_cbuf_indices 改写为 wonder_cb）；构建在 .refl 记 cbufext（读到的字节数，动态=0），读取范围在绑定大小内则直接绑定原缓冲（约 83%）。round223：地图 36–42 fps，每帧约 27 ms（GPU 约 13 ms、回放空等约 10 ms、每帧 1 次 finish 约 4 ms）。HOST_FRAME_TIME 每 300 帧给出分解。
-    - **已释放池（round222）**：同一 0xf50 缓冲在池释放 7943 帧后仍被绘制读取 → 已释放池不再按帧数回收，只在又有 64 个更新的池释放后淘汰（零拷贝视图）；释放记录表扩到 256。
+    - **已释放池（round222）**：同一 0xf50 缓冲在池释放 7943 帧后仍被绘制读取 → 已释放池不再按帧数回收，保留 64 个视图（按最近读取淘汰）；round223 又在 8164 帧、66 次释放后读到 → round224（F04D1DB2）记录最近 1024 个已释放池的范围，读到视图已淘汰的释放池时当场重建零拷贝视图（NVN_FREED_POOL_REVIVED）。玩家确认玩一阵不再卡。
     - **屏幕帧率（round216，40347B6D）**：左上角显示帧率（runtime/fps_meter.c，按半秒窗口统计 present；WONDER_FPS=0 隐藏）。
     - **启动环境变量漏传（round212–215）**：这几轮 WONDER_ENVS 为空，覆盖了 Documents/launch-env.txt，普查扫描（WONDER_CENSUS_SWEEP=1）和 WONDER_TBDR=0 / WONDER_RT=0 都没开，于是缺失程序 b60a2a91-3b2d04ba 变成停止（玩家看到卡住）。round216 恢复。b60a2a91（vs）是已知读 c[0]+0x610 的两个阶段之一（DrawArrays 4 点，普查已收），c[0]+0x610 的驱动语义未定，仍留在 19 个之外；扫描模式下该绘制跳过。
     - 真机签名：当前安装为个人团队 MFXJ9AKFM5 / local.smbwonder.loaderprobe，轮次需 `WONDER_TEAM=MFXJ9AKFM5 WONDER_BUNDLE=local.smbwonder.loaderprobe WONDER_EXTENDED_VA=0`。
