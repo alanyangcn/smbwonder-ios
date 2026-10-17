@@ -45,7 +45,34 @@ static struct wonder_nvn_draw_state draw_state;
 static unsigned conditional_shadowed, conditional_mismatches, conditional_finish_source[7];   // [0..5] by source, [6] overflow
 // UpdateUniformBuffer ranges recorded since the replay last finished the GPU (GPU-ordered writes the CPU cannot see yet,
 // including earlier submits still pending). Reading such memory on the CPU first finishes the work recorded so far.
-static struct { uint64_t address, size; } ubo_updates[64]; static unsigned ubo_update_count, ubo_update_overflow;
+// round225: each update keeps its bytes (up to 4 KiB, in an arena) so a CPU read of data the replay itself wrote, e.g. a
+// bindless handle, is answered from the record instead of finishing the GPU (one finish per world-map frame: 64 updates
+// overflowed the old 64-entry list every frame, and every read then finished).
+#define UBO_UPDATES 4096
+#define UBO_ARENA (1u << 20)
+static struct { uint64_t address, size; uint32_t data; int has_data; } ubo_updates[UBO_UPDATES]; static unsigned ubo_update_count, ubo_update_overflow;
+static uint8_t ubo_arena[UBO_ARENA]; static uint32_t ubo_arena_used;
+static void record_ubo_update(uint64_t address, const uint8_t *data, size_t bytes) {
+    if (ubo_update_count == UBO_UPDATES) { ubo_update_overflow = 1; return; }
+    ubo_updates[ubo_update_count].address = address; ubo_updates[ubo_update_count].size = bytes; ubo_updates[ubo_update_count].has_data = 0;
+    if (bytes <= 4096 && ubo_arena_used + bytes <= UBO_ARENA) {
+        memcpy(ubo_arena + ubo_arena_used, data, bytes); ubo_updates[ubo_update_count].data = ubo_arena_used; ubo_updates[ubo_update_count].has_data = 1;
+        ubo_arena_used += (uint32_t)((bytes + 15) & ~(size_t)15);
+    }
+    ubo_update_count++;
+}
+// The 4 bytes at address as the GPU will see them after the updates recorded so far: 1 = from the latest update covering
+// them (*value), 0 = no recorded update touches them (memory is current), -1 = unknown (partial overlap, no data kept,
+// or the list overflowed): finish the GPU and read memory.
+static int recorded_u32(uint64_t address, uint32_t *value) {
+    for (unsigned i = ubo_update_count; i-- > 0; ) {
+        uint64_t a = ubo_updates[i].address, n = ubo_updates[i].size;
+        if (a + n <= address || address + 4 <= a) continue;
+        if (address < a || address + 4 > a + n || !ubo_updates[i].has_data) return -1;
+        memcpy(value, ubo_arena + ubo_updates[i].data + (address - a), 4); return 1;
+    }
+    return ubo_update_overflow ? -1 : 0;
+}
 static struct wonder_report_shadow report_shadow;
 // Pending writes are recorded by the host memory they land in (virtual pools resolve to their physical backing).
 // Sources (round217, counted when a conditional render has to finish): 1 timestamp, 2 buffer clear, 3 uniform update,
@@ -68,7 +95,7 @@ static void pending_value(uint64_t address, uint32_t value) {
 _Atomic uint64_t wonder_nvn_acct[6];
 static void replay_finish(void) {   // GPU done: every recorded write has landed
     atomic_fetch_add(&wonder_nvn_acct[1], 1);
-    wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; wonder_report_shadow_clear(&report_shadow);
+    wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; ubo_arena_used = 0; wonder_report_shadow_clear(&report_shadow);
 }
 static void make_cpu_visible(uint64_t address, uint64_t size) {
     int overlap = ubo_update_overflow;
@@ -250,8 +277,13 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
     if (rt->bindless) {   // combined handle stored by the game in a uniform buffer (round86)
         uint64_t base = draw_state.uniform_buffer[stage][rt->ubo_slot].address, size = draw_state.uniform_buffer[stage][rt->ubo_slot].size;
         if (!base || rt->offset + 4u > size) { snprintf(why, sizeof why, "bindless texture handle: uniform slot %d not bound or too small (offset %#x)", rt->ubo_slot, rt->offset); replay_stop(opcode, why); }
-        make_cpu_visible(base + rt->offset, 4);   // round87: the handle was written by UpdateUniformBuffer in this submit
-        struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + rt->offset, 4, &v); uint32_t raw; memcpy(&raw, v.memory, 4); h = raw;
+        // round87: the handle may have been written by UpdateUniformBuffer in this submit; round225: read from that record
+        uint32_t raw; int known = recorded_u32(base + rt->offset, &raw);
+        if (known <= 0) {
+            if (known < 0) replay_finish();
+            struct wonder_nvn_pool_view v; wonder_nvn_address_span(base + rt->offset, 4, &v); memcpy(&raw, v.memory, 4);
+        }
+        h = raw;
     } else h = draw_state.texture_handle[stage][slot];
     // Handle 0 names texture and sampler descriptor 0, inside the 256 descriptors NVN reserves for the driver: the game's
     // "nothing bound" (round151: a fragment shader samples slot 12 after loading a save; D2R nvn_mtl.m binds an all-zero
@@ -346,7 +378,9 @@ static void note_missing(const char *pair) {
     if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);
     missing_programs++;
 }
+static unsigned since_commit;   // draws and dispatches replayed since the last periodic commit (SET_RENDER_TARGETS)
 static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
+    since_commit++;
     call.name = wonder_nvn_command_name(opcode);
     sync_draw_state();
     char why[320], summary[160];
@@ -591,6 +625,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
 // every buffer / texture / image its reflection reads, like a draw. A kernel without a translation writes its census.
 static unsigned submit_dispatches;
 static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
+    since_commit++;
     struct wonder_nvn_draw_call call = {.name = wonder_nvn_command_name(opcode), .compute = 1, .index_type = -1};
     if (opcode == WONDER_NVN_CMD_DISPATCH) { call.groups[0] = (int)c->a[0]; call.groups[1] = (int)c->a[1]; call.groups[2] = (int)c->a[2]; }
     else call.indirect_address = c->a[0];
@@ -708,6 +743,11 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         break;
     }
     case WONDER_NVN_CMD_SET_RENDER_TARGETS:
+        // round225: a pass boundary after WONDER_COMMIT_DRAWS draws/dispatches (default 128, 0 = never) commits the work so
+        // far, so the GPU runs while the rest of the frame is replayed (one command buffer per frame left the GPU idle
+        // until the frame's fence: ~22 ms of replay, then ~17 ms of GPU, in series).
+        {   static int every = -1; if (every < 0) { const char *e = getenv("WONDER_COMMIT_DRAWS"); every = e ? atoi(e) : 128; }
+            if (every > 0 && since_commit >= (unsigned)every) { wonder_host_flush(); since_commit = 0; } }
         state.color_count = (int)c->a[0]; memcpy(state.targets, blob, sizeof state.targets[0] * (size_t)(state.color_count + 1));
         state.has_targets = 1;
         for (int i = 0; i <= state.color_count; i++) if (state.targets[i].valid) target_texture(&state.targets[i], opcode);
@@ -823,7 +863,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
     case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER: {
         uint64_t address = c->a[0] + c->a[2]; size_t bytes = c->blob_size;
-        if (ubo_update_count < 64) { ubo_updates[ubo_update_count].address = address; ubo_updates[ubo_update_count++].size = bytes; } else ubo_update_overflow = 1;
+        record_ubo_update(address, blob, bytes);
         if (bytes) pending_unknown(address, bytes, PENDING_UNIFORM);
         if (!bytes) break;
         void *buffer; size_t offset; host_span(address, bytes, opcode, &buffer, &offset);

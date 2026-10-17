@@ -1135,8 +1135,8 @@ int main(void) {
               const char *fs_bl2 = "stage ps\nbtex 5 16 2 2 2d\nfout 0 float\n";   // uniform slot 5 is not bound
               assert(!wonder_shader_refl_parse(fs_bl2, strlen(fs_bl2), &fake_refl[1], err, sizeof err));
               REVIEW_STOP((void)0, "bindless texture");
-              // Handle written by UpdateUniformBuffer earlier in the same submit: the replay finishes the GPU work recorded so
-              // far (the fake host applies pending writes on flush) and then reads it (round87).
+              // Handle written by UpdateUniformBuffer earlier in the same submit (round87): read from the update's record
+              // (round225; the fake host applies the write to memory only on a flush, so memory still holds 0xdead).
               assert(!wonder_shader_refl_parse(fs_bl, strlen(fs_bl), &fake_refl[1], err, sizeof err));
               ubo[4] = 0xdead; uint32_t handle_now = 300u | 1u << 20;
               REVIEW_OK(((void (*)(void *, uint64_t, size_t, ptrdiff_t, size_t, const void *))slot("nvnCommandBufferUpdateUniformBuffer"))(dcb, (uintptr_t)(cb_memory + 0x9100), 0x100, 16, 4, &handle_now));
