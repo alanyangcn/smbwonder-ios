@@ -4,7 +4,10 @@ Sets every 81-element BoolArray (world map point flags) to all true, every zero 
 to 1 (non-zero values, e.g. the 7 seen in World 1, stay), and Motherseed00..05Finish to true. Every world struct's
 IsVisitedWorld and IsHeardWorldNameByPrince members (GameDataList Struct entries: member name hash -> flag hash) are set
 too: the grand world map shows a world's name only once it was visited or the prince named it, else "???"
-(UIMapWorldNamePartsScreen, main+0x1d4b938 -> label "_Hidden"; Event_SetFlagVisitedWorld / ...HeardWorldNameByPrince). Array meanings are not
+(UIMapWorldNamePartsScreen, main+0x1d4b938 -> label "_Hidden"; Event_SetFlagVisitedWorld / ...HeardWorldNameByPrince).
+All 24 badges are owned: their ids (GlobalParameter/BadgeInfoParam ...BadgeInfoParam.bgyml in Pack/Bootup) set in the
+100-element BoolArray 0x105df820 that main+0x1c827a0 reads (AI query IsGetBadge: IsGetUnlimitedBadge; main+0x681280 owns a
+badge when this or the Limited array 0xe48a1168 holds it; Limited is left alone). Array meanings are not
 known per name (see tools/save_diff.py); this may leave story/demo state inconsistent.
 Usage: save_unlock.py <in game_data.sav> <out game_data.sav>
 """
@@ -23,6 +26,9 @@ def murmur3(data, seed=0):
     if t: k = (k * c1) & 0xffffffff; k = ((k << 15) | (k >> 17)) & 0xffffffff; k = (k * c2) & 0xffffffff; h ^= k
     h ^= n; h ^= h >> 16; h = (h * 0x85ebca6b) & 0xffffffff; h ^= h >> 13; h = (h * 0xc2b2ae35) & 0xffffffff; h ^= h >> 16; return h
 
+UNLIMITED_BADGES = 0x105df820
+BADGE_IDS = (0, 4, 8, 9, 14, 19, 28, 29, 32, 33, 34, 35, 38, 39, 40, 42, 46, 47, 49, 53, 54, 55, 57, 58)
+
 def unlock(src, dst):
     gdl = json.loads((RESEARCH / 'gdl.json').read_text())['Data']
     types = {e['Hash']: t for t, es in gdl.items() for e in es}
@@ -30,10 +36,16 @@ def unlock(src, dst):
     seeds = {murmur3(f'Motherseed{i:02d}Finish'.encode()) for i in range(6)}
     members = {murmur3(b'IsVisitedWorld'), murmur3(b'IsHeardWorldNameByPrince')}
     world_flags = {m['Value'] for e in gdl['Struct'] for m in e['DefaultValue'] if m['Hash'] in members}
-    counts = {'bool_arrays': 0, 'uint_elements': 0, 'seeds': 0, 'world_flags': 0}
+    counts = {'bool_arrays': 0, 'uint_elements': 0, 'seeds': 0, 'world_flags': 0, 'badges': 0}
     for i, (h, v) in enumerate(ents):
         t = types.get(h)
-        if t in ('BoolArray', 'UIntArray') and struct.unpack_from('<I', d, v)[0] == 81:
+        if h == UNLIMITED_BADGES:
+            n = struct.unpack_from('<I', d, v)[0]
+            for b in BADGE_IDS:
+                if b >= n: raise ValueError(f'badge id {b} past the {n}-element array')
+                word = v + 4 + 4 * (b // 32); bits = struct.unpack_from('<I', d, word)[0]
+                if not bits >> (b % 32) & 1: struct.pack_into('<I', d, word, bits | 1 << (b % 32)); counts['badges'] += 1
+        elif t in ('BoolArray', 'UIntArray') and struct.unpack_from('<I', d, v)[0] == 81:
             if t == 'BoolArray':
                 struct.pack_into('<III', d, v + 4, 0xffffffff, 0xffffffff, (1 << (81 - 64)) - 1); counts['bool_arrays'] += 1
             else:
