@@ -58,7 +58,8 @@
     - **根因**：着色器键只取控制段 sha256(control[0:0x880])；SecredUber 的 6494 个控制段里 **1395 个被代码不同的阶段共用（多出 2552 份代码）**（b4c6c67e 2 份、e50bb0ac 6 份、1451a723 4 份）。离线提取/普查对同一键只留第一份代码，运行时按键取 Metal 函数，于是这些阶段跑的是别的变体的代码。
     - **修复**：键 = sha256(control[0:0x880] ‖ code[0:len])，len 为 control+0x704 的 u32（与设备普查字节核对：设备上的 e50bb0ac 代码与 6 份变体中恰好一份一致）。宿主在 nvnProgramSetShaders 时算一次存入程序快照（读不出代码按名停），回放绑定程序时随阶段拷贝；extract_shaders.py / wonder_shader_build.py 从字节重算键（旧普查目录名里的旧键不再采信）。新增回归测试：同控制段不同代码 → 不同键。宿主测试 113 项通过（2 项跳过）。
     - 全量重建：离线提取 9030 个程序 / 9046 个阶段（原 7575 个程序），构建 9020 个阶段（留 112 个）。round192 启动即停 `NVN_SHADER_MISSING`（agl/gsys 启动着色器的新键只有普查能给，以前是撞车顶替）；round193 采集停在离线阶段属性类型猜测（4ee141e7 第 6 属性 RGBA8UI，离线按 float）→ 采集模式下类型不符也记普查、跳过该次绘制（非采集仍按名停）。
-    - **round194（采集版，A68856C9）真机结果：水管关卡前景深绿灌木、彩色音符块、斜坡/平台上的草、砖块地面全部正常，蓝色消失**（截图 work/analysis/first-frame-round194/screenshot-course.png）。采集到的普查已加入 census-dirs，正在全量重建；下一轮装正式版确认无跳过绘制。
+    - **round194（采集版，A68856C9）真机结果：水管关卡前景深绿灌木、彩色音符块、斜坡/平台上的草、砖块地面全部正常，蓝色消失**（截图 work/analysis/first-frame-round194/screenshot-course.png）。采集到的普查（新增 90 个目录）已加入 census-dirs，全量重建 9036 个阶段（留 107 个）。
+    - **round195（正式版，A00077D4）**：从标题走到水管关卡全程无停点，关卡前景灌木、音符块、斜坡草、地面正常（截图 work/analysis/first-frame-round195/screenshot-course.png）。蓝色问题关闭。
 
 ## 首帧推进（2026-10-15，持续进行）
 
