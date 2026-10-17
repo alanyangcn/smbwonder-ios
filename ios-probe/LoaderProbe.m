@@ -87,6 +87,10 @@ static int start_log(const char *path) {
 static void show_log(BOOL shown) { dispatch_async(dispatch_get_main_queue(), ^{ gText.hidden = !shown; }); }
 static void guest_stopped(const char *reason) {
     show_log(YES);
+    {   // The stop reason also goes to Documents/last-stop.txt: loader-probe.log stops growing at its size cap (round208).
+        NSString *documents = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+        [[NSString stringWithFormat:@"%@ %s\n", NSDate.date, reason] writeToFile:[documents stringByAppendingPathComponent:@"last-stop.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
     if(strstr(reason,"GUEST_FAULT")) {
         report([NSString stringWithFormat:@"GUEST_FAULT: %s\n游戏代码访问异常；客体已停止，日志含模块偏移与调用链。",reason]);
         return;

@@ -54,6 +54,23 @@ def bnsh_programs(data, base):
             stages.append((c, k))
         yield stages
 
+def sharcb_stages(data, base):
+    """Stages of the agl shader archive ('BAHS', version 9; agl_*.sharcb / gsys common.sharcb in Lib/*_resource.sarc,
+    round208) at data[base:]: (stage number, control, code). Layout: header +0x1c u32 code area offset; each shader
+    record ends 0x70 bytes before its control section (0x880 bytes, magic 0x98761234) with +0x4 stage and +0x10 code
+    offset in the code area; the code length is the u32 at control +0x704. 45 of the parsed stages equal device
+    censuses byte for byte. Program variations (macro sets) are not parsed: stages come out unpaired."""
+    if data[base:base + 4] != b'BAHS' or u32(data, base + 4) != 9: raise ValueError(f'sharcb at {base:#x}: not a version 9 agl archive')
+    code_base = u32(data, base + 0x1c)
+    for c in range(0, code_base, 4):
+        if u32(data, base + c) != CONTROL_MAGIC: continue
+        control = data[base + c:base + c + 0x880]; stage = u32(control, 0x714)
+        if stage not in (0, 1, 5) or u32(data, base + c - 0x70 + 4) != stage % 5 and stage != 5: continue
+        off, length = u32(data, base + c - 0x70 + 0x10), u32(control, 0x704)
+        code = data[base + code_base + off:base + code_base + off + length]
+        if len(code) != length or u32(code, 0) != CODE_MAGICS[stage == 5]: raise ValueError(f'sharcb at {base:#x}: stage at {c:#x} has no code at {off:#x}')
+        yield stage, control, code
+
 STAGE_NUMBERS = {'vs': 0, 'fs': 1, 'cs': 5}
 LOCAL_SIZE, SHARED_SIZE, C1_OFFSET, CODE_LENGTH = 0x748, 0x710, 0x700, 0x704   # control offsets (runtime/nvn_draw_census.h/.c)
 
@@ -64,15 +81,18 @@ def write_census(out, programs):
     bound formats and stops by name when they differ (nvn_queue.c)."""
     dirs = []
     for keys in programs:
+        pad = keys.get('pad_fs'); keys = {k: v for k, v in keys.items() if k != 'pad_fs'}
         names = ['cs'] if 'cs' in keys else [n for n in ('vs', 'fs') if n in keys]
-        if set(keys) - set(names) or not names or (names != ['cs'] and names != ['vs', 'fs']): continue   # hull/domain/geometry: not built
-        d = out / 'census' / ('cs-' + keys['cs'] if names == ['cs'] else f"{keys['vs']}-{keys['fs']}")
+        # sharcb stages come unpaired (one stage per census; a vertex stage lists its archive's fragment stages in pad_fs)
+        if set(keys) - set(names) or not names: continue   # hull/domain/geometry: not built
+        d = out / 'census' / ('cs-' + keys['cs'] if names == ['cs'] else '-'.join(keys.get(n, 'none') for n in ('vs', 'fs')))
         d.mkdir(parents=True, exist_ok=True); stages = []
         for index, n in enumerate(names):
             control = (out / 'stages' / f'{keys[n]}.control.bin').read_bytes(); code = (out / 'stages' / f'{keys[n]}.code.bin').read_bytes()
             (d / f'stage-{index}.control.bin').write_bytes(control); (d / f'stage-{index}.code.bin').write_bytes(code)
             stages.append({'index': index, 'stage': STAGE_NUMBERS[n], 'name': n, 'key': keys[n], 'code_size': u32(control, CODE_LENGTH), 'c1_offset': u32(control, C1_OFFSET)})
         census = {'offline': True, 'depth_mode': 0, 'window_origin': 1, 'program': {'stages': stages}, 'attribs': [], 'textures': [], 'images': [], 'targets': {'colors': []}}
+        if pad: census['pad_fs'] = pad
         if names == ['cs']:
             control = (out / 'stages' / f"{keys['cs']}.control.bin").read_bytes()
             census['dispatch'] = {'groups': [0, 0, 0], 'local': list(struct.unpack_from('<3I', control, LOCAL_SIZE)), 'shared': u32(control, SHARED_SIZE)}
@@ -88,6 +108,20 @@ def extract(romfs, out):
         if not any(c in name for c in CONTAINERS): continue
         f.seek(offset); data = f.read(size)
         if name.endswith('.zs'): data = zstandard.ZstdDecompressor().decompressobj().decompress(data)
+        at = data.find(b'BAHS')
+        while at >= 0:   # agl shader archives (sharcb) inside the resource SARCs
+            if u32(data, at + 4) == 9 and at % 4 == 0:
+                archive = {'vs': [], 'fs': [], 'cs': []}
+                for stage, control, code in sharcb_stages(data, at):
+                    key = stage_key(control, code); sname = {0: 'vs', 1: 'fs', 5: 'cs'}[stage]
+                    if key not in sources:
+                        sources[key] = f'{name}#sharcb'
+                        (out / 'stages' / f'{key}.control.bin').write_bytes(control); (out / 'stages' / f'{key}.code.bin').write_bytes(code)
+                    if key not in archive[sname]: archive[sname].append(key)
+                for key in archive['fs']: programs.append({'fs': key})
+                for key in archive['cs']: programs.append({'cs': key})
+                for key in archive['vs']: programs.append({'vs': key, 'pad_fs': archive['fs']})
+            at = data.find(b'BAHS', at + 4)
         at = data.find(b'BNSH')
         while at >= 0:
             for stages in bnsh_programs(data, at):

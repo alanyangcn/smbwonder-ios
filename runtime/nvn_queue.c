@@ -238,14 +238,18 @@ static void resolve_texture(unsigned opcode, int stage, const struct wonder_shad
     // The sampling instruction decides the dimension on Maxwell: a 2D texture sampled as a 1-layer array, and a 2D array
     // sampled by a 2D instruction (round153) reads its first layer (metal3_draw.m binds a 2D view of it).
     int as_layer = (target == 1 || target == 7) && rt->type == WONDER_SHADER_TEX_2D_ARRAY, first_layer = target == 4 && rt->type == WONDER_SHADER_TEX_2D;
-    {   // Diagnostic (WONDER_DIAG_CUBE_AS_EMPTY=1): a cube declaration over a bound 2D texture samples zeros instead of
-        // stopping (round186: a quality path the game takes with frozen GPU timestamps); not a product behaviour.
-        static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DIAG_CUBE_AS_EMPTY"); on = e && *e == '1'; }
-        if (on && (target == 1 || target == 7) && (rt->type == WONDER_SHADER_TEX_CUBE || rt->type == WONDER_SHADER_TEX_CUBE_ARRAY)) {
-            static unsigned logged; if (logged++ < 8) wonder_nvn_report("NVN_DIAG_CUBE_AS_EMPTY stage %d slot %d (vs=%s fs=%s)", stage, slot, out->vs_key, out->fs_key);
-            memset(&out->tex[out_stage][slot], 0, sizeof out->tex[out_stage][slot]); out->tex[out_stage][slot].empty = 1; out->tex_mask[out_stage] |= 1ull << slot;
-            return;
-        }
+    // A cube / cube-array declaration over a bound 2D texture (round186 with frozen GPU timestamps, round208 in play on the
+    // world map: fs e0e6b565 slot 6) has no valid sample: Maxwell's TEX dimension does not match the TIC entry, and
+    // Ryujinx binds a null texture for an incompatible target. It reads zeros here as well, logged once per program
+    // and slot; any other target mismatch still stops by name.
+    if ((target == 1 || target == 7) && (rt->type == WONDER_SHADER_TEX_CUBE || rt->type == WONDER_SHADER_TEX_CUBE_ARRAY)) {
+        static char seen[64][48]; static unsigned nseen; char key[48]; snprintf(key, sizeof key, "%.8s-%.8s-%d-%d", out->vs_key, out->fs_key, stage, slot);
+        int known = 0; for (unsigned i = 0; i < nseen && !known; i++) known = !strcmp(seen[i], key);
+        if (!known && nseen < 64) { snprintf(seen[nseen++], sizeof seen[0], "%s", key);
+            wonder_nvn_report("NVN_TEXTURE_TARGET_MISMATCH stage %d slot %d: cube%s declared over a 2D texture (vs=%s fs=%s), sampled as a null texture",
+                              stage, slot, rt->type == WONDER_SHADER_TEX_CUBE_ARRAY ? " array" : "", out->vs_key, out->fs_key); }
+        memset(&out->tex[out_stage][slot], 0, sizeof out->tex[out_stage][slot]); out->tex[out_stage][slot].empty = 1; out->tex_mask[out_stage] |= 1ull << slot;
+        return;
     }
     if (target < 0 || target > 10 || (target_type[target] != rt->type && !as_layer && !first_layer)) {
         snprintf(why, sizeof why, "texture type: stage %d slot %d bound target %d, shader declares type %d (vs=%s fs=%s)", stage, slot, target, rt->type, out->vs_key, out->fs_key); replay_stop(opcode, why);

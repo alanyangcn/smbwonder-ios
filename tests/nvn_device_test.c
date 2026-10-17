@@ -1152,6 +1152,12 @@ int main(void) {
             const char *fs_3d = "stage ps\ncbuf 3 1\ntex 0 1 1 3d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(fs_3d, strlen(fs_3d), &fake_refl[1], err, sizeof err));
             REVIEW_STOP((void)0, "texture type");
+            // A cube or cube-array declaration over a 2D texture samples a null texture (round208), not a stop.
+            for (int k = 0; k < 2; k++) {
+                const char *fs_cube = k ? "stage ps\ncbuf 3 1\ntex 0 1 1 cubearray\nfout 0 float\n" : "stage ps\ncbuf 3 1\ntex 0 1 1 cube\nfout 0 float\n";
+                assert(!wonder_shader_refl_parse(fs_cube, strlen(fs_cube), &fake_refl[1], err, sizeof err));
+                REVIEW_OK((void)0); assert(last_draw.tex[1][0].empty && (last_draw.tex_mask[1] & 1));
+            }
             fake_refl[1] = fs_parsed;
             // A failed GPU command buffer stops the next submission by name.
             fake_gpu_error = "Internal Error (0000000e:Internal Error)"; REVIEW_STOP((void)0, "NVN_GPU_ERROR"); fake_gpu_error = NULL;

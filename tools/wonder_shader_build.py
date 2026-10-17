@@ -385,7 +385,13 @@ def build(census_dirs, out):
             try:
                 if not (tmp / f'{key}.spv').exists(): raise ValueError('translator failed (also in DebugMode)')
                 res = json.loads((tmp / f'{key}.res.json').read_text())
-                if res['notes']: raise ValueError(f'translator notes {res["notes"]}')
+                notes = res['notes']
+                # Offline stages (extract_shaders.py: no bindings) whose only notes are handle-typed texture reads the
+                # translator answered as 2D are built (round208: 106 vertex stages): the host checks every draw's bound
+                # target against the reflection and stops by name on a mismatch. Census stages keep the stop.
+                if notes and census.get('offline') and all('无 PC 类型，按 2D' in n for n in notes):
+                    manifest.setdefault('assumed_2d', {})[key] = notes; notes = []
+                if notes: raise ValueError(f'translator notes {notes}')
                 msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
                 msl, _ = sampler_overflow(msl)
                 refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
@@ -399,6 +405,9 @@ def build(census_dirs, out):
             keys = {s_['name']: s_['key'] for s_ in census['program']['stages']}
             if keys.get('vs') in built and keys.get('fs') in built:
                 reads.setdefault(keys['vs'], {}).update(fragment_inputs(built[keys['fs']][1]))
+            # Unpaired offline vertex stages (sharcb, round208) declare every input their archive's fragment stages read.
+            for fs in census.get('pad_fs', []) if keys.get('vs') in built else []:
+                if fs in built: reads.setdefault(keys['vs'], {}).update(fragment_inputs(built[fs][1]))
         for key, (stage, msl, refl, census_sha) in built.items():
             if stage == 'vs': msl = invariant_position(pad_vertex_outputs(msl, reads.get(key, {})))
             (out / f'{key}.metal').write_text(msl); (out / f'{key}.refl').write_text(refl)
