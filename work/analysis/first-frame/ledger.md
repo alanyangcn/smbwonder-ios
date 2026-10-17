@@ -98,3 +98,5 @@ Grand map: player confirms every world now shows its name (unlock4 save).
 
 Round216 40347B6D: on-screen fps (fps_meter.c). Rounds 212-215 ran with empty WONDER_ENVS (launch-env.txt wiped: no census sweep, TBDR/RT defaults) -> r215 stop NVN_SHADER_MISSING b60a2a915a53e8bf-3b2d04baf0b22836 (vs reads c[0]+0x610, known left-out; DrawArrays 4 points). Census added; r216 restores WONDER_TBDR=0 WONDER_RT=0 WONDER_CENSUS_SWEEP=1.
 Round216 3D034A14 (fps overlay 4e3aefc; WONDER_ENVS restored: TBDR=0 RT=0 CENSUS_SWEEP=1, rounds 212-215 had dropped them). Badges: owned = BoolArray 0x105df820 (IsGetUnlimitedBadge, main+0x1c827a0) or 0xe48a1168 (IsGetLimitedBadge, main+0x1c82740), checked by main+0x681280 and AI query IsGetBadge main+0x18c39f4; 24 ids from BadgeInfoParam.bgyml set in the Unlimited array (save backup 20261017-151150).
+Badges: player confirms all badges in the badge select screen.
+
