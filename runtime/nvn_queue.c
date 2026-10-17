@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <TargetConditionals.h>
 
 struct replay_state {
     struct wonder_nvn_texture_snapshot targets[9]; int color_count; int has_targets;
@@ -292,8 +293,22 @@ static int sweep_type_census(const struct wonder_nvn_draw_call *call, const char
     static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 64) wonder_nvn_report("NVN_CENSUS_SWEEP_TYPE %s (%s)", why, summary);
     sweep_skipped++; return 1;
 }
+// Scene the game loaded last (romfs_hooks.c: the last Stage/StageParam file opened), for missing-shaders.txt.
+const char *(*wonder_nvn_scene_name)(void);
 static void note_missing(const char *pair) {
     for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) return;
+    {   // round208: every program first met without a build goes to Documents/missing-shaders.txt with the scene, so the
+        // last census-only stages can be found by playing rather than searched for.
+        static char written[512][40]; static unsigned nwritten; int seen = 0;   // once per program per run
+        for (unsigned i = 0; i < nwritten && !seen; i++) seen = !strcmp(written[i], pair);
+        if (!seen && nwritten < 512) snprintf(written[nwritten++], sizeof written[0], "%s", pair);
+        const char *home = TARGET_OS_IPHONE && !seen ? getenv("HOME") : NULL; char path[1024];   // device only (host tests: no file)
+        if (home && snprintf(path, sizeof path, "%s/Documents/missing-shaders.txt", home) < (int)sizeof path) {
+            FILE *f = fopen(path, "a");
+            if (f) { time_t now = time(NULL); char when[32]; strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", localtime(&now));
+                     fprintf(f, "%s %s scene=%s submit=%u\n", when, pair, wonder_nvn_scene_name ? wonder_nvn_scene_name() : "?", state.submits); fclose(f); }
+        }
+    }
     if (missing_programs < 256) snprintf(missing_pairs[missing_programs], sizeof missing_pairs[0], "%s", pair);
     size_t used = strlen(missing_list);
     if (used + strlen(pair) + 2 < sizeof missing_list) snprintf(missing_list + used, sizeof missing_list - used, "%s%s", used ? " " : "", pair);

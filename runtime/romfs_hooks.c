@@ -13,9 +13,14 @@ HLE_FORCE("_ZN2nn2fs8MountRomEPKcPvm","Mount actual indexed read-only game archi
     if(r)wonder_game_thread_stop("RomFS archive missing or mount invalid; no empty resource mount supplied");return r;
 }
 HLE_FORCE("_ZN2nn2fs8MountRomEPKc","Mount actual indexed read-only game archive",Result,wonder_mount_simple,const char *name){return wonder_mount(name,NULL,0);}
+// The last stage parameter file the game opened names the course / world map it is loading (missing-shaders.txt).
+static char last_stage[160] = "title";
+static const char *scene_name(void) { return last_stage; }
+__attribute__((constructor)) static void install_scene_name(void) { extern const char *(*wonder_nvn_scene_name)(void); wonder_nvn_scene_name = scene_name; }
 HLE_FORCE("_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci","Open host save data files or read-only indexed RomFS; reject unknown paths",Result,wonder_open,uint64_t *out,const char *path,int mode){
     Result r;
     if(wonder_save_owns_path(path)){r=wonder_save_open(out,path,mode);LOG("SAVE_OPEN path=%s mode=%d result=%#x",path,mode,r);return r;}
+    { const char *s=path?strstr(path,"Stage/StageParam/"):NULL; if(s){ s+=17; snprintf(last_stage,sizeof last_stage,"%s",s); } }
     r=wonder_romfs_open(out,path,mode);LOG("ROMFS_OPEN path=%s mode=%d result=%#x handle=%#llx",path,mode,r,(unsigned long long)(r?0:*out));return r;
 }
 static Result read_file(size_t *out,uint64_t h,int64_t offset,void *buf,size_t size){
