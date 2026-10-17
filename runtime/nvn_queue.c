@@ -258,6 +258,17 @@ static void driver_c0(uint8_t out[0x700], int compute) {
     }
 }
 // A program without translated shaders: noted once in the missing list (census written by the caller).
+static void note_missing(const char *pair);
+// Census sweep (round193): an offline-built stage whose assumed float attribute / output type differs from what the draw
+// binds is recorded like a missing program (census written, this draw left out); the rebuild takes the census's bound
+// types, which win over the offline guess. Outside the sweep the caller stops by name.
+static int sweep_type_census(const struct wonder_nvn_draw_call *call, const char *vs, const char *fs, const char *why, char *summary, size_t size) {
+    if (!census_sweep()) return 0;
+    wonder_nvn_draw_census(&draw_state, call, summary, size);
+    char pair[40]; snprintf(pair, sizeof pair, "%s-%s", vs, fs); note_missing(pair);
+    static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 64) wonder_nvn_report("NVN_CENSUS_SWEEP_TYPE %s (%s)", why, summary);
+    sweep_skipped++; return 1;
+}
 static void note_missing(const char *pair) {
     for (unsigned i = 0; i < missing_programs && i < 256; i++) if (!strcmp(missing_pairs[i], pair)) return;
     if (missing_programs < 256) snprintf(missing_pairs[missing_programs], sizeof missing_pairs[0], "%s", pair);
@@ -329,6 +340,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         if (wonder_shader_format_class((int)draw_state.attrib[a].fmt) != d.vr->attr[i].type) {   // offline-built stages assume float (round153)
             snprintf(why, sizeof why, "vertex attribute %d format %#x is %s, the vertex shader %s reads it as %s", a, draw_state.attrib[a].fmt,
                      (const char *[]){"float", "uint", "sint"}[wonder_shader_format_class((int)draw_state.attrib[a].fmt)], d.vs_key, (const char *[]){"float", "uint", "sint"}[d.vr->attr[i].type % 3]);
+            if (sweep_type_census(&call, d.vs_key, d.fs_key, why, summary, sizeof summary)) return;
             replay_stop(opcode, why);
         }
         int s = (int)draw_state.attrib[a].stream;
@@ -405,6 +417,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         if (d.targets[i].valid && (d.fr->fout_mask >> i & 1) && wonder_shader_format_class(d.targets[i].texture.desc.format) != d.fr->fout_type[i]) {
             snprintf(why, sizeof why, "colour target %d format %#x is %s, the fragment shader %s writes %s", i, d.targets[i].texture.desc.format,
                      (const char *[]){"float", "uint", "sint"}[wonder_shader_format_class(d.targets[i].texture.desc.format)], d.fs_key, (const char *[]){"float", "uint", "sint"}[d.fr->fout_type[i] % 3]);
+            if (sweep_type_census(&call, d.vs_key, d.fs_key, why, summary, sizeof summary)) return;
             replay_stop(opcode, why);
         }
     memcpy(d.blend, draw_state.blend, sizeof d.blend); d.blend_set = draw_state.blend_set; memcpy(d.blend_color, state.blend_color, sizeof d.blend_color);
