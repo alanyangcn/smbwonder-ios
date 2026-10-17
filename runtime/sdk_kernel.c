@@ -331,3 +331,18 @@ void wonder_diag_scan_screen(void) {
     }
     LOG("DIAG_SCREEN done hits=%u", hits);
 }
+// Diagnostic (round205, widescreen): every 4-byte aligned occurrence of a 32-bit value in the guest heap and main's
+// data (e.g. the float bits of 16/9), with the 16 bytes around it, called from LLDB.
+void wonder_diag_scan_u32(uint32_t value) {
+    struct { const uint8_t *p; size_t n; const char *name; } areas[] = {
+        {space + HEAP_OFFSET, heap_size, "heap"},
+        {(const uint8_t *)g_mod[0].base + g_mod[0].data_off, g_mod[0].size - g_mod[0].data_off, "main"}};
+    unsigned hits = 0;
+    for (unsigned a = 0; a < 2; a++) for (size_t o = 16; o + 20 <= areas[a].n && hits < 300; o += 4) {
+        uint32_t x; memcpy(&x, areas[a].p + o, 4); if (x != value) continue;
+        uint32_t w[9]; memcpy(w, areas[a].p + o - 16, 36);
+        LOG("DIAG_U32 %#x %s+%#zx around=%08x %08x %08x %08x [%08x] %08x %08x %08x %08x", value, areas[a].name, o, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8]);
+        hits++;
+    }
+    LOG("DIAG_U32 %#x done hits=%u", value, hits);
+}
