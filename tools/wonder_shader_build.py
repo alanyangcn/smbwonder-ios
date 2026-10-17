@@ -7,7 +7,7 @@ formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl
 
 Wonder SDK conventions (verified in sdk, not D2R's): uniform buffer r = c[3 + r] (BindUniformBuffer sdk+0x467950 writes
 slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x468840 writes at r * 8 + 0x20).
-.refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; cbufext <r> <bytes>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
+.refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; cbufext <r> <bytes>; cbufdyn <r>; cbsz <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
              drv 0 <buffer> (c[0] read only inside the buffer address tables, filled by the host);
              tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>;
              compute: local <x> <y> <z>; shared <bytes>; uptr <r> <buffer> (uniform slot r read through its address in
@@ -178,6 +178,30 @@ def sampler_overflow(msl):
     decl = f'struct WonderSamplers\n{{\n    sampler s[{count}];\n}};\n// wonder_sampler_overflow {buffer} ' + ','.join(str(i) for _, i in over) + '\n\n'
     return head + decl + f'{m.group(1)} main0_out main0({params})' + body, buffer
 
+# round234: computed-index reads of uniform buffer r compare against the size the game bound, passed in a small table at
+# [[buffer(cbsz)]] (wonder_cbsz[r], bytes), so they read 0 past it as on Maxwell without the host copying the buffer
+# into a zero-filled 64 KiB window (~1000 copies per world-map frame).
+CBZ_GUARD = ('static inline __attribute__((unused)) float4 wonder_cbz(constant float4 *a, uint size, int i) { uint n = min((size + 15u) / 16u, 4096u); '
+             'uint j = uint(i); float4 v = a[min(j, n > 0u ? n - 1u : 0u)]; return j < n ? v : float4(0.0); }\n')
+def size_guard(msl, stage):
+    """wonder_cb(<x>_c<n>._m0, i) on uniform buffers (c3..c16 = NVN slot n - 3) inside main0 → wonder_cbz with the bound size
+    from a new entry parameter `constant uint* wonder_cbsz [[buffer(B)]]` (the lowest free buffer index: vertex 0..14,
+    others 0..30). Returns (msl, B) or (msl, None) when nothing changes (no such read, a read outside main0, no free index)."""
+    m = re.search(r'^(vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
+    if not m: return msl, None
+    head, body = msl[:m.start()], msl[m.end():]
+    pattern = re.compile(r'wonder_cb\((\w+_c(\d+))\._m0, ')
+    if any(3 <= int(x.group(2)) <= 16 for x in pattern.finditer(head.split(CB_GUARD)[-1] if CB_GUARD in head else head)): return msl, None
+    if not any(3 <= int(x.group(2)) <= 16 for x in pattern.finditer(body)): return msl, None
+    used = {int(b) for b in re.findall(r'\[\[buffer\((\d+)\)\]\]', m.group(2))}
+    free = [b for b in range(15 if stage == 'vs' else 31) if b not in used]
+    if not free: return msl, None
+    b = free[0]
+    body = pattern.sub(lambda x: f'wonder_cbz({x.group(1)}._m0, wonder_cbsz[{int(x.group(2)) - 3}], ' if 3 <= int(x.group(2)) <= 16 else x.group(0), body)
+    line = m.group(0)[:-1] + f', constant uint* wonder_cbsz [[buffer({b})]])'
+    head = head.replace(CB_GUARD, CB_GUARD + CBZ_GUARD, 1) if CB_GUARD in head else head
+    return head + line + body, b
+
 def cbuf_extents(msl):
     """Bytes of each constant buffer parameter the stage reads (round222), by its [[buffer(n)]] binding: 16 x (largest
     literal float4 index + 1); 0 when any read uses a computed index (wonder_cb, guard_cbuf_indices). The host binds the
@@ -187,6 +211,7 @@ def cbuf_extents(msl):
     out = {}
     for name, binding in names.items():
         if re.search(r'wonder_cb\(' + name + r'\._m0\b', msl): out[int(binding)] = 0; continue
+        # wonder_cbz reads (size-checked, round234) do not count; the literal reads must fit the bound size
         idx = [int(i) for i in re.findall(r'\b' + name + r'\._m0\[(\d+)u?\]', msl)]
         out[int(binding)] = 16 * (max(idx) + 1) if idx else 16
     return out
@@ -236,6 +261,8 @@ def reflect(census, stage_entry, job, res, msl, c1):
     ov = re.search(r'^// wonder_sampler_overflow (\d+) ', msl, re.M)
     if not ov and any(s_ > 15 for s_ in samplers): raise ValueError(f'sampler binding {max(samplers)} beyond Metal\'s 16 samplers per stage')
     stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set(); extents = cbuf_extents(msl)
+    cbsz = re.search(r'constant uint\* wonder_cbsz \[\[buffer\((\d+)\)\]\]', msl)
+    if cbsz: lines.append(f"cbsz {cbsz.group(1)}"); used.add(int(cbsz.group(1)))
     if ov: lines.append(f'smpov {ov.group(1)}'); used.add(int(ov.group(1)))   # samplers 16.. in the argument buffer (sampler_overflow)
     if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
     if job['stage'] == 'cs': lines += ['local ' + ' '.join(map(str, job['local'])), f"shared {job['shared']}"]
@@ -245,7 +272,10 @@ def reflect(census, stage_entry, job, res, msl, c1):
         if kind == 'drv' and r == 0:
             check_driver_c0(msl, cb['binding'], job['stage']); lines.append(f"drv 0 {cb['binding']}")
         else: lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
-        if kind == 'cbuf': lines.append(f"cbufext {r} {extents.get(cb['binding'], 0)}")
+        if kind == 'cbuf':
+            lines.append(f"cbufext {r} {extents.get(cb['binding'], 0)}")
+            name = re.search(rf'constant \w+& (\w+_c\d+) \[\[buffer\({cb["binding"]}\)\]\]', msl)
+            if name and re.search(r'wonder_cbz\(' + name.group(1) + r'\._m0\b', msl): lines.append(f"cbufdyn {r}")
         used.add(cb['binding'])
     if res['images'] and job['stage'] != 'cs': raise ValueError('images outside compute are not built yet')
     images_bound = {i['index'] for i in census.get('images', []) if i['stage'] == stage_no and i['texture']}
@@ -408,6 +438,7 @@ def build(census_dirs, out):
                 if notes: raise ValueError(f'translator notes {notes}')
                 msl = guard_cbuf_indices(subprocess.run([str(CROSS), str(tmp / f'{key}.spv'), *CROSS_FLAGS], check=True, capture_output=True, text=True).stdout)
                 msl, _ = sampler_overflow(msl)
+                msl, _ = size_guard(msl, job['stage'])
                 refl = reflect(census, entry, job, res, msl, bytes.fromhex(job['c1']))
             except (ValueError, subprocess.CalledProcessError) as error:
                 manifest['failed'][key] = {'stage': job['stage'], 'reason': str(error)[:300], 'census_sha256': census_sha}

@@ -11,8 +11,9 @@ enum { WONDER_SHADER_TEX_1D, WONDER_SHADER_TEX_2D, WONDER_SHADER_TEX_3D, WONDER_
 #define WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER 15   // zero buffer for disabled vertex attributes; shader buffers use 0..14
 struct wonder_shader_refl {
     int stage;                                               // 0 vertex, 1 fragment, 5 compute (NVNshaderStage)
-    int ncbuf; struct { uint8_t slot, buffer; uint32_t extent; } cbuf[14];    // NVN uniform slot r -> [[buffer(n)]]; bytes read (cbufext, 0 = unknown)
+    int ncbuf; struct { uint8_t slot, buffer, dynamic; uint32_t extent; } cbuf[14];   // dynamic: computed-index reads checked against wonder_cbsz (cbufdyn)    // NVN uniform slot r -> [[buffer(n)]]; bytes read (cbufext, 0 = unknown)
     int support;                                             // Ryujinx support buffer [[buffer(n)]], -1 = none
+    int cbsz_buffer;                                         // bound uniform sizes (u32 per slot 0..13) at [[buffer(n)]] (cbsz), -1 = none
     int smp_overflow;                                        // samplers 16..47: argument buffer [[buffer(n)]] of MTLResourceIDs (smpov), -1 = none
     int c1_buffer; uint16_t c1_len; uint8_t c1[4096];         // shader's own constants (c[1]) -> [[buffer(n)]], -1 = none
     // NVN texture slot r -> [[texture]] / [[sampler]]; bindless entries (handle read from uniform slot ubo_slot at byte

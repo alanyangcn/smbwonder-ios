@@ -48,6 +48,22 @@ class PureHelpers(unittest.TestCase):
                "x = fp_c3._m0[3].z + fp_c3._m0[12u].x;\n"
                "y = wonder_cb(fp_c1._m0, i) + fp_c1._m0[2].x;\n")
         self.assertEqual(build.cbuf_extents(msl), {2: 13 * 16, 3: 0, 4: 16})
+    def test_computed_uniform_reads_check_the_bound_size(self):
+        # round234: wonder_cb on uniform buffers (c3..c16) in main0 -> wonder_cbz with the size table at a free buffer index.
+        src = ("using namespace metal;\n"
+               "fragment main0_out main0(constant _16& fp_c3 [[buffer(0)]], constant _16& fp_c1 [[buffer(2)]])\n"
+               "{ x = fp_c3._m0[int(k)] + fp_c3._m0[4].x + fp_c1._m0[j]; }\n")
+        out, b = build.size_guard(build.guard_cbuf_indices(src), 'ps')
+        self.assertEqual(b, 1)
+        self.assertIn('constant uint* wonder_cbsz [[buffer(1)]])', out)
+        self.assertIn('wonder_cbz(fp_c3._m0, wonder_cbsz[0], int(k))', out)
+        self.assertIn('wonder_cb(fp_c1._m0, j)', out)                       # shader constants (c1) keep the 64 KiB guard
+        self.assertIn('static inline __attribute__((unused)) float4 wonder_cbz(', out)
+        self.assertEqual(build.cbuf_extents(out), {0: 5 * 16, 2: 0})         # the literal read still bounds the extent
+        same, none = build.size_guard('using namespace metal;\nvertex main0_out main0(constant _16& vp_c3 [[buffer(1)]])\n{ y = vp_c3._m0[2]; }\n', 'vs')
+        self.assertIsNone(none)
+        full = 'using namespace metal;\nvertex main0_out main0(' + ', '.join(f'constant _16& vp_c{3 + i} [[buffer({i})]]' for i in range(15)) + ')\n{ y = vp_c3._m0[int(k)]; }\n'
+        self.assertIsNone(build.size_guard(build.guard_cbuf_indices(full), 'vs')[1])   # vertex stages: no free index below 15
     def test_support_buffer_parameters(self):
         # Ryujinx's support buffer is the struct carrying render_scale (float[73]); its entry parameter needs no reflection.
         msl = ("struct _10\n{\n    uint _m0;\n    uint _m1[8];\n    float4 _m2;\n    float4 _m3;\n    int _m4;\n    float _m5[73];\n    int4 _m6;\n    int _m7;\n};\n"

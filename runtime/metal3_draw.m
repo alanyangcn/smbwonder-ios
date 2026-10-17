@@ -602,6 +602,7 @@ static void sync_check(const struct wonder_host_draw *d) {
 struct draw_copy { __unsafe_unretained id<MTLBuffer> src; NSUInteger src_offset; __unsafe_unretained id<MTLBuffer> dst; NSUInteger dst_offset, size, window; };
 struct draw_encoding {
     NSUInteger index[2][32], offset[2][32]; int nb[2];
+    uint32_t cbsz[2][14]; int cbsz_index[2];   // bound uniform sizes for computed-index reads (wonder_cbz, round234)
     uint8_t tex_index[2][40], smp_index[2][40]; int ntex[2];
     int smp_overflow[2]; uint64_t smp_ids[2][32];   // samplers 16..47: MTLResourceIDs set as bytes at [[buffer(smp_overflow)]]
     NSUInteger stream_index[16], stream_offset[16]; int nstreams;
@@ -1086,7 +1087,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // in command order: the batch's copies run in one blit encoder ahead of its render encoder, and every operation that
     // could change their sources (UpdateUniformBuffer, fills, other encoders, a draw writing storage) flushes the batch first.
     struct draw_copy copies[2 * 14 + 16]; int ncopies = 0;
-    id<MTLBuffer> ubo_copies[2][14] = {{nil}}; NSUInteger ubo_offsets[2][14] = {{0}};
+    id<MTLBuffer> ubo_copies[2][14] = {{nil}}; NSUInteger ubo_offsets[2][14] = {{0}}; uint32_t ubo_sizes[2][14] = {{0}};
     for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ncbuf; i++) {
         int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
         id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
@@ -1094,12 +1095,16 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         // round222: a stage whose reads of this buffer all use literal indices inside the bound size (cbufext) reads
         // nothing past it, so the game's buffer is bound in place; the copy below (~4000 per world-map frame, 64 KiB
         // each) only remains for computed indices and reads past the bound size.
-        uint32_t extent = refl[stage]->cbuf[i].extent;
-        if (extent && extent <= n) { ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; direct_ubos++; continue; }
+        // round234: computed-index reads check the bound size themselves (cbufdyn, the size table at cbsz), so such a
+        // buffer is bound in place too when its literal reads fit.
+        uint32_t extent = refl[stage]->cbuf[i].extent; int dynamic = refl[stage]->cbuf[i].dynamic;
+        if (extent && extent <= n && (!dynamic || (refl[stage]->cbsz_buffer >= 0 && n >= 16 && u->offset + ((n + 15) & ~(NSUInteger)15) <= src.length))) {
+            ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; ubo_sizes[stage][slot] = (uint32_t)n; direct_ubos++; continue;
+        }
         // The window covers what the stage reads: its extent when known (round226), else the whole 64 KiB a c[n] declares.
         if (extent) copy_past++; else copy_dynamic++;
         NSUInteger span = extent ? (NSUInteger)extent : 0x10000, offset; id<MTLBuffer> window = scratch_window(span, &offset);
-        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; copied_ubos++;
+        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; copied_ubos++; ubo_sizes[stage][slot] = (uint32_t)span;
         ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
     }
     // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
@@ -1122,6 +1127,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         #define BIND(b_, off_, idx_) do { id<MTLBuffer> bb_ = (b_); if (!bb_) unsupported(d, "draw buffer binding without a buffer, index", (long)(idx_)); \
             [bufs[stage] addObject:bb_]; x.offset[stage][x.nb[stage]] = (off_); x.index[stage][x.nb[stage]++] = (idx_); } while (0)
         for (int i = 0; i < r->ncbuf; i++) BIND(ubo_copies[stage][r->cbuf[i].slot], ubo_offsets[stage][r->cbuf[i].slot], r->cbuf[i].buffer);
+        x.cbsz_index[stage] = r->cbsz_buffer; memcpy(x.cbsz[stage], ubo_sizes[stage], sizeof x.cbsz[stage]);
         for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][r->sbuf[i].slot]; BIND((__bridge id<MTLBuffer>)sb->buffer, sb->offset, r->sbuf[i].buffer); }
         if (r->c1_buffer >= 0) BIND(c1_buffers[stage], 0, (NSUInteger)r->c1_buffer);
         if (r->drv0_buffer >= 0) BIND(drv0_buffers[stage], 0, (NSUInteger)r->drv0_buffer);
@@ -1182,6 +1188,8 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         }
         if (x.smp_overflow[1] >= 0) [e setFragmentBytes:x.smp_ids[1] length:sizeof x.smp_ids[1] atIndex:(NSUInteger)x.smp_overflow[1]];
         if (x.smp_overflow[0] >= 0) [e setVertexBytes:x.smp_ids[0] length:sizeof x.smp_ids[0] atIndex:(NSUInteger)x.smp_overflow[0]];
+        if (x.cbsz_index[0] >= 0) [e setVertexBytes:x.cbsz[0] length:sizeof x.cbsz[0] atIndex:(NSUInteger)x.cbsz_index[0]];
+        if (x.cbsz_index[1] >= 0) [e setFragmentBytes:x.cbsz[1] length:sizeof x.cbsz[1] atIndex:(NSUInteger)x.cbsz_index[1]];
         if (x.uses_default) [e setVertexBuffer:zeros offset:0 atIndex:WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
         for (int i = 0; i < x.nstreams; i++) [e setVertexBuffer:streams[i] offset:x.stream_offset[i] atIndex:x.stream_index[i]];
         if (x.index_type < 0) [e drawPrimitives:x.primitive vertexStart:(NSUInteger)x.first vertexCount:(NSUInteger)x.count instanceCount:(NSUInteger)x.instances baseInstance:(NSUInteger)x.base_instance];
@@ -1298,6 +1306,10 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
     e.label = [NSString stringWithFormat:@"NVN dispatch cs=%s", x->key];
     [e setComputePipelineState:pso];
     for (int i = 0; i < r->ncbuf; i++) [e setBuffer:ubo_copies[r->cbuf[i].slot] offset:0 atIndex:r->cbuf[i].buffer];
+    if (r->cbsz_buffer >= 0) {   // every uniform buffer is a full 64 KiB copy here (round234 size table for wonder_cbz)
+        uint32_t sizes[14]; for (int i = 0; i < 14; i++) sizes[i] = 0x10000;
+        [e setBytes:sizes length:sizeof sizes atIndex:(NSUInteger)r->cbsz_buffer];
+    }
     for (int i = 0; i < r->nuptr; i++) { const struct wonder_host_span *u = &x->uptr[r->uptr[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)u->buffer offset:u->offset atIndex:r->uptr[i].buffer]; }
     for (int i = 0; i < r->nsbuf; i++) { const struct wonder_host_span *sb = &x->sbuf[r->sbuf[i].slot]; [e setBuffer:(__bridge id<MTLBuffer>)sb->buffer offset:sb->offset atIndex:r->sbuf[i].buffer]; }
     if (c1_buffer) [e setBuffer:c1_buffer offset:0 atIndex:(NSUInteger)r->c1_buffer];

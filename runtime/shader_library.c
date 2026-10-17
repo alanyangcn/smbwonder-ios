@@ -20,7 +20,7 @@ int wonder_shader_format_class(int f) {
     }
 }
 int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader_refl *r, char *err, size_t n) {
-    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->smp_overflow = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
+    memset(r, 0, sizeof *r); r->stage = -1; r->support = -1; r->smp_overflow = -1; r->cbsz_buffer = -1; r->c1_buffer = -1; r->depth_minus_one = -1; r->drv0_buffer = -1;
     size_t at = 0; unsigned line_no = 0;
     while (at < size) {
         size_t end = at; while (end < size && text[end] != '\n') end++;
@@ -61,13 +61,22 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
             if (sscanf(line, "cbuf %d %d", &a, &b) != 2 || a < 0 || a > 13) return fail(err, n, "cbuf line %u: NVN uniform slot must be 0..13", line_no);
             if (b < 0 || b >= buffers) return fail(err, n, "cbuf line %u: buffer %d beyond the stage's buffer bindings (vertex 0..14, others 0..30)", line_no, b);
             if (r->ncbuf >= 14) return fail(err, n, "cbuf line %u: more than 14 uniform buffers", line_no);
-            r->cbuf[r->ncbuf].slot = (uint8_t)a; r->cbuf[r->ncbuf].extent = 0; r->cbuf[r->ncbuf++].buffer = (uint8_t)b;
+            r->cbuf[r->ncbuf].slot = (uint8_t)a; r->cbuf[r->ncbuf].extent = 0; r->cbuf[r->ncbuf].dynamic = 0; r->cbuf[r->ncbuf++].buffer = (uint8_t)b;
         } else if (!strcmp(kind, "cbufext")) {   // round222: bytes of uniform slot r the stage reads (0 = a computed index)
             int i = 0;
             if (sscanf(line, "cbufext %d %d", &a, &b) != 2 || b < 0 || b > 0x10000) return fail(err, n, "cbufext line %u: slot and 0..65536 bytes", line_no);
             while (i < r->ncbuf && r->cbuf[i].slot != a) i++;
             if (i == r->ncbuf) return fail(err, n, "cbufext line %u: uniform slot %d has no cbuf line before it", line_no, a);
             r->cbuf[i].extent = (uint32_t)b;
+        } else if (!strcmp(kind, "cbufdyn")) {   // round234: computed-index reads of slot r are checked against the bound size
+            int i = 0;
+            if (sscanf(line, "cbufdyn %d", &a) != 1) return fail(err, n, "cbufdyn line %u: bad slot", line_no);
+            while (i < r->ncbuf && r->cbuf[i].slot != a) i++;
+            if (i == r->ncbuf) return fail(err, n, "cbufdyn line %u: uniform slot %d has no cbuf line before it", line_no, a);
+            r->cbuf[i].dynamic = 1;
+        } else if (!strcmp(kind, "cbsz")) {
+            if (sscanf(line, "cbsz %d", &a) != 1 || a < 0 || a >= buffers) return fail(err, n, "cbsz line %u: bad buffer", line_no);
+            r->cbsz_buffer = a;
         } else if (!strcmp(kind, "support")) {
             if (sscanf(line, "support %d", &a) != 1 || a < 0 || a >= buffers) return fail(err, n, "support line %u: bad buffer", line_no);
             r->support = a;

@@ -41,6 +41,10 @@ static NSString *const vs_src = @"#include <metal_stdlib>\nusing namespace metal
 // must see zeros, as on Maxwell, not neighbouring pool bytes.
 static NSString *const fs_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
     "fragment float4 main0(constant U& u [[buffer(1)]], texture2d<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float2(0.25, 0.75)) * u.tint + u.beyond; }\n";
+// round234: a computed-index read checked against the bound size table (what wonder_cbz does in translated stages)
+static NSString *const fs_dyn_src = @"#include <metal_stdlib>\nusing namespace metal;\n"
+    "fragment float4 main0(constant float4 *u [[buffer(1)]], constant uint *sz [[buffer(2)]], texture2d<float> t [[texture(1)]], sampler s [[sampler(1)]]) {"
+    " uint n = (sz[0] + 15u) / 16u; uint j = 1u; float4 beyond = j < n ? u[min(j, n - 1u)] : float4(0.0); return t.sample(s, float2(0.25, 0.75)) * u[0] + beyond; }\n";
 static NSString *const fs_cube_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
     "fragment float4 main0(constant U& u [[buffer(1)]], texturecube<float> t [[texture(1)]], sampler s [[sampler(1)]]) { return t.sample(s, float3(1, 0, 0)) * u.tint; }\n";
 static NSString *const fs_array_src = @"#include <metal_stdlib>\nusing namespace metal;\nstruct U { float4 tint; float4 beyond; };\n"
@@ -153,12 +157,16 @@ int main(int argc, char **argv) {
         static struct wonder_shader_refl vr, fr; char err[128];
         const char *vt = "stage vs\nc1 2 00000000000000000000000000000000\nattr 0 0 float\n", *ft = "stage ps\ncbuf 0 1\ntex 0 1 1 2d\nfout 0 float\n";
         assert(!wonder_shader_refl_parse(vt, strlen(vt), &vr, err, sizeof err) && !wonder_shader_refl_parse(ft, strlen(ft), &fr, err, sizeof err));
+        if (!strcmp(mode, "ubo_dynamic")) {   // computed index, bound 16 bytes: bound in place, the read past it gives 0 (pool holds 1s)
+            const char *ft3 = "stage ps\ncbuf 0 1\ncbufext 0 16\ncbufdyn 0\ncbsz 2\ntex 0 1 1 2d\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(ft3, strlen(ft3), &fr, err, sizeof err) && fr.cbuf[0].dynamic && fr.cbsz_buffer == 2);
+        }
         if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past")) {   // round222: the stage reads 32 bytes of uniform slot 0
             const char *ft2 = "stage ps\ncbuf 0 1\ncbufext 0 32\ntex 0 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(ft2, strlen(ft2), &fr, err, sizeof err) && fr.cbuf[0].extent == 32);
         }
         static struct wonder_host_draw d; memset(&d, 0, sizeof d);
-        d.vs = (__bridge_retained void *)function(vs_src); d.fs = (__bridge_retained void *)function(fs_src); d.vr = &vr; d.fr = &fr;
+        d.vs = (__bridge_retained void *)function(vs_src); d.fs = (__bridge_retained void *)function(!strcmp(mode, "ubo_dynamic") ? fs_dyn_src : fs_src); d.vr = &vr; d.fr = &fr;
         strcpy(d.vs_key, "1111111111111111"); strcpy(d.fs_key, "2222222222222222");
         d.targets[0].texture = target_texture(1, 0x25); d.targets[0].valid = 1;
         d.targets[1].texture = target_texture(2, 0x34); d.targets[1].valid = 1; d.color_count = 1;   // DEPTH32F
@@ -307,7 +315,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "ubo_direct") && strcmp(mode, "ubo_past") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array") && strcmp(mode, "default_attr")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "ubo_direct") && strcmp(mode, "ubo_past") && strcmp(mode, "ubo_dynamic") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array") && strcmp(mode, "default_attr")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         char zpng[1024]; snprintf(zpng, sizeof zpng, "%s/depth.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) {
@@ -334,6 +342,10 @@ int main(int argc, char **argv) {
         if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal3 encode blend colour OK"); return 0; }
         if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal3 encode BC native OK"); return 0; }
         if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == 255); puts("metal3 encode texture view OK"); return 0; }
+        if (!strcmp(mode, "ubo_dynamic")) {
+            assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && z[32 * 64 + 32] == 0.25f);
+            extern void wonder_host_tbdr_window(char *, size_t); char w[1024]; wonder_host_tbdr_window(w, sizeof w);
+            assert(strstr(w, "ubo_direct=1 ubo_copied=0")); puts("metal3 encode dynamic uniform read OK"); return 0; }
         if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past")) {
             // green texel x tint either way; past the bound 16 bytes the copy reads zeros (the pool holds 1s there)
             assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && z[32 * 64 + 32] == 0.25f);
