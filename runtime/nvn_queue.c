@@ -669,7 +669,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         // its completion handlers), then evaluate on the CPU. A sync point, but exact.
         // Records whose pending writes are report values of this submit are known without the GPU (round199: the
         // finish per conditional, ~50 per frame, serialised CPU and GPU).
-        static int verify = -1; if (verify < 0) { const char *e = getenv("WONDER_VERIFY_CONDITIONAL"); verify = e && *e == '1'; }
+        // Off by default (round202: the world map flickered with it on, so some GPU write to these records is not tracked,
+        // e.g. a virtual-pool alias of the same memory). WONDER_FAST_CONDITIONAL=1 enables it for study; with it on,
+        // WONDER_VERIFY_CONDITIONAL=1 finishes anyway and counts mismatches.
+        static int verify = -1; if (verify < 0) { const char *f = getenv("WONDER_FAST_CONDITIONAL"), *e = getenv("WONDER_VERIFY_CONDITIONAL"); verify = !(f && *f == '1') || (e && *e == '1'); }
         static const unsigned words[4] = {0, 4, 16, 20}; uint32_t known[4]; int kind[4], shadowed = 1;
         for (int w = 0; w < 4; w++) { kind[w] = wonder_report_shadow_lookup(&report_shadow, c->a[1] + words[w], &known[w]); if (kind[w] < 0) shadowed = 0; }
         if (!shadowed || verify) replay_finish();
