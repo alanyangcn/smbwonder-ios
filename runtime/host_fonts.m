@@ -39,17 +39,36 @@ static int build_face(CFStringRef want,uint8_t **out,size_t *out_size){
  for(unsigned i=0;i<n;i++)CFRelease(data[i]);if(tags)CFRelease(tags);if(got)CFRelease(got);if(font)CFRelease(font);
  *out=result;*out_size=length;return error;
 }
+// Type 5 (Nintendo extension: button icons in the private use area) has no iOS counterpart (AppleSymbols showed "?" for
+// every icon, round139): the app bundles a drawn icon face, tools/make_icon_font.py -> dm/fonts/wonder-icons.ttf
+// (WONDER_ICON_FONT overrides the path for host tests). Missing or unreadable -> NULL, and the font service stops by name.
+static int load_icon_face(uint8_t **out,size_t *out_size,char *path_out,size_t path_size){
+ const char *env=getenv("WONDER_ICON_FONT");
+ NSString *path=env&&*env?@(env):[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/fonts/wonder-icons.ttf"];
+ snprintf(path_out,path_size,"%s",path.fileSystemRepresentation);
+ NSData *data=[NSData dataWithContentsOfFile:path];if(!data||data.length<12)return ENOENT;
+ uint8_t *bytes=malloc(data.length);if(!bytes)return ENOMEM;memcpy(bytes,data.bytes,data.length);
+ CGDataProviderRef provider=CGDataProviderCreateWithData(NULL,bytes,data.length,NULL);
+ CGFontRef check=provider?CGFontCreateWithDataProvider(provider):NULL;int error=!check||CGFontGetNumberOfGlyphs(check)<2?EINVAL:0;
+ if(check)CGFontRelease(check);if(provider)CGDataProviderRelease(provider);
+ if(error){free(bytes);return error;}
+ *out=bytes;*out_size=data.length;return 0;
+}
 const void *wonder_host_shared_font(unsigned type,size_t *size){
  if(type>=6||!size)return NULL;
  pthread_mutex_lock(&fonts_lock);
- if(!font_bytes[type]){@autoreleasepool{
-  static const char *const candidates[6][4]={
+ if(!font_bytes[type]&&type==5){@autoreleasepool{
+  uint8_t *bytes=NULL;size_t length=0;char path[1024];int error=load_icon_face(&bytes,&length,path,sizeof path);
+  fprintf(stderr,"HOST_SHARED_FONT type=5 face=WonderPortIcons bytes=%zu result=%d path=%s source=bundled-icon-substitute\n",length,error,path);
+  if(!error){font_bytes[5]=bytes;font_sizes[5]=length;}
+ }}
+ if(!font_bytes[type]&&type<5){@autoreleasepool{
+  static const char *const candidates[5][4]={
    {"HiraginoSans-W3",NULL},                                                   // Japanese / standard
    {"PingFangSC-Regular","STHeitiSC-Light","HiraginoSansGB-W3",NULL},          // Chinese simplified
    {"PingFangSC-Regular","STHeitiSC-Light","HiraginoSansGB-W3",NULL},          // Chinese simplified extension
    {"PingFangTC-Regular","STHeitiTC-Light",NULL},                              // Chinese traditional
-   {"AppleSDGothicNeo-Regular",NULL},                                          // Korean
-   {"AppleSymbols",NULL}};                                                     // Nintendo extension (symbols)
+   {"AppleSDGothicNeo-Regular",NULL}};                                         // Korean
   for(unsigned i=0;candidates[type][i]&&!font_bytes[type];i++){
    CFStringRef want=CFStringCreateWithCString(NULL,candidates[type][i],kCFStringEncodingUTF8);
    uint8_t *bytes=NULL;size_t length=0;int error=build_face(want,&bytes,&length);CFRelease(want);

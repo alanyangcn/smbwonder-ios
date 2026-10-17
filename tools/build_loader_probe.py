@@ -100,6 +100,13 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
             shutil.copy2(patch_dir / f'{name}.{suffix}', resources / f'{name}.{suffix}')
     shaders = copy_shaders(work / 'build/wonder-shaders', resources / 'shaders')
     print(f'translated shader stages bundled: {shaders}')
+    # Shared font type 5 stand-in (button icons, runtime/host_fonts.m): drawn by tools/make_icon_font.py into work/.
+    icons = work / 'build/icon-font/wonder-icons.ttf'
+    if not icons.exists():
+        icons.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([str(work / 'tools/venv/bin/python3'), str(REPOSITORY / 'tools/make_icon_font.py'), '--out', str(icons)], check=True)
+    (resources / 'fonts').mkdir(exist_ok=True)
+    shutil.copy2(icons, resources / 'fonts/wonder-icons.ttf')
     embed = output / 'embed.S'
     flags = subprocess.check_output([sys.executable, str(REPOSITORY / 'vendor/d2r-mobile/dm/ios/tools/gen_embed.py'),
                                      str(patch_dir), str(embed), 'main', 'sdk'], text=True).split()

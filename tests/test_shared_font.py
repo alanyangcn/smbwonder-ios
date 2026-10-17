@@ -1,6 +1,7 @@
 from pathlib import Path
-import subprocess,tempfile,unittest
+import os,subprocess,tempfile,unittest
 ROOT=Path(__file__).resolve().parents[1]
+VENV=ROOT/'work/tools/venv/bin/python3'
 class SharedFontTests(unittest.TestCase):
     def test_builds_valid_sfnt_checksums_and_rejects_missing_tables(self):
         with tempfile.TemporaryDirectory() as d:
@@ -30,6 +31,7 @@ int main(void){
             subprocess.run(['clang','-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'runtime'),str(source),str(ROOT/'runtime/shared_font.c'),'-o',str(p/'test')],check=True)
             subprocess.run([str(p/'test')],check=True)
 
+    @unittest.skipUnless(VENV.exists(), 'needs work/tools/venv (fontTools)')
     def test_host_faces_are_valid_and_keep_stable_addresses(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d);source=p/'host.m'
@@ -45,4 +47,14 @@ int main(void){for(unsigned type=0;type<6;type++){
  CGFontRelease(f);CGDataProviderRelease(p);
  }size_t size=123;assert(!wonder_host_shared_font(6,&size));return 0;}''')
             subprocess.run(['clang','-fobjc-arc','-Wall','-Wextra','-Werror','-I'+str(ROOT/'runtime'),str(source),str(ROOT/'runtime/shared_font.c'),str(ROOT/'runtime/host_fonts.m'),'-framework','Foundation','-framework','CoreText','-framework','CoreGraphics','-o',str(p/'test')],check=True)
-            subprocess.run([str(p/'test')],check=True)
+            font=p/'icons.ttf'   # type 5 = the drawn button icon face (tools/make_icon_font.py)
+            subprocess.run([str(VENV),str(ROOT/'tools/make_icon_font.py'),'--out',str(font)],check=True,capture_output=True)
+            subprocess.run([str(p/'test')],check=True,env={**os.environ,'WONDER_ICON_FONT':str(font)})
+            missing=subprocess.run([str(p/'test')],env={**os.environ,'WONDER_ICON_FONT':str(p/'none.ttf')},capture_output=True)
+            self.assertNotEqual(missing.returncode,0)   # no icon face: type 5 is unavailable (the font service stops by name)
+
+    @unittest.skipUnless(VENV.exists(), 'needs work/tools/venv (fontTools)')
+    def test_icon_font_covers_the_message_code_points(self):
+        # The 27 private-use code points Wonder's message data uses (round196 survey of Mals/*.sarc.zs) all have outlines.
+        out=subprocess.run([str(VENV),str(ROOT/'tests/icon_font_check.py'),str(ROOT/'tools')],check=True,capture_output=True,text=True).stdout.split()
+        self.assertEqual(out,['27','none'])
