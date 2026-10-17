@@ -11,6 +11,7 @@
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
 #include "../runtime/gpu_gate.h"
+#include "../runtime/widescreen.h"
 #if !defined(__aarch64__)
 #error This probe requires a physical ARM64 iOS device, not an Intel simulator.
 #endif
@@ -173,6 +174,10 @@ uint64_t wonder_host_language(void) {
     if (![scene isKindOfClass:UIWindowScene.class] || self.window) return;
     static int started; if (started) return; started = 1;   // one game per process
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+    {   // Widescreen (runtime/widescreen.h): the game frames the screen's aspect; WONDER_WIDESCREEN=0 keeps 16:9 with bars.
+        const char *e = getenv("WONDER_WIDESCREEN"); CGRect b = ((UIWindowScene *)scene).screen.bounds;
+        wonder_widescreen_set(e && *e == '0' ? 16.0f / 9.0f : wonder_widescreen_aspect(b.size.width, b.size.height));
+    }
     ProbeGameController *controller = [ProbeGameController new];
     controller.view.backgroundColor = UIColor.blackColor;
     gText = [[UITextView alloc] initWithFrame:CGRectZero];

@@ -1,4 +1,5 @@
 #import "host_graphics.h"
+#include "widescreen.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include "kernel_events.h"
@@ -277,7 +278,10 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  if(t.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
  else if(t.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatBGRA8Unorm];
  CAMetalLayer *layer=(CAMetalLayer*)surface.layer; id<CAMetalDrawable> drawable=[layer nextDrawable]; if(!drawable) return EAGAIN;
- double W=drawable.texture.width,H=drawable.texture.height,w=crop[2],h=crop[3],scale=fmin(W/w,H/h),dw=w*scale/W,dh=h*scale/H;
+ // Widescreen (widescreen.h): the game framed a wider view into this 16:9 image; stretching it to the game's aspect
+ // undoes the squeeze. Then it is fitted to the drawable as before (bars only past WONDER_WIDESCREEN_MAX_ASPECT).
+ double stretch=wonder_widescreen_get()/((double)crop[2]/crop[3]); if(stretch<1) stretch=1;
+ double W=drawable.texture.width,H=drawable.texture.height,w=crop[2]*stretch,h=crop[3],scale=fmin(W/w,H/h),dw=w*scale/W,dh=h*scale/H;
  struct { float dst[4], src[4]; } r={{(float)-dw,(float)dh,(float)dw,(float)-dh},
   {(float)(crop[0]/(double)t.width),(float)(crop[1]/(double)t.height),(float)((crop[0]+w)/t.width),(float)((crop[1]+h)/t.height)}};
  MTLRenderPassDescriptor *p=[MTLRenderPassDescriptor renderPassDescriptor];
