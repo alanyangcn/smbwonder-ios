@@ -3,7 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
-#include "fps_meter.h"
+extern int wonder_fps_current(void);   // runtime/fps_meter.h
 #include "dm.h"
 #include "../runtime/romfs.h"
 #import "../runtime/metal3_probe.h"
