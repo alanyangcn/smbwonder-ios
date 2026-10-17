@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Bold world unlock for a Wonder game_data.sav (round208, at the player's request; the original is backed up first).
 Sets every 81-element BoolArray (world map point flags) to all true, every zero element of the 81-element UIntArrays
-to 1 (non-zero values, e.g. the 7 seen in World 1, stay), and Motherseed00..05Finish to true. Array meanings are not
+to 1 (non-zero values, e.g. the 7 seen in World 1, stay), and Motherseed00..05Finish to true. Every world struct's
+IsVisitedWorld and IsHeardWorldNameByPrince members (GameDataList Struct entries: member name hash -> flag hash) are set
+too: the grand world map shows a world's name only once it was visited or the prince named it, else "???"
+(UIMapWorldNamePartsScreen, main+0x1d4b938 -> label "_Hidden"; Event_SetFlagVisitedWorld / ...HeardWorldNameByPrince). Array meanings are not
 known per name (see tools/save_diff.py); this may leave story/demo state inconsistent.
 Usage: save_unlock.py <in game_data.sav> <out game_data.sav>
 """
@@ -25,7 +28,9 @@ def unlock(src, dst):
     types = {e['Hash']: t for t, es in gdl.items() for e in es}
     d, ents = load(src); d = bytearray(d)
     seeds = {murmur3(f'Motherseed{i:02d}Finish'.encode()) for i in range(6)}
-    counts = {'bool_arrays': 0, 'uint_elements': 0, 'seeds': 0}
+    members = {murmur3(b'IsVisitedWorld'), murmur3(b'IsHeardWorldNameByPrince')}
+    world_flags = {m['Value'] for e in gdl['Struct'] for m in e['DefaultValue'] if m['Hash'] in members}
+    counts = {'bool_arrays': 0, 'uint_elements': 0, 'seeds': 0, 'world_flags': 0}
     for i, (h, v) in enumerate(ents):
         t = types.get(h)
         if t in ('BoolArray', 'UIntArray') and struct.unpack_from('<I', d, v)[0] == 81:
@@ -36,6 +41,8 @@ def unlock(src, dst):
                     if struct.unpack_from('<I', d, v + 4 + 4 * k)[0] == 0: struct.pack_into('<I', d, v + 4 + 4 * k, 1); counts['uint_elements'] += 1
         elif t == 'Bool' and h in seeds:
             struct.pack_into('<I', d, 0x20 + 8 * i + 4, 1); counts['seeds'] += 1
+        elif t == 'Bool' and h in world_flags:
+            struct.pack_into('<I', d, 0x20 + 8 * i + 4, 1); counts['world_flags'] += 1
     Path(dst).write_bytes(d)
     return counts
 
