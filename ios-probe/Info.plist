@@ -17,7 +17,7 @@
 	<string>0.1</string>
 	<key>CFBundleVersion</key>
 	<string>4</string>
-	<!-- sdk / constructors / main：启动到哪个阶段（tools/build_loader_probe.py --stage，默认 main） -->
+	<!-- sdk / constructors / main：启动到哪个阶段（tools/build_loader_probe.py 的 stage 参数，默认 main） -->
 	<key>WonderBootStage</key>
 	<string>$(WONDER_BOOT_STAGE)</string>
 	<key>MinimumOSVersion</key>
