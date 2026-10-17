@@ -19,7 +19,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 # Event/VI/host-graphics layer and strict NVN bootstrap; kept in sync with ios-probe/project.yml.
 RUNTIME_GRAPHICS = tuple('runtime/' + name for name in (
     'kernel_threads.c', 'account_state.c', 'account_hooks.c', 'nfp_hooks.c', 'audio_platform.c', 'time_hooks.c', 'hid_state.c', 'hid_hooks.c', 'crash_report.c', 'vi_state.c', 'vi_hooks.c', 'host_graphics.m',
-    'shared_font.c', 'host_fonts.m', 'font_hooks.c', 'nvn_device.c', 'nvn_swapchain.c', 'nvn_buffer.c', 'nvn_commands.c', 'nvn_queue.c', 'report_shadow.c', 'widescreen.c', 'nvn_texture.c', 'nvn_state.c', 'nvn_bootstrap.c', 'nvn_unimpl.S')) + (
+    'shared_font.c', 'host_fonts.m', 'font_hooks.c', 'nvn_device.c', 'nvn_swapchain.c', 'nvn_buffer.c', 'nvn_commands.c', 'nvn_queue.c', 'report_shadow.c', 'widescreen.c', 'fps_meter.c', 'nvn_texture.c', 'nvn_state.c', 'nvn_bootstrap.c', 'nvn_unimpl.S')) + (
     'vendor/d2r-mobile/dm/gfx/nvn/nvn_tex.c',      # shared TX1 block-linear layout calculator (deko3d-derived)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c',  # NVN format -> Metal pixel format (pure C)
     'vendor/d2r-mobile/dm/gfx/tex/nvn_deswizzle.c')  # TX1 block-linear <-> linear

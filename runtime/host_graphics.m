@@ -1,4 +1,5 @@
 #import "host_graphics.h"
+#include "fps_meter.h"
 #include "widescreen.h"
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -257,6 +258,9 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  (void)interval;
  id<MTLTexture> t=(__bridge id<MTLTexture>)texture; if(!t||!device||!surface) return EINVAL;
  capture_present(t,crop);
+ {  // on-screen frame rate (fps_meter.h; LoaderProbe.m shows it)
+  static struct wonder_fps_meter meter; int fps=wonder_fps_meter_present(&meter,CACurrentMediaTime()); if(fps>=0) wonder_fps_publish(fps);
+ }
  static unsigned presents; if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
   task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; uint64_t footprint=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0;
   pthread_mutex_lock(&replay_mutex); unsigned targets=wonder_storage_count(); pthread_mutex_unlock(&replay_mutex);

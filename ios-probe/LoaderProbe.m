@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include "fps_meter.h"
 #include "dm.h"
 #include "../runtime/romfs.h"
 #import "../runtime/metal3_probe.h"
@@ -200,7 +201,20 @@ uint64_t wonder_host_language(void) {
     UIView *controls = wonder_input_controls();
     controls.translatesAutoresizingMaskIntoConstraints = NO;
     UIView *root = controller.view;
-    [root addSubview:surface]; [root addSubview:controls]; [root addSubview:gText];
+    // Frame rate in the top-left corner (the side bar of the 16:9 picture), updated twice a second from the presents
+    // (runtime/fps_meter.h). WONDER_FPS=0 hides it. A UILabel takes no touches, so the controls below still work.
+    UILabel *fps = [UILabel new];
+    fps.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    fps.textColor = UIColor.whiteColor; fps.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    fps.textAlignment = NSTextAlignmentCenter; fps.layer.cornerRadius = 4; fps.layer.masksToBounds = YES;
+    fps.translatesAutoresizingMaskIntoConstraints = NO; fps.hidden = YES;
+    const char *fps_env = getenv("WONDER_FPS"); BOOL show_fps = !(fps_env && !strcmp(fps_env, "0"));
+    [root addSubview:surface]; [root addSubview:controls]; [root addSubview:gText]; [root addSubview:fps];
+    if (show_fps) [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
+        (void)timer; int tenths = wonder_fps_current();
+        fps.hidden = tenths < 0;
+        if (tenths >= 0) fps.text = [NSString stringWithFormat:@" %d.%d FPS ", tenths / 10, tenths % 10];
+    }];
     NSLayoutConstraint *fillHeight = [surface.heightAnchor constraintEqualToAnchor:root.heightAnchor]; fillHeight.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
         [surface.centerXAnchor constraintEqualToAnchor:root.centerXAnchor],
@@ -215,7 +229,9 @@ uint64_t wonder_host_language(void) {
         [gText.leadingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.leadingAnchor constant:8],
         [gText.trailingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.trailingAnchor constant:-8],
         [gText.topAnchor constraintEqualToAnchor:root.topAnchor constant:8],
-        [gText.heightAnchor constraintEqualToAnchor:root.heightAnchor multiplier:0.45]
+        [gText.heightAnchor constraintEqualToAnchor:root.heightAnchor multiplier:0.45],
+        [fps.leadingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.leadingAnchor constant:4],
+        [fps.topAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.topAnchor constant:4]
     ]];
     self.window.rootViewController = controller;
     [self.window makeKeyAndVisible];
