@@ -66,6 +66,7 @@
     - **宽屏（round204–207，进行中）**：主机内存扫描 + 写入断点定位：关卡相机为正交投影（高 15.5×缩放），每帧在 main+0x2e2b30–0x2e2b6c 写上下左右，宽高比读 main+0x2aeedb4（0x3fe38e3b，主程序唯一的 16:9 常数；另一引用 main+0x6a7630 为默认透视投影构造）。运行时改该常数：关卡视野变宽（压在 16:9 目标里）；但渲染尺寸也由它推出并受 1280 上限约束，标题画面缩到左上（round206）。runtime/widescreen.c（宽高比/拉伸/常数核对写入，有测试）、present 按比例横向拉伸已实现，**默认关闭**（WONDER_WIDESCREEN=1）。剩余：放宽渲染缓冲上限、2D 排版适配、离线剪口（patch_nso.py CUTS，Wonder 构建号 ff773e90972d544eb79406eaa65396d5）。
     - **存档（round208，按玩家要求解锁全部世界）**：game_data.sav 无加密无校验；格式为 GameDataList（GameData/GameDataList.Product.110.byml）定义的（MurmurHash3 名字哈希, 值）表 + 数据区数组（tools/save_diff.py 说明格式并逐项对比）。约 300/1508 个名字已还原（work/save-research/）。tools/save_unlock.py 把 81 元素的世界地图点数组置满、Motherseed00–05Finish 置真；玩家确认世界与关卡全部解锁。原存档备份在 work/save-backup/20261017-122959。
     - **着色器补齐（round208）**：agl/gsys 的 sharcb（'BAHS' v9，Lib/*_resource.sarc 内 8 个文件）离线解析出 2047 个阶段（45 个与设备普查逐字节一致；程序变体未解析，顶点阶段按同档案全部片元输入补齐输出）；离线阶段里仅因"句柄贴图无类型、按 2D"被留下的 106 个顶点阶段改为构建（宿主逐次核对绑定目标）。共构建 11249 个阶段，留下 19 个（16 个计算阶段需普查给出图像格式，2 个读 c[0]+0x610，1 个 spirv-cross 失败）。立方体/立方体数组声明遇绑定 2D 贴图改为空贴图（读 0，同 Ryujinx 的空纹理处理；世界地图 fs e0e6b565 曾因此停）。停止原因另写 Documents/last-stop.txt（loader-probe.log 有大小上限）。
+    - **偶发卡死（round208，未复现）**：回放一次绘制时读到一个 0xf50 字节缓冲，其所在池已被游戏 Finalize（NVN_INVALID_ADDRESS）。未能区分是同步语义缺口（游戏过早释放）还是绑定解析过严。round209 起地址报错带回放位置（提交/命令/操作码）与最近 64 个已释放池（偏移、释放时游戏调用链）；同样操作未再复现，等再次出现时定位。
     - 诊断工具：wonder_diag_scan_screen / wonder_diag_scan_u32（LLDB 调用，输出到 Documents/loader-probe.log；该日志 80 MB 封顶）；LLDB 分块读取整个客体堆约 20 MB/s。
 
 ## 首帧推进（2026-10-15，持续进行）
