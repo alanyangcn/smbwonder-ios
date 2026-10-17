@@ -88,6 +88,7 @@ int wonder_host_clear_rect(void *texture, int level, int slice, const float rgba
 static const char *fake_gpu_error;   // set to simulate a failed replay command buffer
 void wonder_host_note_submit(unsigned submit) { (void)submit; }
 void wonder_host_run_on_replay_stack(void (*fn)(void *), void *arg) { fn(arg); }
+void wonder_host_post_to_replay(void (*fn)(void *), void *arg) { fn(arg); }   // the fake host replays in order, synchronously
 int wonder_host_gpu_error(char *out, size_t size) { if (!fake_gpu_error) return 0; snprintf(out, size, "%s", fake_gpu_error); return 1; }
 static unsigned first_draw_captures; static struct wonder_nvn_texture_snapshot first_draw_target;
 void wonder_host_capture_first_draw(const struct wonder_nvn_texture_snapshot *target) { first_draw_target = *target; first_draw_captures++; }

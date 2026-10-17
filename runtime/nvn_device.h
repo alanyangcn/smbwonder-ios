@@ -120,6 +120,10 @@ int wonder_host_write_buffer(void *buffer, size_t offset, const void *data, size
 void wonder_host_after_gpu(void (*fn)(void *), void *arg);     // run on the CPU after work encoded so far completes
 void wonder_host_fence(void (*fn)(void *), void *arg);         // same, and commit now
 void wonder_host_flush(void);
+// Runs fn(arg) on the replay thread after every job posted before it; returns at once unless WONDER_ASYNC_SUBMIT=0
+// (round221). arg must stay valid until fn has run.
+void wonder_host_post_to_replay(void (*fn)(void *), void *arg);
+void wonder_host_run_on_replay_stack(void (*fn)(void *), void *arg);   // same, and waits for it
 void wonder_host_finish(void);
 int wonder_host_present(void *texture, const int crop[4], int interval);
 // Once per acquired frame on the presenting thread: time-constraint declarations of it and the replay thread (WONDER_RT).

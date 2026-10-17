@@ -322,31 +322,57 @@ void wonder_host_capture_target(const struct wonder_nvn_texture_snapshot *target
 }
 
 // ---------- Host replay thread ----------
-static pthread_mutex_t job_lock=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t job_ready=PTHREAD_COND_INITIALIZER, job_done=PTHREAD_COND_INITIALIZER;
-static void (*job_fn)(void *); static void *job_arg; static int job_pending, job_finished; static pthread_t replay_thread;
+// An ordered job queue (round221): submits, fences, presents and flushes from the game thread run here in the order
+// they were issued, as the console GPU front end consumes its queue behind the CPU. Asynchronous posts return at once
+// (the game thread records the next frame while this one is replayed); synchronous runs wait for their job and with it
+// for every job posted before. WONDER_ASYNC_SUBMIT=0 makes every post synchronous (the replay of rounds <= 220).
+struct replay_job { void (*fn)(void *); void *arg; int *done; struct replay_job *next; };
+static pthread_mutex_t job_lock=PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t job_ready=PTHREAD_COND_INITIALIZER, job_done=PTHREAD_COND_INITIALIZER, job_room=PTHREAD_COND_INITIALIZER;
+static struct replay_job *job_head, *job_tail; static unsigned job_count; static pthread_t replay_thread;
 static _Atomic mach_port_t replay_port;
+#define REPLAY_QUEUE_LIMIT 256   // queued jobs before a post waits (the game paces itself at nvnWindowAcquireTexture)
 static void *replay_thread_main(void *unused){
  (void)unused;
  atomic_store(&replay_port,pthread_mach_thread_np(pthread_self()));
  for(;;){
-  pthread_mutex_lock(&job_lock); while(!job_pending) pthread_cond_wait(&job_ready,&job_lock);
-  void (*fn)(void *)=job_fn; void *arg=job_arg; job_pending=0; pthread_mutex_unlock(&job_lock);
-  @autoreleasepool { fn(arg); }   // a stop inside exits this thread; the waiting guest thread then stays parked
-  pthread_mutex_lock(&job_lock); job_finished=1; pthread_cond_broadcast(&job_done); pthread_mutex_unlock(&job_lock);
+  pthread_mutex_lock(&job_lock); while(!job_head) pthread_cond_wait(&job_ready,&job_lock);
+  struct replay_job *j=job_head; pthread_mutex_unlock(&job_lock);
+  @autoreleasepool { j->fn(j->arg); }   // a stop inside exits this thread; the guest is parked by the stop
+  pthread_mutex_lock(&job_lock);
+  job_head=j->next; if(!job_head) job_tail=NULL; job_count--;
+  if(j->done){ *j->done=1; pthread_cond_broadcast(&job_done); }
+  pthread_cond_broadcast(&job_room); pthread_mutex_unlock(&job_lock);
+  if(!j->done) free(j);
  }
  return NULL;
 }
-void wonder_host_run_on_replay_stack(void (*fn)(void *),void *arg){
+static void start_replay_thread(void){
  static int started; static pthread_mutex_t start_lock=PTHREAD_MUTEX_INITIALIZER;
  pthread_mutex_lock(&start_lock);
  if(!started){ pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a,16u<<20);
   if(pthread_create(&replay_thread,&a,replay_thread_main,NULL)){ fprintf(stderr,"HOST_REPLAY_THREAD_FAILED\n"); abort(); } started=1; }
  pthread_mutex_unlock(&start_lock);
+}
+static void enqueue_locked(struct replay_job *j){
+ j->next=NULL; if(job_tail) job_tail->next=j; else job_head=j; job_tail=j; job_count++; pthread_cond_signal(&job_ready);
+}
+void wonder_host_run_on_replay_stack(void (*fn)(void *),void *arg){
+ start_replay_thread();
  if(pthread_equal(pthread_self(),replay_thread)){ fn(arg); return; }
- pthread_mutex_lock(&job_lock);
- job_fn=fn; job_arg=arg; job_pending=1; job_finished=0; pthread_cond_signal(&job_ready);
- while(!job_finished) pthread_cond_wait(&job_done,&job_lock);
+ int done=0; struct replay_job j={fn,arg,&done,NULL};
+ pthread_mutex_lock(&job_lock); enqueue_locked(&j);
+ while(!done) pthread_cond_wait(&job_done,&job_lock);
  pthread_mutex_unlock(&job_lock);
+}
+static int async_posts(void){ static int on=-1; if(on<0){ const char *e=getenv("WONDER_ASYNC_SUBMIT"); on=!(e&&*e=='0'); fprintf(stderr,"HOST_REPLAY_QUEUE %s\n",on?"async (WONDER_ASYNC_SUBMIT=0 for synchronous)":"synchronous (WONDER_ASYNC_SUBMIT=0)"); } return on; }
+void wonder_host_post_to_replay(void (*fn)(void *),void *arg){
+ start_replay_thread();
+ if(pthread_equal(pthread_self(),replay_thread)||!async_posts()){ wonder_host_run_on_replay_stack(fn,arg); return; }
+ struct replay_job *j=malloc(sizeof *j); if(!j){ fprintf(stderr,"HOST_REPLAY_QUEUE out of memory\n"); abort(); }
+ *j=(struct replay_job){fn,arg,NULL,NULL};
+ pthread_mutex_lock(&job_lock);
+ while(job_count>=REPLAY_QUEUE_LIMIT) pthread_cond_wait(&job_room,&job_lock);
+ enqueue_locked(j); pthread_mutex_unlock(&job_lock);
 }
 
 // ---------- Frame thread time constraints (rt_declare.c) ----------

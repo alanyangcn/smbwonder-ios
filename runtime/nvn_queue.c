@@ -950,21 +950,28 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
     }
 }
 
-struct submit_job { void *queue; int count; const uint64_t *handles; };
+// Submits are replayed on the replay thread in issue order (round221: asynchronously, wonder_host_post_to_replay): the
+// game thread records its next frame meanwhile, as on the console, where the GPU consumes the queue behind the CPU.
+// The handle array is copied (the game may reuse it once the call returns); the command memory it names stays valid
+// until the game's fences say the GPU is done with it, as NVN requires.
+struct submit_job { void *queue; int count; uint64_t handles[]; };
 static void submit_on_replay_stack(void *arg);
 void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handles) {
     { uint64_t waited = wonder_gpu_gate_wait();   // app not active: iOS refuses GPU work in the background (gpu_gate.h)
       if (waited) wonder_nvn_report("NVN_GPU_GATE submit waited %.1f s for the app to become active", waited / 1e9); }
     wonder_nvn_queue_check(queue, "nvnQueueSubmitCommands");
     if (count < 0 || (count && !handles)) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueueSubmitCommands count=%d", count);
-    pthread_t *owner = atomic_load(&replay_owner);
-    if (owner && !pthread_equal(*owner, pthread_self())) wonder_nvn_stop("NVN_UNSUPPORTED nvnQueueSubmitCommands concurrent submitters");
-    replay_owner_storage[0] = pthread_self(); atomic_store(&replay_owner, replay_owner_storage);
-    struct submit_job job = {queue, count, handles};
-    wonder_host_run_on_replay_stack(submit_on_replay_stack, &job);
+    static _Atomic int submitting;
+    if (atomic_fetch_add(&submitting, 1)) wonder_nvn_stop("NVN_UNSUPPORTED nvnQueueSubmitCommands concurrent submitters");
+    struct submit_job *job = malloc(sizeof *job + (size_t)count * sizeof job->handles[0]);
+    if (!job) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY submit");
+    job->queue = queue; job->count = count; if (count) memcpy(job->handles, handles, (size_t)count * sizeof handles[0]);
+    atomic_fetch_sub(&submitting, 1);   // the queue orders the replay; only overlapping calls are refused
+    wonder_host_post_to_replay(submit_on_replay_stack, job);
 }
 static void submit_on_replay_stack(void *arg) {
-    const struct submit_job *job = arg; void *queue = job->queue; int count = job->count; const uint64_t *handles = job->handles;
+    struct submit_job *job = arg; void *queue = job->queue; int count = job->count; const uint64_t *handles = job->handles;
+    replay_owner_storage[0] = pthread_self(); atomic_store(&replay_owner, replay_owner_storage);
     char gpu_error[256];
     if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
         wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);
@@ -1007,6 +1014,7 @@ static void submit_on_replay_stack(void *arg) {
       if (sync) wonder_host_finish(); }
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
+    free(job);
     wonder_host_note_submit(submits);
     if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u shadowed=%u shadow_mismatches=%u finished_by timestamp=%u clear=%u uniform=%u draw_storage=%u compute_storage=%u overflow=%u", submits, disabled_draws, conditional_evals, conditional_skips, conditional_shadowed, conditional_mismatches,
                                              conditional_finish_source[1], conditional_finish_source[2], conditional_finish_source[3], conditional_finish_source[4], conditional_finish_source[5], conditional_finish_source[6]);
@@ -1015,8 +1023,10 @@ static void submit_on_replay_stack(void *arg) {
                           submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");
     submit_draws = 0; submit_dispatches = 0; submit_programs[0] = 0;
 }
-void wonder_nvnQueueFlush(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFlush"); wonder_host_flush(); }
-void wonder_nvnQueueFinish(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFinish"); wonder_host_finish(); }
+static void flush_job(void *unused) { (void)unused; wonder_host_flush(); }
+static void finish_job(void *unused) { (void)unused; wonder_host_finish(); }
+void wonder_nvnQueueFlush(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFlush"); wonder_host_post_to_replay(flush_job, NULL); }
+void wonder_nvnQueueFinish(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFinish"); wonder_host_run_on_replay_stack(finish_job, NULL); }
 
 const struct wonder_nvn_entry wonder_nvn_queue_entries[] = {
     {"nvnQueueSubmitCommands", (void *)wonder_nvnQueueSubmitCommands},

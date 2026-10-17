@@ -90,6 +90,16 @@ uint32_t wonder_nvnWindowInitialize(void *window, const void *builder) {
 }
 // A presented texture returns to the window at present time: Metal orders the presentation blit before any
 // later rendering into it on the same host queue, so the acquire sync is signaled immediately.
+// Replay-thread jobs (round221): fences, flushes and presents run after the submits posted before them.
+static void flush_job(void *unused) { (void)unused; wonder_host_flush(); }
+struct present_job { void *texture; int crop[4]; int interval, index; _Atomic uint32_t *released; };
+static void release_texture(void *released);
+static void present_job(void *arg) {
+    struct present_job *p = arg;
+    wonder_host_after_gpu(release_texture, (void *)p->released);   // same command buffer as the present
+    if (wonder_host_present(p->texture, p->crop, p->interval)) wonder_nvn_stop("NVN_HOST_PRESENT_FAILED nvnQueuePresentTexture index=%d", p->index);
+    free(p);
+}
 int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     struct window *w = window;
     if (!w || w->magic != WINDOW_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnWindowAcquireTexture window=%p", window);
@@ -104,7 +114,7 @@ int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     // GPU has not read yet (round96/97: random black / blue / half-drawn frames). Blocking here is what a
     // console acquire does when no texture is free.
     if (atomic_load(&w->released[*index]) != w->presented[*index]) {
-        wonder_host_flush();
+        wonder_host_post_to_replay(flush_job, NULL);   // round221: after the queued submits and presents
         while (atomic_load(&w->released[*index]) != w->presented[*index]) { struct timespec ts = {0, 100000}; nanosleep(&ts, NULL); }
     }
     atomic_store(&s->signaled, 1); s->fence++;
@@ -147,8 +157,11 @@ void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
     if (!crop[2] || !crop[3]) { crop[0] = crop[1] = 0; crop[2] = (int)t->desc.width; crop[3] = (int)t->desc.height; }
     if ((int64_t)crop[0] + crop[2] > (int64_t)t->desc.width || (int64_t)crop[1] + crop[3] > (int64_t)t->desc.height)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueuePresentTexture crop %d,%d %dx%d outside %ux%u", crop[0], crop[1], crop[2], crop[3], t->desc.width, t->desc.height);
-    w->presented[index]++; wonder_host_after_gpu(release_texture, (void *)&w->released[index]);   // same command buffer as the present
-    if (wonder_host_present(t->host, crop, w->interval)) wonder_nvn_stop("NVN_HOST_PRESENT_FAILED nvnQueuePresentTexture index=%d", index);
+    w->presented[index]++;
+    struct present_job *p = malloc(sizeof *p);
+    if (!p) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY present");
+    *p = (struct present_job){t->host, {crop[0], crop[1], crop[2], crop[3]}, w->interval, index, &w->released[index]};
+    wonder_host_post_to_replay(present_job, p);
     w->acquired &= ~(1ull << index); w->presents++; wonder_nvn_frame_advance();
     { static int every = -1; if (every < 0) { const char *e = getenv("WONDER_PRESENT_EVERY"); every = e ? atoi(e) : 0; }
       if (every > 0) { unsigned draws, clears; uint64_t hash; wonder_nvn_frame_summary(&draws, &clears, &hash);
@@ -158,13 +171,14 @@ void wonder_nvnQueuePresentTexture(void *queue, void *window, int index) {
 }
 // Fences: the sync becomes signaled when all work submitted before it completes on the host GPU queue.
 static void signal_sync(void *arg) { atomic_store(&((struct sync *)arg)->signaled, 1); }
+static void fence_job(void *sync) { wonder_host_fence(signal_sync, sync); }
 void wonder_nvnQueueFenceSync(void *queue, void *sync, int condition, int flags) {
     wonder_nvn_queue_check(queue, "nvnQueueFenceSync");
     struct sync *s = sync;
     if (!s || s->magic != SYNC_MAGIC) wonder_nvn_stop("NVN_INVALID_OBJECT nvnQueueFenceSync sync=%p", sync);
     if (condition < 0 || condition > 1 || flags & ~1) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueueFenceSync condition=%d flags=%#x", condition, flags);
     atomic_store(&s->signaled, 0); s->fence++;
-    wonder_host_fence(signal_sync, s);   // commits pending host work; the completion handler signals
+    wonder_host_post_to_replay(fence_job, s);   // after the queued submits: commits, and the completion handler signals
 }
 // NVNsyncWaitResult: ALREADY_SIGNALED 0, CONDITION_SATISFIED 1, TIMEOUT_EXPIRED 2.
 int wonder_nvnSyncWait(const void *sync, uint64_t timeout_ns) {
