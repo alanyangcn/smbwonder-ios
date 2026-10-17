@@ -307,3 +307,27 @@ int wonder_kernel_call(int number, uint64_t *r) {
     pthread_mutex_unlock(&kernel_lock);
     return handled;
 }
+// Diagnostic (round204, widescreen): called from LLDB on a running game. Logs where the guest heap and main's data hold
+// a screen size as a u32 or float pair (1280x720, 1920x1080, 960x540, 640x360), with the 8 qwords before each hit and
+// main's load base, to find the object that sets the render size.
+void wonder_diag_scan_screen(void) {
+    static const uint32_t sizes[][2] = {{1280, 720}, {1920, 1080}, {960, 540}, {640, 360}};
+    struct { const uint8_t *p; size_t n; const char *name; } areas[] = {
+        {space + HEAP_OFFSET, heap_size, "heap"},
+        {(const uint8_t *)g_mod[0].base + g_mod[0].data_off, g_mod[0].size - g_mod[0].data_off, "main"}};
+    LOG("DIAG_SCREEN main base=%p data=+%#llx heap=%p+%#zx", (void *)g_mod[0].base, (unsigned long long)g_mod[0].data_off, (void *)(space + HEAP_OFFSET), heap_size);
+    unsigned hits = 0;
+    for (unsigned a = 0; a < 2; a++) for (size_t o = 0; o + 8 <= areas[a].n && hits < 400; o += 4) {
+        uint32_t x, y; memcpy(&x, areas[a].p + o, 4); memcpy(&y, areas[a].p + o + 4, 4);
+        for (unsigned s = 0; s < 4; s++) {
+            float fx = (float)sizes[s][0], fy = (float)sizes[s][1]; uint32_t bx, by; memcpy(&bx, &fx, 4); memcpy(&by, &fy, 4);
+            int as_int = x == sizes[s][0] && y == sizes[s][1], as_float = x == bx && y == by;
+            if (!as_int && !as_float) continue;
+            uint64_t q[8] = {0}; size_t back = o >= 64 ? 64 : o & ~(size_t)7; memcpy(q + (64 - back) / 8, areas[a].p + o - back, back);
+            LOG("DIAG_SCREEN %s+%#zx %ux%u %s before=%llx %llx %llx %llx %llx %llx %llx %llx", areas[a].name, o, sizes[s][0], sizes[s][1], as_int ? "u32" : "float",
+                (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2], (unsigned long long)q[3], (unsigned long long)q[4], (unsigned long long)q[5], (unsigned long long)q[6], (unsigned long long)q[7]);
+            hits++;
+        }
+    }
+    LOG("DIAG_SCREEN done hits=%u", hits);
+}
