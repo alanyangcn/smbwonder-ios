@@ -211,17 +211,19 @@ static void sync_draw_state(void) {
 static struct wonder_host_span span_of(unsigned opcode, uint64_t address, uint64_t size) {
     struct wonder_host_span s = {0}; host_span(address, size, opcode, &s.buffer, &s.offset); s.size = (size_t)size; return s;
 }
-// Storage slot a stage reads that the game left unbound (round213: a world-map fragment program declares slot 0 and the
-// game binds nothing there). The translated code reads it through c[0], where the slot's address and size stay 0, as the
-// driver leaves them; Maxwell's bounds-checked global-to-storage reads of an empty slot return zeros. The host binds a
-// 64 KiB zero page block read-only so those reads are zeros. A stage that writes an unbound slot still stops by name.
+// Storage slot a stage uses that the game left unbound (round213: a world-map fragment program declares slot 0 and the game
+// binds nothing there; round214: a compute dispatch writes such a slot). The translated code addresses it through c[0],
+// where the slot's address and size stay 0 as the driver leaves them. Reads get a 64 KiB zero block (Maxwell's empty slot
+// reads zeros); writes go to a separate 64 KiB discard block that nothing reads back as game memory, as emulators bind a
+// dummy buffer for unbound storage (the store lands nowhere the game can see).
 static struct wonder_host_span unbound_storage(unsigned opcode, int write, const char *where, int slot) {
-    if (write) { char why[96]; snprintf(why, sizeof why, "unbound storage buffer %s slot %d", where, slot); replay_stop(opcode, why); }
-    static uint8_t zeros[0x10000] __attribute__((aligned(16384))); static void *buffer; static size_t offset; static unsigned logged;
-    if (!buffer) buffer = wonder_host_pool_buffer(zeros, sizeof zeros, &offset);
-    if (!buffer) replay_stop(opcode, "unbound storage buffer: no host view of the zero block");
-    if (logged++ < 8) wonder_nvn_report("NVN_UNBOUND_STORAGE_READ %s slot %d reads zeros (no storage buffer bound)", where, slot);
-    return (struct wonder_host_span){buffer, offset, sizeof zeros};
+    static uint8_t zeros[0x10000] __attribute__((aligned(16384))), discard[0x10000] __attribute__((aligned(16384)));
+    static void *buffers[2]; static size_t offsets[2]; static unsigned logged[2];
+    int w = write ? 1 : 0;
+    if (!buffers[w]) buffers[w] = wonder_host_pool_buffer(w ? discard : zeros, sizeof zeros, &offsets[w]);
+    if (!buffers[w]) replay_stop(opcode, "unbound storage buffer: no host view of the zero/discard block");
+    if (logged[w]++ < 8) wonder_nvn_report("NVN_UNBOUND_STORAGE_%s %s slot %d (no storage buffer bound)", w ? "WRITE discarded" : "READ zeros", where, slot);
+    return (struct wonder_host_span){buffers[w], offsets[w], sizeof zeros};
 }
 // Texture slot (or bindless handle) of NVN stage `stage` read by reflection entry rt -> out->tex[out_stage][slot]: the pool
 // registration, its sampler and, for textures without a host GPU copy, the pool storage they are uploaded from.

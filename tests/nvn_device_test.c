@@ -1144,7 +1144,9 @@ int main(void) {
               assert(last_draw.sbuf[1][2].size == 0x10000 && last_draw.sbuf[1][2].buffer);
               const char *fs_sbw = "stage ps\nsbuf 2 3 rw\nfout 0 float\n";
               assert(!wonder_shader_refl_parse(fs_sbw, strlen(fs_sbw), &fake_refl[1], err, sizeof err));
-              REVIEW_STOP((void)0, "unbound storage buffer stage 1 slot 2");   // a write to an unbound slot stops
+              void *zero_block = last_draw.sbuf[1][2].buffer;
+              REVIEW_OK((void)0);   // a write to an unbound slot lands in a discard block, not the zero block (round214)
+              assert(last_draw.sbuf[1][2].size == 0x10000 && last_draw.sbuf[1][2].buffer && last_draw.sbuf[1][2].buffer != zero_block);
               assert(!wonder_shader_refl_parse(fs_sb, strlen(fs_sb), &fake_refl[1], err, sizeof err));
               REVIEW_OK(((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindStorageBuffer"))(dcb, 1, 2, (uintptr_t)(cb_memory + 0x9800), 0x40));
               assert(last_draw.sbuf[1][2].size == 0x40 && last_draw.sbuf[1][2].buffer);
