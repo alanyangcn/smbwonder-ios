@@ -67,6 +67,9 @@
     - **存档（round208，按玩家要求解锁全部世界）**：game_data.sav 无加密无校验；格式为 GameDataList（GameData/GameDataList.Product.110.byml）定义的（MurmurHash3 名字哈希, 值）表 + 数据区数组（tools/save_diff.py 说明格式并逐项对比）。约 300/1508 个名字已还原（work/save-research/）。tools/save_unlock.py 把 81 元素的世界地图点数组置满、Motherseed00–05Finish 置真；玩家确认世界与关卡全部解锁。原存档备份在 work/save-backup/20261017-122959。
     - **着色器补齐（round208）**：agl/gsys 的 sharcb（'BAHS' v9，Lib/*_resource.sarc 内 8 个文件）离线解析出 2047 个阶段（45 个与设备普查逐字节一致；程序变体未解析，顶点阶段按同档案全部片元输入补齐输出）；离线阶段里仅因"句柄贴图无类型、按 2D"被留下的 106 个顶点阶段改为构建（宿主逐次核对绑定目标）。共构建 11249 个阶段，留下 19 个（16 个计算阶段需普查给出图像格式，2 个读 c[0]+0x610，1 个 spirv-cross 失败）。立方体/立方体数组声明遇绑定 2D 贴图改为空贴图（读 0，同 Ryujinx 的空纹理处理；世界地图 fs e0e6b565 曾因此停）。停止原因另写 Documents/last-stop.txt（loader-probe.log 有大小上限）。
     - **偶发卡死（round208，未复现）**：回放一次绘制时读到一个 0xf50 字节缓冲，其所在池已被游戏 Finalize（NVN_INVALID_ADDRESS）。未能区分是同步语义缺口（游戏过早释放）还是绑定解析过严。round209 起地址报错带回放位置（提交/命令/操作码）与最近 64 个已释放池（偏移、释放时游戏调用链）；同样操作未再复现，等再次出现时定位。
+    - **已释放内存池宽限（round210–212，已修复）**：调用链确认是世界地图对象析构（main+0x5c00fc，加载线程）先 Finalize 64 KiB 池，之后的提交仍用池内 0xf50 字节统一缓冲；主机上游戏内存仍在，GPU 照读。round210 起普通池 Finalize 后保留零拷贝视图 3 帧，round211 大地图上仍停（超过 3 帧才读）；round212（run DA18DE52，提交 651b8eb）延长到 600 帧、64 槽，报错附带距 Finalize 的帧数。玩家确认玩一阵不再卡。另：Documents/missing-shaders.txt 记录首次遇到的缺失程序与场景（Stage 文件名）。
+    - **大地图其余世界显示“？？？”（进行中）**：已置 W_*.IsEndFirstVisitDemo、GrandPropellerFlowerDemoEndFlag 与 6 个未命名布尔数组，仍为“？？？”（文本 GrandWorldMapRef WorldName_Hidden）；下一步静态找判定该文本的代码与所读 GameData 名。
+    - 真机签名：当前安装为个人团队 MFXJ9AKFM5 / local.smbwonder.loaderprobe，轮次需 `WONDER_TEAM=MFXJ9AKFM5 WONDER_BUNDLE=local.smbwonder.loaderprobe WONDER_EXTENDED_VA=0`。
     - 诊断工具：wonder_diag_scan_screen / wonder_diag_scan_u32（LLDB 调用，输出到 Documents/loader-probe.log；该日志 80 MB 封顶）；LLDB 分块读取整个客体堆约 20 MB/s。
 
 ## 首帧推进（2026-10-15，持续进行）
