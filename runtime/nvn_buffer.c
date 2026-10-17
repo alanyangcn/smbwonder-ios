@@ -47,7 +47,7 @@ uint32_t wonder_nvnBufferInitialize(void *buffer, const void *builder) {
     if (b->offset < 0 || !b->size || (uint64_t)b->offset + b->size > view.size)
         wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnBufferInitialize storage offset=%#llx size=%#llx pool=%#llx", (long long)b->offset, (unsigned long long)b->size, (unsigned long long)view.size);
     *(struct buffer *)buffer = (struct buffer){BUFFER_MAGIC, view.flags, b->device, view.memory + b->offset, b->size, b->pool, b->offset};
-    wonder_nvn_report("NVN_BUFFER_READY buffer=%p address=%p size=%#llx pool_flags=%#x", buffer, (void *)(view.memory + b->offset),
+    wonder_nvn_trace("NVN_BUFFER_READY buffer=%p address=%p size=%#llx pool_flags=%#x", buffer, (void *)(view.memory + b->offset),
                       (unsigned long long)b->size, view.flags);
     return 1;
 }

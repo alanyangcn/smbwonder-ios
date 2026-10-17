@@ -14,6 +14,9 @@
 #define WONDER_NVN_API_MINOR_REPORTED 15
 // Host glue (nvn_bootstrap.c on device, the test harness on the host).
 void wonder_nvn_report(const char *format, ...) __attribute__((format(printf, 1, 2)));
+// Per-frame lifecycle lines (command memory, recording, texture/buffer ready; ~130 per world-map frame): only with
+// WONDER_NVN_TRACE=1 (or WONDER_NVN_VERBOSE=1); otherwise returns before formatting (round232).
+void wonder_nvn_trace(const char *format, ...) __attribute__((format(printf, 1, 2)));
 _Noreturn void wonder_nvn_stop(const char *format, ...) __attribute__((format(printf, 1, 2)));
 int wonder_host_driver_ready(void);
 void *wonder_nvn_unimplemented_thunk(unsigned index);

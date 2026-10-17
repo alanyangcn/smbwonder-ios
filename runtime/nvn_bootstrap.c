@@ -26,6 +26,14 @@ void wonder_nvn_report(const char *format, ...) {
         if (count > WONDER_LOG_FIRST) LOG("%s (occurrence %lu)", line, count); else LOG("%s", line);
     }
 }
+void wonder_nvn_trace(const char *format, ...) {
+    static int on = -1;
+    if (on < 0) { const char *t = getenv("WONDER_NVN_TRACE"), *v = getenv("WONDER_NVN_VERBOSE"); on = (t && *t && strcmp(t, "0")) || (v && *v && strcmp(v, "0")); }
+    if (!on) return;
+    static _Thread_local char line[2048];
+    va_list args; va_start(args, format); vsnprintf(line, sizeof line, format, args); va_end(args);
+    LOG("%s", line);
+}
 static void caller_chain(uint64_t fp, uint64_t pc) {
     for (unsigned depth = 0; depth < 12; depth++) {
         module_t *m = module_of((void *)pc);

@@ -184,7 +184,7 @@ uint32_t wonder_nvnTextureInitialize(void *texture, const void *builder) {
                                      atomic_fetch_add(&next_serial, 1), {b->swizzle[0], b->swizzle[1], b->swizzle[2], b->swizzle[3]},
                                      b->depth_stencil_mode, b->has_layout, {0}};
     memcpy(t->layout, b->layout, sizeof t->layout);
-    wonder_nvn_report("NVN_TEXTURE_READY serial=%llu %ux%ux%u levels=%u target=%d format=%#x flags=%#x samples=%d pool_offset=%#llx size=%#llx metal=%u(%s)%s",
+    wonder_nvn_trace("NVN_TEXTURE_READY serial=%llu %ux%ux%u levels=%u target=%d format=%#x flags=%#x samples=%d pool_offset=%#llx size=%#llx metal=%u(%s)%s",
                       (unsigned long long)t->serial, b->desc.width, b->desc.height, b->desc.depth, b->desc.levels, b->desc.target,
                       (unsigned)b->desc.format, (unsigned)b->desc.flags, b->desc.samples, (unsigned long long)b->offset, (unsigned long long)L.size,
                       mtl, mapping == 1 ? "exact" : mapping == 2 ? "substitute" : "expand/none",

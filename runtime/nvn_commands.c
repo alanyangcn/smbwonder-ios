@@ -106,7 +106,7 @@ void wonder_nvnCommandBufferAddControlMemory(void *cmdbuf, void *memory, size_t 
     command_pointer(c, 0x38, memory);
     command_pointer(c, 0x48, memory);
     memset(c + 0x50, 0, 8);
-    wonder_nvn_report("NVN_CONTROL_MEMORY command_buffer=%p memory=%p size=%#zx", cmdbuf, memory, size);
+    wonder_nvn_trace("NVN_CONTROL_MEMORY command_buffer=%p memory=%p size=%#zx", cmdbuf, memory, size);
 }
 // GPU address of a CPU command byte inside the current grant (c+0x30 CPU base, c+0x58 GPU base).
 static uint64_t command_gpu(const uint8_t *c, const uint8_t *cpu) {
@@ -155,7 +155,7 @@ void wonder_nvnCommandBufferAddCommandMemory(void *cmdbuf, const void *pool, ptr
     command_pointer(c, 0x30, view.memory);
     command_pointer(c, 0x40, view.memory);
     command_pointer(c, 0x58, view.memory);
-    wonder_nvn_report("NVN_COMMAND_MEMORY command_buffer=%p memory=%p size=%#zx recording=%u", cmdbuf, view.memory, size, c[0x11]);
+    wonder_nvn_trace("NVN_COMMAND_MEMORY command_buffer=%p memory=%p size=%#zx recording=%u", cmdbuf, view.memory, size, c[0x11]);
 }
 
 void wonder_nvnCommandBufferBeginRecording(void *cmdbuf) {
@@ -177,7 +177,7 @@ void wonder_nvnCommandBufferBeginRecording(void *cmdbuf) {
     pthread_mutex_lock(&recordings_lock);
     struct recording *r = recording_of(cmdbuf, 0); if (r) r->count = 0;
     pthread_mutex_unlock(&recordings_lock);
-    wonder_nvn_report("NVN_RECORD_BEGIN command_buffer=%p command=%p control=%p", cmdbuf, command, control);
+    wonder_nvn_trace("NVN_RECORD_BEGIN command_buffer=%p command=%p control=%p", cmdbuf, command, control);
 }
 
 struct recorded_handle {
@@ -678,7 +678,7 @@ uint64_t wonder_nvnCommandBufferEndRecording(void *cmdbuf) {
     size_t bytes = 0; for (unsigned i = 0; i < count; i++) bytes += segments[i].bytes;
     command_pointer(c, 0x20, control); command_pointer(c, 0x40, cursor); command_pointer(c, 0x48, control);
     memset(c + 0x50, 0, 8); c[0x11] = c[0x12] = 0;
-    wonder_nvn_report("NVN_RECORD_END command_buffer=%p handle=%p command_bytes=%zu segments=%u", cmdbuf, body, bytes, count);
+    wonder_nvn_trace("NVN_RECORD_END command_buffer=%p handle=%p command_bytes=%zu segments=%u", cmdbuf, body, bytes, count);
     return (uint64_t)(uintptr_t)body; // Valid native uncompressed handle; no GPU work has executed.
 }
 // Command bytes the handle currently refers to (diagnostics); -1 = unknown handle.

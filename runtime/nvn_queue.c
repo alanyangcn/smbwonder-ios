@@ -1068,7 +1068,7 @@ static void submit_on_replay_stack(void *arg) {
     wonder_host_note_submit(submits);
     if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u shadowed=%u shadow_mismatches=%u finished_by timestamp=%u clear=%u uniform=%u draw_storage=%u compute_storage=%u overflow=%u", submits, disabled_draws, conditional_evals, conditional_skips, conditional_shadowed, conditional_mismatches,
                                              conditional_finish_source[1], conditional_finish_source[2], conditional_finish_source[3], conditional_finish_source[4], conditional_finish_source[5], conditional_finish_source[6]);
-    if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
+    if (submits <= 8 || submits % 600 == 0)
         wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u dispatches=%u programs=%s", queue, submits, count, commands, clears,
                           submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");
     submit_draws = 0; submit_dispatches = 0; submit_programs[0] = 0;

@@ -16,6 +16,7 @@
 #include <CommonCrypto/CommonDigest.h>
 static jmp_buf stopped; static char last_stop[512]; static int host_ready, expecting_stop;
 void wonder_nvn_report(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stdout, format, a); va_end(a); fputc('\n', stdout); }
+void wonder_nvn_trace(const char *format, ...) { va_list a; va_start(a, format); vfprintf(stdout, format, a); va_end(a); fputc('\n', stdout); }
 void wonder_nvn_diag_null_pool(void) {}   // device-only diagnostic (nvn_bootstrap.c walks guest frames)
 _Noreturn void wonder_nvn_stop(const char *format, ...) { va_list a; va_start(a, format); vsnprintf(last_stop, sizeof last_stop, format, a); va_end(a); if (!expecting_stop) { fprintf(stderr, "unexpected stop: %s\n", last_stop); abort(); } longjmp(stopped, 1); }
 static void *last_labeled_resource; static const char *last_resource_label;
