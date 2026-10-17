@@ -129,26 +129,19 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
                 *RUNTIME_GRAPHICS)]
     command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', '-framework', 'GameController', '-framework', 'AudioToolbox', '-framework', 'AVFAudio', *flags, '-o', str(app / 'LoaderProbe')]
     subprocess.run(command, check=True, env=env)
-    info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe', 'CFBundleDisplayName':'马里奥 惊奇',
-            'CFBundleExecutable':'LoaderProbe', 'CFBundlePackageType':'APPL',
-            'CFBundleShortVersionString':'0.1', 'CFBundleVersion':'4', 'WonderBootStage':stage,
-            'MinimumOSVersion':'18.0', 'LSRequiresIPhoneOS':True, 'UIDeviceFamily':[1, 2],
-            'UIFileSharingEnabled':True, 'LSSupportsOpeningDocumentsInPlace':True,
-            'UILaunchScreen':{},
-            # iOS 27 stops apps without the UIScene lifecycle (LoaderProbe.m ProbeSceneDelegate).
-            'UIApplicationSceneManifest':{'UIApplicationSupportsMultipleScenes':False,'UISceneConfigurations':{'UIWindowSceneSessionRoleApplication':[
-                {'UISceneConfigurationName':'Default','UISceneDelegateClassName':'ProbeSceneDelegate'}]}}, 'UISupportedInterfaceOrientations':['UIInterfaceOrientationLandscapeLeft','UIInterfaceOrientationLandscapeRight'],
-            'UIRequiresFullScreen':True, 'UIStatusBarHidden':True}
+    # App settings (name, orientations, scenes) live in ios-probe/Info.plist; the Xcode build fills its $(...) variables,
+    # this clang build fills them here.
+    with (REPOSITORY / 'ios-probe/Info.plist').open('rb') as stream:
+        info = plistlib.load(stream)
+    values = {'$(PRODUCT_BUNDLE_IDENTIFIER)': bundle_id, '$(EXECUTABLE_NAME)': 'LoaderProbe', '$(WONDER_BOOT_STAGE)': stage}
     with (app / 'Info.plist').open('wb') as stream:
-        plistlib.dump(info, stream)
+        plistlib.dump({k: values.get(v, v) if isinstance(v, str) else v for k, v in info.items()}, stream)
     if xcodegen:
         project = output / 'project'
         project.mkdir(exist_ok=True)
-        xcode_info = dict(info, CFBundleExecutable='$(EXECUTABLE_NAME)')
-        with (project / 'ProbeInfo.plist').open('wb') as stream:
-            plistlib.dump(xcode_info, stream)
         spec = (REPOSITORY / 'ios-probe/project.yml').read_text()
         spec = spec.replace('${SMBW_REFERENCE}', str(REPOSITORY)).replace('${SMBW_WORK}', str(work))
+        spec = spec.replace('WONDER_BOOT_STAGE: main', f'WONDER_BOOT_STAGE: {stage}')
         if not extended_va:   # personal teams cannot provision it; the address-space need is then checked on the device
             line = '        com.apple.developer.kernel.extended-virtual-addressing: true\n'
             if line not in spec: raise ValueError('project.yml no longer declares extended-virtual-addressing')
