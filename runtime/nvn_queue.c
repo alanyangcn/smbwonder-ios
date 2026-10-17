@@ -832,7 +832,9 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         struct report *r = malloc(sizeof *r);
         if (!r) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY report");
         *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp};
-        if (timestamp) pending_unknown(c->a[1], 16, PENDING_TIMESTAMP); else pending_value(c->a[1], (uint32_t)c->a[0]);
+        // A timestamp report stores {counter 0, timestamp} (write_report): its counter half is a known 0 (round218: every
+        // conditional render that still finished the GPU on the world map read that half); only the time is unknown.
+        if (timestamp) { pending_value(c->a[1], 0); pending_value(c->a[1] + 4, 0); pending_unknown(c->a[1] + 8, 8, PENDING_TIMESTAMP); } else pending_value(c->a[1], (uint32_t)c->a[0]);
         wonder_host_after_gpu(write_report, r);
         break;
     }
