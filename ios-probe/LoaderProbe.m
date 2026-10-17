@@ -174,9 +174,10 @@ uint64_t wonder_host_language(void) {
     if (![scene isKindOfClass:UIWindowScene.class] || self.window) return;
     static int started; if (started) return; started = 1;   // one game per process
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-    {   // Widescreen (runtime/widescreen.h): the game frames the screen's aspect; WONDER_WIDESCREEN=0 keeps 16:9 with bars.
+    {   // Widescreen (runtime/widescreen.h), opt-in with WONDER_WIDESCREEN=1 (round206: the shared constant also reshaped the
+        // title screen's 2D layout; the course camera needs its own constant first).
         const char *e = getenv("WONDER_WIDESCREEN"); CGRect b = ((UIWindowScene *)scene).screen.bounds;
-        wonder_widescreen_set(e && *e == '0' ? 16.0f / 9.0f : wonder_widescreen_aspect(b.size.width, b.size.height));
+        wonder_widescreen_set(e && *e == '1' ? wonder_widescreen_aspect(b.size.width, b.size.height) : 16.0f / 9.0f);
     }
     ProbeGameController *controller = [ProbeGameController new];
     controller.view.backgroundColor = UIColor.blackColor;
