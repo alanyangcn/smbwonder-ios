@@ -8,7 +8,7 @@ too: the grand world map shows a world's name only once it was visited or the pr
 All 24 badges are owned: their ids (GlobalParameter/BadgeInfoParam ...BadgeInfoParam.bgyml in Pack/Bootup) set in the
 100-element BoolArray 0x105df820 that main+0x1c827a0 reads (AI query IsGetBadge: IsGetUnlimitedBadge; main+0x681280 owns a
 badge when this or the Limited array 0xe48a1168 holds it; Limited is left alone). Array meanings are not
-known per name (see tools/save_diff.py); this may leave story/demo state inconsistent.
+known per name (see tools/save_diff.py).
 Usage: save_unlock.py <in game_data.sav> <out game_data.sav>
 """
 import json, struct, sys

@@ -33,6 +33,6 @@ tools/device_round.sh first-frame-round<N> --fetch-only   # 只重新取回日�
 - 能用 sdk 自带原生代码的就用原生（例：音频走 sdk 的进程内 DFC 服务端，ngc 只替换服务对象）；宿主只替换会连 `sm:` 的服务层或平台层。
 - 宿主接管用 `HLE_FORCE(改编名, 理由, ...)`：每条必须写理由；**没有任何模块引用的条目会让装载器报错中止**，只接管确实被引用（main 导入或 sdk JUMP_SLOT）的名字。C++ 经 x8 返回的 `SharedPointer` 用 naked 跳板（参考 `audio_platform.c`、`ngc_hooks.c`）。
 - 苹果 AAPCS64 与 Switch 的差异：<32 位参数（bool/char/short）声明成 int/unsigned 自己截断；可变参数函数不能直接用 C 的 `...`。
-- 离线主机：单个本地用户、无网络、无好友、无 DLC、不上传报告；功能差异（如无 NG 词库、系统字体替代）要在 STATUS 里明说。
+- 离线主机：单个本地用户、不上传报告。
 - 可单测的逻辑放进不依赖 `hle.h` 的独立文件（如 `savedata.c`、`ngc_service.c`），在 `tests/` 里用 C 测试 + Python 包装；新运行时文件要同时加进 `tools/build_loader_probe.py` 和 `ios-probe/project.yml`。
 - 删除安装失败后的 App 会丢 Documents（含存档），脚本已禁止自动卸载，不要改回去。

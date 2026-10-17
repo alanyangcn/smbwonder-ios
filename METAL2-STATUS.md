@@ -5,7 +5,7 @@
 ## 换机：iPhone 18 Pro / Metal 3（2026-10-16）
 
 - 去掉的让步：MSL 2.1 → 3.2（运行时编译、GPU 探针、spirv-cross `--msl-version 30200`；57 个阶段重建，源码与 2.1 版逐字节相同），最低 iOS 18.0；BC1–7 原生采样（删去 CPU 解码）；CLAMP_TO_BORDER 的不透明黑/白直接用 ClampToBorderColor（删去运行时边框探测）；swizzle 视图视为必备。图形边界只剩 Metal 3 一条路径，GPU 缺 Metal 3 家族或 BC 采样即按名停止（`GRAPHICS_DEVICE_UNSUPPORTED`）。源码 `metal2_*` 改名 `metal3_*`。
-- 共享字体：iOS/macOS 27 的 PingFang SC/TC 是 `hvgl` 可变字形格式（无 glyf/CFF 轮廓），游戏字体引擎无法使用；改为按候选列表取第一个带 glyf/CFF 轮廓、PostScript 名匹配的系统字体（简体/繁体依次试 PingFang → 华文黑体 STHeiti → 冬青黑体 GB）。功能差异：中文字形来自替代字体。
+- 共享字体：iOS/macOS 27 的 PingFang SC/TC 是 `hvgl` 可变字形格式（无 glyf/CFF 轮廓），游戏字体引擎无法使用；改为按候选列表取第一个带 glyf/CFF 轮廓、PostScript 名匹配的系统字体（简体/繁体依次试 PingFang → 华文黑体 STHeiti → 冬青黑体 GB）。
 - 工具：新 Mac（Apple M6，无 Rosetta，Xcode 27.1）。ios-deploy 弃用，`device_round.sh` 改用 `xcrun devicectl`（安装、App 容器传文件、`launch --console` 记录 App 输出到 `console-*.log`、系统崩溃日志）；`setup_env.sh` 按本机架构重装工具（arm64 工具链重建的着色器与原产物逐字节一致）。
 - round109（2026-10-16，首轮新机）：测试、构建、签名通过，**安装被拒**：付费 Team `5H8VE3NN7D` 新生成的描述文件（13:18）里没有这台 iPhone，而开发者服务器又回复该设备“已在本 Team 存在”——设备在该 Team 里多半处于停用状态（个人 Team MFXJ9AKFM5 的描述文件里有它）。需要在开发者网站把设备启用后重跑。
 - round110–133（个人 Team `MFXJ9AKFM5`、Bundle `local.smbwonder.loaderprobe`、无 extended-virtual-addressing：12 GB 机器上未发现地址空间不足）：
@@ -60,7 +60,7 @@
     - 全量重建：离线提取 9030 个程序 / 9046 个阶段（原 7575 个程序），构建 9020 个阶段（留 112 个）。round192 启动即停 `NVN_SHADER_MISSING`（agl/gsys 启动着色器的新键只有普查能给，以前是撞车顶替）；round193 采集停在离线阶段属性类型猜测（4ee141e7 第 6 属性 RGBA8UI，离线按 float）→ 采集模式下类型不符也记普查、跳过该次绘制（非采集仍按名停）。
     - **round194（采集版，A68856C9）真机结果：水管关卡前景深绿灌木、彩色音符块、斜坡/平台上的草、砖块地面全部正常，蓝色消失**（截图 work/analysis/first-frame-round194/screenshot-course.png）。采集到的普查（新增 90 个目录）已加入 census-dirs，全量重建 9036 个阶段（留 107 个）。
     - **round195（正式版，A00077D4）**：从标题走到水管关卡全程无停点，关卡前景灌木、音符块、斜坡草、地面正常（截图 work/analysis/first-frame-round195/screenshot-course.png）。蓝色问题关闭。
-    - **按键图标“?”已修（round196，AC0E1FF2）**：共享字体第 5 类（任天堂扩展字体，私用区按键符号）在固件里，离线主机没有；统计 Mals 文本用到的 27 个私用区码位（E090–E097 箭头、E0AB–E0AE 方向按钮、E0E0–E0E3 ABXY、E0E4–E0E9 L/R/ZL/ZR/SL/SR、E0EA 十字键、E0EF/E0F0 +/−、E100/E101 摇杆；含义由文本上下文推定），tools/make_icon_font.py 自绘图标字体（字母轮廓取 Mac 的 Arial Bold，产物在 work/，不进 Git），打包为 dm/fonts/wonder-icons.ttf，缺失按名停。**功能差异**：图标是自绘替代，外形与任天堂原版不同。用户确认按钮显示正常。
+    - **按键图标“?”已修（round196，AC0E1FF2）**：共享字体第 5 类（任天堂扩展字体，私用区按键符号）在固件里，离线主机没有；统计 Mals 文本用到的 27 个私用区码位（E090–E097 箭头、E0AB–E0AE 方向按钮、E0E0–E0E3 ABXY、E0E4–E0E9 L/R/ZL/ZR/SL/SR、E0EA 十字键、E0EF/E0F0 +/−、E100/E101 摇杆；含义由文本上下文推定），tools/make_icon_font.py 自绘图标字体（字母轮廓取 Mac 的 Arial Bold，产物在 work/，不进 Git），打包为 dm/fonts/wonder-icons.ttf，缺失按名停。用户确认按钮显示正常。
     - round196 卡在离线阶段属性类型（vs 01b4c315 第 6 属性 R16UI）→ **离线 float 属性绑定整数格式时，宿主按翻译器写整数属性的方式改写 MSL**（uint4/int4 声明 + as_type<floatN> 读取），按类型组合编译缓存并给出对应反射（shader_library.c `wonder_shader_retype_attributes`，有 C 与 GPU 编译测试）；声明为整数却绑定 float 仍按名停。round197 待真机。
     - **性能（round198–203）**：Time Profiler（xctrace 附加运行中游戏）定位并修复：CallCommands 线性扫描句柄表（录制线程 ~70%）→ 哈希；address_span 线性扫描 ~1200 个池（回放 ~20%）→ 排序索引+线程缓存；每次绘制新建 64 KiB 常量缓冲与纹理视图 → c1 按反射、drv0 按内容、视图按帧缓存；程序表 → 哈希。卡的关卡 11–13 → 约 22 fps。剩余瓶颈：游戏/回放/GPU 串行（回放 41%、GPU 25% 忙），主因是条件渲染每次都 finish GPU（每帧约 50 次）。条件渲染“读未落地写入表”快速路径（report_shadow.c，按宿主内存跟踪）校验与抽查 0 差异，但开启后世界地图闪烁（推测时序变化影响依赖 GPU 计时的逻辑），**默认关闭**（WONDER_FAST_CONDITIONAL=1 研究用）。
     - **宽屏（round204–207，进行中）**：主机内存扫描 + 写入断点定位：关卡相机为正交投影（高 15.5×缩放），每帧在 main+0x2e2b30–0x2e2b6c 写上下左右，宽高比读 main+0x2aeedb4（0x3fe38e3b，主程序唯一的 16:9 常数；另一引用 main+0x6a7630 为默认透视投影构造）。运行时改该常数：关卡视野变宽（压在 16:9 目标里）；但渲染尺寸也由它推出并受 1280 上限约束，标题画面缩到左上（round206）。runtime/widescreen.c（宽高比/拉伸/常数核对写入，有测试）、present 按比例横向拉伸已实现，**默认关闭**（WONDER_WIDESCREEN=1）。剩余：放宽渲染缓冲上限、2D 排版适配、离线剪口（patch_nso.py CUTS，Wonder 构建号 ff773e90972d544eb79406eaa65396d5）。
@@ -90,7 +90,7 @@
 - round27–28：命令内存统计、回调查询、对象与句柄释放通过；修复内存池 Builder 先 SetDevice 后 SetDefaults 的调用顺序，新增 GPU 地址到真实物理 span 的解析。
 - round29：run `0EB5CF03-0579-443C-8942-D17C3A3297DA`（debugger=1），154 入口，shader-code 池地址/大小和空 Program 初始化已接入；实际停在 `MemoryPoolSetDebugLabel`。45 项测试、Xcode 构建、签名、安装通过。
 - round30–32：特效系统调试标签已通过；165 入口，推进至系统共享字体服务。round32 run `3546842C-B95E-4A87-AD4D-FDFC23621EFF`。
-- 字体路径使用 CoreText 系统字体替代，重建真实 SFNT 并验证校验和与可解析性；六个本机字体及稳定地址测试通过。Nintendo 扩展符号的覆盖并不等价。round33 被未被游戏引用的强制 RequestSharedFontLoad hook 拦住，已移除。round34 run `2F7358F0-4F70-4EF0-9125-AA653D31EC3E`（debugger=1）通过系统字体替代（含 type=5 AppleSymbols），停在 `nvnTextureBuilderSetPackagedTextureLayout`（main+0x5293c）。
+- 字体路径使用 CoreText 系统字体替代，重建真实 SFNT 并验证校验和与可解析性；六个本机字体及稳定地址测试通过。round33 被未被游戏引用的强制 RequestSharedFontLoad hook 拦住，已移除。round34 run `2F7358F0-4F70-4EF0-9125-AA653D31EC3E`（debugger=1）通过系统字体替代（含 type=5 AppleSymbols），停在 `nvnTextureBuilderSetPackagedTextureLayout`（main+0x5293c）。
 - 补了合法 NULL 命令内存回调与 EndRecording 授予范围校验；ProgramSetShaders 严格停点前会捕获控制数据/代码前缀。缺失绘制语义仍明确停止。完整宿主测试目前50项。
 - round35（待真机）：`nvnTextureBuilderSetPackagedTextureLayout` 按 nn::gfx TextureInfo+0x24 的 8 字节布局实现。全 RomFS 3063 个 BRTI 统计：u32 块高 log2（0..4）+ u32 0x00010007；第 0 字节决定第 0 级 GOB 块高（与自动算法可不同），其他值严格停止。`nvnDeviceGetTextureHandle` 按 TX1 句柄 texture | sampler<<20 实现（main+0x5de9c 直接传给 BindTexture）。167 入口。
 - round35 run `2CF81B76-04DB-4B54-9CDB-2CABD4B42564`（debugger=1）：packaged 贴图布局通过，停在 `nvnProgramSetShadersExt`（main+0x10857a0）。
