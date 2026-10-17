@@ -42,17 +42,20 @@ void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash)
 static struct wonder_nvn_draw_state draw_state;
 // Pending GPU writes (report_shadow.h, declared above make_cpu_visible): conditional renders read their records without
 // finishing the GPU when no unknown write touches them. WONDER_VERIFY_CONDITIONAL=1 finishes anyway and counts mismatches.
-static unsigned conditional_shadowed, conditional_mismatches;
+static unsigned conditional_shadowed, conditional_mismatches, conditional_finish_source[7];   // [0..5] by source, [6] overflow
 // UpdateUniformBuffer ranges recorded since the replay last finished the GPU (GPU-ordered writes the CPU cannot see yet,
 // including earlier submits still pending). Reading such memory on the CPU first finishes the work recorded so far.
 static struct { uint64_t address, size; } ubo_updates[64]; static unsigned ubo_update_count, ubo_update_overflow;
 static struct wonder_report_shadow report_shadow;
 // Pending writes are recorded by the host memory they land in (virtual pools resolve to their physical backing).
-static void pending_unknown(uint64_t address, uint64_t size) {
+// Sources (round217, counted when a conditional render has to finish): 1 timestamp, 2 buffer clear, 3 uniform update,
+// 4 draw storage write, 5 compute storage write; WONDER_REPORT_SHADOW_OVERFLOW_SOURCE = the table was full.
+enum { PENDING_TIMESTAMP = 1, PENDING_CLEAR, PENDING_UNIFORM, PENDING_DRAW_STORAGE, PENDING_COMPUTE_STORAGE };
+static void pending_unknown(uint64_t address, uint64_t size, unsigned source) {
     while (size) {
         struct wonder_nvn_pool_view v; wonder_nvn_address_span(address, size, &v);
         uint64_t n = v.size < size ? v.size : size; if (!n) break;
-        wonder_report_shadow_unknown(&report_shadow, (uint64_t)(uintptr_t)v.memory, n); address += n; size -= n;
+        wonder_report_shadow_unknown_from(&report_shadow, (uint64_t)(uintptr_t)v.memory, n, source); address += n; size -= n;
     }
 }
 static void pending_value(uint64_t address, uint32_t value) {
@@ -393,7 +396,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (!draw_state.storage_buffer[stage][slot].address || !draw_state.storage_buffer[stage][slot].size) {
                 d.sbuf[stage][slot] = unbound_storage(opcode, r->sbuf[i].write, stage ? "stage 1" : "stage 0", slot); continue; }
             d.sbuf[stage][slot] = span_of(opcode, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
-            if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
+            if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size, PENDING_DRAW_STORAGE);
         }
         for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, stage, &r->tex[i], &d, stage);
     }
@@ -623,7 +626,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
         if (!draw_state.storage_buffer[5][slot].address || !draw_state.storage_buffer[5][slot].size) {
             x.sbuf[slot] = unbound_storage(opcode, r->sbuf[i].write, "compute", slot); continue; }
         x.sbuf[slot] = span_of(opcode, draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
-        if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
+        if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size, PENDING_COMPUTE_STORAGE);
     }
     memcpy(x.res.vs_key, x.key, sizeof x.key); memcpy(x.res.fs_key, "-", 2);
     for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, 5, &r->tex[i], &x.res, 0);
@@ -727,7 +730,9 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         static const unsigned words[4] = {0, 4, 16, 20}; uint32_t known[4], m[4]; int kind[4], shadowed = fast; const uint8_t *host[4];
         for (int w = 0; w < 4; w++) {
             struct wonder_nvn_pool_view wv; wonder_nvn_address_span(c->a[1] + words[w], 4, &wv); host[w] = wv.memory;
-            kind[w] = wonder_report_shadow_lookup(&report_shadow, (uint64_t)(uintptr_t)wv.memory, &known[w]); if (kind[w] < 0) shadowed = 0;
+            unsigned source = 0;
+            kind[w] = wonder_report_shadow_lookup_source(&report_shadow, (uint64_t)(uintptr_t)wv.memory, &known[w], &source);
+            if (kind[w] < 0) { if (shadowed) conditional_finish_source[source == WONDER_REPORT_SHADOW_OVERFLOW_SOURCE ? 6 : source < 6 ? source : 0]++; shadowed = 0; }
         }
         if (!shadowed) replay_finish();
         for (int w = 0; w < 4; w++) { memcpy(&m[w], host[w], 4); if (shadowed && kind[w] == 1) m[w] = known[w]; }
@@ -798,13 +803,13 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (value != b * 0x01010101u) replay_stop(opcode, "non-byte-repeating fill value needs a compute fill");
         void *buffer; size_t offset; host_span(c->a[0], c->a[1], opcode, &buffer, &offset);
         if (wonder_host_fill_buffer(buffer, offset, (size_t)c->a[1], b)) replay_stop(opcode, "host fill failed");
-        pending_unknown(c->a[0], c->a[1]);
+        pending_unknown(c->a[0], c->a[1], PENDING_CLEAR);
         break;
     }
     case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER: {
         uint64_t address = c->a[0] + c->a[2]; size_t bytes = c->blob_size;
         if (ubo_update_count < 64) { ubo_updates[ubo_update_count].address = address; ubo_updates[ubo_update_count++].size = bytes; } else ubo_update_overflow = 1;
-        if (bytes) pending_unknown(address, bytes);
+        if (bytes) pending_unknown(address, bytes, PENDING_UNIFORM);
         if (!bytes) break;
         void *buffer; size_t offset; host_span(address, bytes, opcode, &buffer, &offset);
         if (wonder_host_write_buffer(buffer, offset, blob, bytes)) replay_stop(opcode, "host buffer update failed");
@@ -827,7 +832,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         struct report *r = malloc(sizeof *r);
         if (!r) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY report");
         *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp};
-        if (timestamp) pending_unknown(c->a[1], 16); else pending_value(c->a[1], (uint32_t)c->a[0]);
+        if (timestamp) pending_unknown(c->a[1], 16, PENDING_TIMESTAMP); else pending_value(c->a[1], (uint32_t)c->a[0]);
         wonder_host_after_gpu(write_report, r);
         break;
     }
@@ -991,7 +996,8 @@ static void submit_on_replay_stack(void *arg) {
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
     wonder_host_note_submit(submits);
-    if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u shadowed=%u shadow_mismatches=%u", submits, disabled_draws, conditional_evals, conditional_skips, conditional_shadowed, conditional_mismatches);
+    if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u shadowed=%u shadow_mismatches=%u finished_by timestamp=%u clear=%u uniform=%u draw_storage=%u compute_storage=%u overflow=%u", submits, disabled_draws, conditional_evals, conditional_skips, conditional_shadowed, conditional_mismatches,
+                                             conditional_finish_source[1], conditional_finish_source[2], conditional_finish_source[3], conditional_finish_source[4], conditional_finish_source[5], conditional_finish_source[6]);
     if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
         wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u dispatches=%u programs=%s", queue, submits, count, commands, clears,
                           submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");

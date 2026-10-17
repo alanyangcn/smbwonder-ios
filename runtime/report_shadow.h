@@ -8,11 +8,16 @@
 #define WONDER_REPORT_SHADOW_SLOTS 4096
 struct wonder_report_shadow {
     unsigned count; int overflow;
-    struct { uint64_t address, size; uint32_t value; int known; } entry[WONDER_REPORT_SHADOW_SLOTS];
+    struct { uint64_t address, size; uint32_t value; int known; unsigned source; } entry[WONDER_REPORT_SHADOW_SLOTS];
 };
 void wonder_report_shadow_clear(struct wonder_report_shadow *s);
 void wonder_report_shadow_value(struct wonder_report_shadow *s, uint64_t address, uint32_t value);     // 4-byte value write
 void wonder_report_shadow_unknown(struct wonder_report_shadow *s, uint64_t address, uint64_t size);   // write of unknown bytes
+// Same, tagged with the caller's source code (round217: which writes keep conditional renders from the fast path).
+void wonder_report_shadow_unknown_from(struct wonder_report_shadow *s, uint64_t address, uint64_t size, unsigned source);
+#define WONDER_REPORT_SHADOW_OVERFLOW_SOURCE 255u
 // The 4 bytes at address: 1 = a pending value write stores *value there (the latest one), 0 = no pending write touches
 // them, -1 = a pending write of unknown bytes overlaps them (or the table overflowed).
 int wonder_report_shadow_lookup(const struct wonder_report_shadow *s, uint64_t address, uint32_t *value);
+// Lookup that also names, for -1, the source of the unknown write (WONDER_REPORT_SHADOW_OVERFLOW_SOURCE: table full).
+int wonder_report_shadow_lookup_source(const struct wonder_report_shadow *s, uint64_t address, uint32_t *value, unsigned *source);
