@@ -62,7 +62,9 @@
     - **round195（正式版，A00077D4）**：从标题走到水管关卡全程无停点，关卡前景灌木、音符块、斜坡草、地面正常（截图 work/analysis/first-frame-round195/screenshot-course.png）。蓝色问题关闭。
     - **按键图标“?”已修（round196，AC0E1FF2）**：共享字体第 5 类（任天堂扩展字体，私用区按键符号）在固件里，离线主机没有；统计 Mals 文本用到的 27 个私用区码位（E090–E097 箭头、E0AB–E0AE 方向按钮、E0E0–E0E3 ABXY、E0E4–E0E9 L/R/ZL/ZR/SL/SR、E0EA 十字键、E0EF/E0F0 +/−、E100/E101 摇杆；含义由文本上下文推定），tools/make_icon_font.py 自绘图标字体（字母轮廓取 Mac 的 Arial Bold，产物在 work/，不进 Git），打包为 dm/fonts/wonder-icons.ttf，缺失按名停。**功能差异**：图标是自绘替代，外形与任天堂原版不同。用户确认按钮显示正常。
     - round196 卡在离线阶段属性类型（vs 01b4c315 第 6 属性 R16UI）→ **离线 float 属性绑定整数格式时，宿主按翻译器写整数属性的方式改写 MSL**（uint4/int4 声明 + as_type<floatN> 读取），按类型组合编译缓存并给出对应反射（shader_library.c `wonder_shader_retype_attributes`，有 C 与 GPU 编译测试）；声明为整数却绑定 float 仍按名停。round197 待真机。
-    - 卡顿：关卡 10–44 fps（标题 59），下一步做性能。
+    - **性能（round198–203）**：Time Profiler（xctrace 附加运行中游戏）定位并修复：CallCommands 线性扫描句柄表（录制线程 ~70%）→ 哈希；address_span 线性扫描 ~1200 个池（回放 ~20%）→ 排序索引+线程缓存；每次绘制新建 64 KiB 常量缓冲与纹理视图 → c1 按反射、drv0 按内容、视图按帧缓存；程序表 → 哈希。卡的关卡 11–13 → 约 22 fps。剩余瓶颈：游戏/回放/GPU 串行（回放 41%、GPU 25% 忙），主因是条件渲染每次都 finish GPU（每帧约 50 次）。条件渲染“读未落地写入表”快速路径（report_shadow.c，按宿主内存跟踪）校验与抽查 0 差异，但开启后世界地图闪烁（推测时序变化影响依赖 GPU 计时的逻辑），**默认关闭**（WONDER_FAST_CONDITIONAL=1 研究用）。
+    - **宽屏（round204–207，进行中）**：主机内存扫描 + 写入断点定位：关卡相机为正交投影（高 15.5×缩放），每帧在 main+0x2e2b30–0x2e2b6c 写上下左右，宽高比读 main+0x2aeedb4（0x3fe38e3b，主程序唯一的 16:9 常数；另一引用 main+0x6a7630 为默认透视投影构造）。运行时改该常数：关卡视野变宽（压在 16:9 目标里）；但渲染尺寸也由它推出并受 1280 上限约束，标题画面缩到左上（round206）。runtime/widescreen.c（宽高比/拉伸/常数核对写入，有测试）、present 按比例横向拉伸已实现，**默认关闭**（WONDER_WIDESCREEN=1）。剩余：放宽渲染缓冲上限、2D 排版适配、离线剪口（patch_nso.py CUTS，Wonder 构建号 ff773e90972d544eb79406eaa65396d5）。
+    - 诊断工具：wonder_diag_scan_screen / wonder_diag_scan_u32（LLDB 调用，输出到 Documents/loader-probe.log；该日志 80 MB 封顶）；LLDB 分块读取整个客体堆约 20 MB/s。
 
 ## 首帧推进（2026-10-15，持续进行）
 
