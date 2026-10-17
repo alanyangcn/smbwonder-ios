@@ -1224,7 +1224,7 @@ int main(void) {
         assert(released_resources == before);              // its host view outlives it (round210/222)
         EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
         // Its memory still resolves however many presents later (the console's GPU reads freed memory as it is; round222:
-        // 7943 presents); the view goes once 64 newer pools were finalized, and the stop then names the finalized pool.
+        // 7943 presents); the view goes once 64 newer pools were finalized and is made again on the next read (round223).
         { struct wonder_nvn_pool_view v; wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v);
           assert(v.memory == wt_memory + 0x100 && v.size == 0x10);
           for (int k = 0; k < 10000; k++) wonder_nvn_frame_advance();
@@ -1235,9 +1235,11 @@ int main(void) {
               wonder_nvnMemoryPoolBuilderSetFlags(pb, 0x22); wonder_nvnMemoryPoolBuilderSetStorage(pb, newer_memory[k], sizeof newer_memory[k]);
               assert(wonder_nvnMemoryPoolInitialize(newer[k], pb) == 1); ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(newer[k]);
           }
-          assert(released_resources >= before + 1);
-          EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
-          assert(strstr(last_stop, "+0x100") && strstr(last_stop, "presents ago")); }
+          assert(released_resources >= before + 1);   // its kept view went (64 newer finalizes)
+          // round223: a later read makes the view again over the same memory (the game drew with that buffer 8164 presents on)
+          int views = buffers; wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v);
+          assert(v.memory == wt_memory + 0x100 && v.size == 0x10 && v.host_buffer && buffers == views + 1);
+          wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x200, 0x10, &v); assert(buffers == views + 1); }   // kept again
     }
     puts("NVN_STRICT_BOOTSTRAP_OK");
 }
