@@ -60,6 +60,9 @@
     - 全量重建：离线提取 9030 个程序 / 9046 个阶段（原 7575 个程序），构建 9020 个阶段（留 112 个）。round192 启动即停 `NVN_SHADER_MISSING`（agl/gsys 启动着色器的新键只有普查能给，以前是撞车顶替）；round193 采集停在离线阶段属性类型猜测（4ee141e7 第 6 属性 RGBA8UI，离线按 float）→ 采集模式下类型不符也记普查、跳过该次绘制（非采集仍按名停）。
     - **round194（采集版，A68856C9）真机结果：水管关卡前景深绿灌木、彩色音符块、斜坡/平台上的草、砖块地面全部正常，蓝色消失**（截图 work/analysis/first-frame-round194/screenshot-course.png）。采集到的普查（新增 90 个目录）已加入 census-dirs，全量重建 9036 个阶段（留 107 个）。
     - **round195（正式版，A00077D4）**：从标题走到水管关卡全程无停点，关卡前景灌木、音符块、斜坡草、地面正常（截图 work/analysis/first-frame-round195/screenshot-course.png）。蓝色问题关闭。
+    - **按键图标“?”已修（round196，AC0E1FF2）**：共享字体第 5 类（任天堂扩展字体，私用区按键符号）在固件里，离线主机没有；统计 Mals 文本用到的 27 个私用区码位（E090–E097 箭头、E0AB–E0AE 方向按钮、E0E0–E0E3 ABXY、E0E4–E0E9 L/R/ZL/ZR/SL/SR、E0EA 十字键、E0EF/E0F0 +/−、E100/E101 摇杆；含义由文本上下文推定），tools/make_icon_font.py 自绘图标字体（字母轮廓取 Mac 的 Arial Bold，产物在 work/，不进 Git），打包为 dm/fonts/wonder-icons.ttf，缺失按名停。**功能差异**：图标是自绘替代，外形与任天堂原版不同。用户确认按钮显示正常。
+    - round196 卡在离线阶段属性类型（vs 01b4c315 第 6 属性 R16UI）→ **离线 float 属性绑定整数格式时，宿主按翻译器写整数属性的方式改写 MSL**（uint4/int4 声明 + as_type<floatN> 读取），按类型组合编译缓存并给出对应反射（shader_library.c `wonder_shader_retype_attributes`，有 C 与 GPU 编译测试）；声明为整数却绑定 float 仍按名停。round197 待真机。
+    - 卡顿：关卡 10–44 fps（标题 59），下一步做性能。
 
 ## 首帧推进（2026-10-15，持续进行）
 
