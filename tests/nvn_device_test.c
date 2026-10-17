@@ -1221,18 +1221,23 @@ int main(void) {
         unsigned before = released_resources;
         ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(wt_pool);
         assert(forgotten_pool == (const void *)wt_pool);   // GPU textures stored in the pool go with it
-        assert(released_resources == before);              // its host view outlives it for the grace presents (round210)
+        assert(released_resources == before);              // its host view outlives it (round210/222)
         EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
-        // Within the grace presents its memory still resolves (the GPU reads it after the finalize on the console);
-        // afterwards the view is released and the stop names the finalized pool (round208/210).
+        // Its memory still resolves however many presents later (the console's GPU reads freed memory as it is; round222:
+        // 7943 presents); the view goes once 64 newer pools were finalized, and the stop then names the finalized pool.
         { struct wonder_nvn_pool_view v; wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v);
           assert(v.memory == wt_memory + 0x100 && v.size == 0x10);
-          for (int k = 0; k < 599; k++) wonder_nvn_frame_advance();
-          wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v); assert(v.memory == wt_memory + 0x100 && released_resources == before);   // round212: still there 599 presents later
-          wonder_nvn_frame_advance();
-          assert(released_resources == before + 1);
+          for (int k = 0; k < 10000; k++) wonder_nvn_frame_advance();
+          wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v); assert(v.memory == wt_memory + 0x100 && released_resources == before);
+          static _Alignas(4096) unsigned char newer_memory[64][0x1000]; static _Alignas(16) unsigned char newer[64][WONDER_NVN_MEMORY_POOL_SIZE];
+          for (int k = 0; k < 64; k++) {
+              wonder_nvnMemoryPoolBuilderSetDefaults(pb); wonder_nvnMemoryPoolBuilderSetDevice(pb, device);
+              wonder_nvnMemoryPoolBuilderSetFlags(pb, 0x22); wonder_nvnMemoryPoolBuilderSetStorage(pb, newer_memory[k], sizeof newer_memory[k]);
+              assert(wonder_nvnMemoryPoolInitialize(newer[k], pb) == 1); ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(newer[k]);
+          }
+          assert(released_resources >= before + 1);
           EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
-          assert(strstr(last_stop, "+0x100") && strstr(last_stop, "600 presents ago")); }
+          assert(strstr(last_stop, "+0x100") && strstr(last_stop, "presents ago")); }
     }
     puts("NVN_STRICT_BOOTSTRAP_OK");
 }

@@ -305,16 +305,16 @@ const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_
 }
 // The last pools the game finalized (round208: a replayed draw read a uniform buffer whose pool was gone), named in
 // NVN_INVALID_ADDRESS with the game's call chain at the finalize.
-#define FREED_POOLS 64
+#define FREED_POOLS 256   // more than DEAD_POOLS: a read after the view went still names the pool (round222)
 static struct freed_pool { const void *pool; uint64_t lo, hi; unsigned frame; char chain[400]; } freed_pools[FREED_POOLS]; static unsigned freed_next;
 void (*wonder_nvn_stop_context)(char *out, size_t size);
-// Finalized plain pools stay resolvable for WONDER_POOL_GRACE_FRAMES presents (round210: a world-map object's destructor,
+// Finalized plain pools stay resolvable (round210: a world-map object's destructor,
 // main+0x5c00fc on a loader thread, finalized its 64 KiB pool while a later submit still drew with the 0xf50-byte uniform
 // buffer in it). On the console the GPU runs behind the CPU and reads the app's memory, still in place, after such a
 // finalize; here the replay reads the same memory through the kept host view, which is released once the grace ends.
-// Round212: 3 presents were not enough (the world map submitted a draw reading such a pool later); the guest heap stays
-// mapped and the view is zero-copy, so a dead pool now stays readable for 600 presents (DEAD_POOLS slots, oldest first out).
-#define WONDER_POOL_GRACE_FRAMES 600
+// Round212: 3 presents were not enough; round222: the world map drew with that buffer 7943 presents after the finalize.
+// The console's GPU reads whatever the freed memory holds then; the guest heap stays mapped and the view is zero-copy, so
+// a dead pool stays readable until DEAD_POOLS newer pools were finalized (oldest out first), not for a number of presents.
 #define DEAD_POOLS 64
 static struct dead_pool { uint8_t *memory; uint64_t size; uint32_t flags; void *host_buffer; uint64_t host_offset; unsigned frame; int used; } dead_pools[DEAD_POOLS];
 static unsigned stale_reads;
@@ -324,16 +324,7 @@ static void bury_pool_locked(const struct memory_pool *m) {   // with pool_regis
     if (dead_pools[slot].used && dead_pools[slot].host_buffer) wonder_host_release(dead_pools[slot].host_buffer);   // all slots busy: the oldest goes now
     dead_pools[slot] = (struct dead_pool){m->memory, m->size, m->flags, m->host_buffer, m->host_offset, wonder_nvn_frame_number(), 1};
 }
-void wonder_nvn_reap_pools(void) {
-    unsigned now = wonder_nvn_frame_number();
-    pthread_mutex_lock(&pool_registry_lock);
-    for (unsigned i = 0; i < DEAD_POOLS; i++)
-        if (dead_pools[i].used && now - dead_pools[i].frame >= WONDER_POOL_GRACE_FRAMES) {
-            if (dead_pools[i].host_buffer) wonder_host_release(dead_pools[i].host_buffer);
-            dead_pools[i].used = 0;
-        }
-    pthread_mutex_unlock(&pool_registry_lock);
-}
+void wonder_nvn_reap_pools(void) {}   // round222: dead pools leave only when newer ones need their slot (bury_pool_locked)
 static int dead_pool_view(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {   // with pool_registry_lock held
     for (unsigned i = 0; i < DEAD_POOLS; i++) {
         const struct dead_pool *d = &dead_pools[i]; uint64_t base = (uintptr_t)d->memory;
@@ -361,7 +352,7 @@ void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_
         int kept = dead_pool_view(address, size, view);
         pthread_mutex_unlock(&pool_registry_lock);
         if (kept) {
-            if (stale_reads++ < 16) wonder_nvn_report("NVN_STALE_POOL_READ resource=%#llx size=%#llx (pool finalized within %d presents)", (unsigned long long)address, (unsigned long long)size, WONDER_POOL_GRACE_FRAMES);
+            if (stale_reads++ < 16) wonder_nvn_report("NVN_STALE_POOL_READ resource=%#llx size=%#llx (pool finalized, one of the last %d)", (unsigned long long)address, (unsigned long long)size, DEAD_POOLS);
             return;
         }
     }
