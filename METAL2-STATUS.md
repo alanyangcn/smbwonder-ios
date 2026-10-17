@@ -78,7 +78,7 @@
     - **切后台（round228–229）**：实测回桌面 1–2 分钟再回来能从原处继续（iOS 挂起 App，GPU 闸门挡住提交）。round229（2854C2C3）：回放任务开始前也等闸门（后台时排队的一次提交等了 131.8 s 才执行，未触发 GPU 后台错误）；进入后台时释放 CPU 上传的采样贴图副本（322 张、113 MB，下次绘制重新上传），但当时测得的 footprint 未立即下降（1431 → 1431 MB，Metal 可能延迟归还），实际降幅未确认。玩家确认回来后画面与贴图正常。
     - **已释放池（round222）**：同一 0xf50 缓冲在池释放 7943 帧后仍被绘制读取 → 已释放池不再按帧数回收，保留 64 个视图（按最近读取淘汰）；round223 又在 8164 帧、66 次释放后读到 → round224（F04D1DB2）记录最近 1024 个已释放池的范围，读到视图已淘汰的释放池时当场重建零拷贝视图（NVN_FREED_POOL_REVIVED）。玩家确认玩一阵不再卡。
     - **屏幕帧率（round216，40347B6D）**：左上角显示帧率（runtime/fps_meter.c，按半秒窗口统计 present；WONDER_FPS=0 隐藏）。
-    - **启动环境变量漏传（round212–215）**：这几轮 WONDER_ENVS 为空，覆盖了 Documents/launch-env.txt，普查扫描（WONDER_CENSUS_SWEEP=1）和 WONDER_TBDR=0 / WONDER_RT=0 都没开，于是缺失程序 b60a2a91-3b2d04ba 变成停止（玩家看到卡住）。round216 恢复。b60a2a91（vs）是已知读 c[0]+0x610 的两个阶段之一（DrawArrays 4 点，普查已收），c[0]+0x610 的驱动语义未定，仍留在 19 个之外；扫描模式下该绘制跳过。
+    - **启动环境变量漏传（round212–215）**：这几轮 WONDER_ENVS 为空，覆盖了 Documents/launch-env.txt，普查扫描（WONDER_CENSUS_SWEEP=1）和 WONDER_TBDR=0 / WONDER_RT=0 都没开，于是缺失程序 b60a2a91-3b2d04ba 变成停止（玩家看到卡住）。round216 恢复。b60a2a91（vs）是已知读 c[0]+0x610 的两个阶段之一（DrawArrays 4 点，普查已收），仍留在 19 个之外；扫描模式下该绘制跳过。语义已查明：点精灵粒子，gl_PointSize = min(请求值, c[0][0x610])，即驱动填的点大小上限；数值在 SDK 里未找到（无 0x610 的浮点写入，候选常量 2047.94/2048/1023 等无可信引用）。出现位置：第 5 世界「菌菌采掘场」关卡「危险别碰！迫近的黑影」（Course048，困难）的子区域 Course048_Sub2。玩家决定（2026-10-17）：先记录不修改，不按推测值补；若以后要补，候选为 Maxwell 硬件点大小上限（Metal 本身上限 511），须注明为推测。
     - 真机签名：当前安装为个人团队 MFXJ9AKFM5 / local.smbwonder.loaderprobe，轮次需 `WONDER_TEAM=MFXJ9AKFM5 WONDER_BUNDLE=local.smbwonder.loaderprobe WONDER_EXTENDED_VA=0`。
     - 诊断工具：wonder_diag_scan_screen / wonder_diag_scan_u32（LLDB 调用，输出到 Documents/loader-probe.log；该日志 80 MB 封顶）；LLDB 分块读取整个客体堆约 20 MB/s。
 
