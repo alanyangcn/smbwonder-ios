@@ -1,4 +1,4 @@
-> 最新进度见 [METAL2-STATUS.md](METAL2-STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
+> 最新进度见 [STATUS.md](STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
 
 > 最新持续推进记录见 [ADVANCE-STATUS.md](ADVANCE-STATUS.md)：已越过核心掩码阻塞并在真机读取真实 RomFS；下文保留此前冷启动验证记录。
 

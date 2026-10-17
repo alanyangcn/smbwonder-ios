@@ -1,7 +1,7 @@
 // NVN texture builder, textures, views and texture-pool registration (main+0x77714 helper, 0x984a38 display path).
 // Storage sizes/alignments follow the Tegra X1 block-linear layout (dm/gfx/nvn/nvn_tex.c, deko3d-derived) because
 // game data (BNTX) and pool offsets are computed from them. Host Metal textures for non-display textures are
-// created at first use by the render layer (METAL2-RENDER-PLAN.md section 4), not here.
+// created at first use by the render layer (RENDER-PLAN.md section 4), not here.
 #include "nvn_texture.h"
 #include "nvn_fmt_mtl.h"
 #include "nvn_deswizzle.h"

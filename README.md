@@ -2,7 +2,7 @@
 
 《超级马里奥 惊奇》1.2.0 的原生 iOS 移植研究项目。当前目标为 iPhone 18 Pro（iOS 27），渲染走 Metal 3 / MSL 3.2。
 
-当前进度：游戏在真机上稳定显示启动加载画面与标题主视觉图（round108），尚未进入可玩状态。详见 [METAL2-STATUS.md](METAL2-STATUS.md)。
+当前进度：游戏在真机上稳定显示启动加载画面与标题主视觉图（round108），尚未进入可玩状态。详见 [STATUS.md](STATUS.md)。
 
 **新机器搭建（工具链、导入自己的游戏包、着色器普查迁移）见 [SETUP.md](SETUP.md)。**
 
@@ -15,7 +15,7 @@
 - `vendor/d2r-mobile/`：本地保存的 D2R Mobile 依赖源码及原许可证；构建不读取旁边的参考仓库。
 - `work/`：本地游戏资源、工具链、构建产物、设备日志与历史验证证据，全部排除出 Git；由 `tools/setup_env.sh`、`tools/import_game.sh`、`tools/local_state.sh` 重建（见 SETUP.md）。
 
-进度见 [METAL2-STATUS.md](METAL2-STATUS.md)，审查见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)，迁移说明见 [MIGRATION.md](MIGRATION.md)。
+进度见 [STATUS.md](STATUS.md)，审查见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)，迁移说明见 [MIGRATION.md](MIGRATION.md)。
 
 ## 常用命令
 

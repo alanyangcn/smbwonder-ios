@@ -3,9 +3,9 @@
 《超级马里奥 惊奇》1.2.0（update 262144）原生移植到 iOS：客体 AArch64 代码在进程内原生执行，宿主接管内核 SVC、SDK 服务和 NVN→Metal。用中文回复。
 
 ## 先读
-- `METAL2-STATUS.md`：当前停点、每轮结果、导入服务接管统计。**开工前读“首帧推进”一节的最后几条。**
+- `STATUS.md`：当前停点、每轮结果、导入服务接管统计。**开工前读“首帧推进”一节的最后几条。**
 - `work/analysis/first-frame/ledger.md`：逐轮执行记录（英文，含 run id、sdk/main 偏移证据和裁定）。
-- 计划：`docs/superpowers/plans/2026-10-15-first-game-frame.md`；渲染设计：`METAL2-RENDER-PLAN.md`。
+- 计划：`docs/superpowers/plans/2026-10-15-first-game-frame.md`；渲染设计：`RENDER-PLAN.md`。
 
 ## 设备与环境
 - 新机器搭建 `work/`：`tools/setup_env.sh`（工具链）→ `tools/import_game.sh`（游戏包 + prod.keys，按 verified-inputs.json 核对）→ `tools/local_state.sh import`（着色器普查）。详见 SETUP.md。
@@ -25,7 +25,7 @@ tools/device_round.sh first-frame-round<N> --fetch-only   # 只重新取回日�
 ## 每轮循环
 1. 跑轮次 → 读日志定位停点 → 符号化调用栈，用 sdk/main 反汇编确认真实语义（偏移写进注释和 ledger）。
 2. 实现 → 加/改测试 → `python3 -m unittest discover -s tests -q` 全部通过。
-3. 更新 `METAL2-STATUS.md`（本轮 run id + 结果、下一轮“待真机”内容、导入统计）和 ledger。
+3. 更新 `STATUS.md`（本轮 run id + 结果、下一轮“待真机”内容、导入统计）和 ledger。
 4. **每个大步骤提交一次 commit，不要 push。** 然后跑下一轮。
 
 ## 实现原则（项目一贯的裁定）

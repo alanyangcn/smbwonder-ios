@@ -198,6 +198,6 @@
       "scope": "CPU, signed module mapping and relocation; reference Metal3 renderer unsupported on A11"
     }
   },
-  "latest_progress": "METAL2-STATUS.md",
+  "latest_progress": "STATUS.md",
   "latest_device_evidence": "metal2-device-result.json"
 }

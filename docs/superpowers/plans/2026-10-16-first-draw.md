@@ -8,7 +8,7 @@
 
 **Tech Stack:** C11 / Objective-C、Metal 2 + MSL 2.1（离散槽，无 argument buffer、无 gpuAddress）、Python 3、.NET（work/tools/dotnet）、Ryujinx.Graphics.Shader、SPIRV-Cross（work/tools/spirv-cross）、XcodeGen/Xcode。
 
-**Spec:** `METAL2-RENDER-PLAN.md`（§3–§6、实施顺序 B3/B4）与 `METAL2-STATUS.md`。D2R 参考实现：`vendor/d2r-mobile/dm/gfx/README.md`、`tools/dmsh_build.py`、`tools/maxwell_refs.py`、`tools/dmsh_xlate/Program.cs`、`nvn/nvn_mtl.m`（support_buffer 布局约 2870 行）。
+**Spec:** `RENDER-PLAN.md`（§3–§6、实施顺序 B3/B4）与 `STATUS.md`。D2R 参考实现：`vendor/d2r-mobile/dm/gfx/README.md`、`tools/dmsh_build.py`、`tools/maxwell_refs.py`、`tools/dmsh_xlate/Program.cs`、`nvn/nvn_mtl.m`（support_buffer 布局约 2870 行）。
 
 ## Global Constraints
 
@@ -19,7 +19,7 @@
 - Mac 无离线 Metal 工具链（`xcrun metal` 报 missing Metal Toolchain）：只出 MSL 源码，设备编译。
 - 不跳过、不伪造：缺着色器、未知格式、绑定不全、编译失败都按名停止，日志写明键/槽/格式；不画假帧。
 - 游戏数据与派生着色器只放 `work/`（不进 Git）；新运行时文件要同时加进 `tools/build_loader_probe.py` 和 `ios-probe/project.yml`。
-- 每个任务结束提交一次 commit，不 push；每次真机轮次都更新 `METAL2-STATUS.md` 和 ledger（`git add -f`）。
+- 每个任务结束提交一次 commit，不 push；每次真机轮次都更新 `STATUS.md` 和 ledger（`git add -f`）。
 
 ## Review Focus
 
@@ -143,7 +143,7 @@
 
 ### Task 7：真机验收与下一个停点
 
-**Files:** Modify `runtime/nvn_queue.c`（第一个成功执行的 draw 所在的 submit 完成后读回渲染目标，写 `Documents/FirstDraw/target-<n>.png`，只做一次）、`tools/device_round.sh`（fetch 段多取 `FirstDraw/*`）、`METAL2-STATUS.md`、ledger。
+**Files:** Modify `runtime/nvn_queue.c`（第一个成功执行的 draw 所在的 submit 完成后读回渲染目标，写 `Documents/FirstDraw/target-<n>.png`，只做一次）、`tools/device_round.sh`（fetch 段多取 `FirstDraw/*`）、`STATUS.md`、ledger。
 
 - [ ] **Step 1**：`python3 tools/wonder_shader_build.py work/analysis/first-frame-round53/Documents/DrawCensus --out work/build/wonder-shaders`，然后跑 `tools/device_round.sh first-frame-round54`。
 - [ ] **Step 2**：确认日志里有 `NVN_DRAW_EXECUTED vs=<key> fs=<key> count=…` 和 GPU 完成记录，并且停点前移（下一个停点是新程序缺 MSL 也算进展：它按键点名）。打开读回 PNG 检查画面：应该是游戏自己的 UI/场景片段，不能是纯色或花屏。花屏时回到 Task 3 的 Review Focus 1、2 排查。

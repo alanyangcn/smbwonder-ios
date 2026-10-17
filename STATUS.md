@@ -115,7 +115,7 @@
 - round46 run `3A8DBB67-9E53-47E3-8156-57F44590AE33`（debugger=1，52 项测试、xcodebuild、签名、安装通过，无崩溃报告）：friends 离线就绪，OE 退出区段通过，又创建了 2 个游戏线程（0x79/0x7a）；主线程停在 `nn::ngc::ProfanityFilter::Initialize`（sdk+0x38648c）→ `ngc::detail::CreateServiceByHipc`（sdk+0x387298）→ `sm:`（SVC 0x1F）。游戏调用点 main+0x68eff0。
 - round47（待真机）：ngc 客户端保持原生（参数检查、UTF-8/UTF-16 处理、工作缓冲区堆、共享代理引用计数 sdk+0xdc6438），只把 `CreateServiceByHipc` 背后的 IService 对象换成宿主对象（x8 返回 SharedPointer，用跳板写入）。vtable 按 sdk CmifProxy 对象（sdk+0xd0f650..0xd0f688）：AddReference/Release/GetProxyInfo/GetInterfaceTypeInfo/GetContentVersion/Check/Mask/Reload。宿主没有 NG 词库（任天堂系统数据，未提供），所以 Check 恒报未命中、Mask 原样返回且屏蔽数为 0——这是明确的功能差异，不是伪造结果；GetContentVersion/GetProxyInfo/GetInterfaceTypeInfo 按名停止。每次 Check/Mask 都要经 `ngc::detail::GetLanguageSetting` 调 `settings::GetLanguageCode`（同样连 `sm:`），按 iOS 首选语言作答（与 oe::GetDesiredLanguage 一致）。新增 `runtime/ngc_service.c` 与 `tests/ngc_service_test.c`（经 vtable 偏移调用、引用计数、未终止文本/输出过小/释放后调用/外来对象等停止）。完整宿主测试 53 项。
 - round47–52（2026-10-16）：round47 run `EC535B5F` ngc 服务对象通过；`os::SetUserExceptionHandler` 需要 GetInfo(20) 进程本地区（已实现，0x200 字节零页）。round48 发现 `settings::operator==(Language, LanguageCode)` 并非纯函数：经 `MakeLanguageCode` 连 `set:`；新增宿主 ISettingsServer（`runtime/settings_service.c`，18 种语言表、系统语言取 iOS，地区/键位/昵称等按名停止）。注意：新源文件必须同时加入 `tools/build_loader_probe.py` 与 `ios-probe/project.yml`（round49 漏了后者）。round49b `F854DC10` 首次 QueueSubmitCommands，开头是 ReportCounter(TIMESTAMP_TOP)，已按宿主时间戳回放。round50 `os::FlushDataCache` 读 CTR_EL0 被 iOS 拦截（SIGILL）；sdk 只有 3 处读取，`FlushDataCache` 经 PLT 强制接管为 `sys_dcache_flush`，另两处由 SIGILL 处理器精确模拟（LLDB 调试轮次下陷阱仍会结束运行）。
-- round52 run `8FD64D64-9FE3-4FD4-94AE-36B110DE46D1`（debugger=1，55 项测试，165 个强制接管）：第 1 次提交回放完成，第 2 次提交第 272 条命令是第一个真实 DrawElements，按名停止“需要翻译后的着色器与 PSO”。启动期服务链已全部打通，下一阶段是着色器翻译与绘制执行（见 METAL2-RENDER-PLAN.md）。
+- round52 run `8FD64D64-9FE3-4FD4-94AE-36B110DE46D1`（debugger=1，55 项测试，165 个强制接管）：第 1 次提交回放完成，第 2 次提交第 272 条命令是第一个真实 DrawElements，按名停止“需要翻译后的着色器与 PSO”。启动期服务链已全部打通，下一阶段是着色器翻译与绘制执行（见 RENDER-PLAN.md）。
 - B3 首个 draw（计划 `docs/superpowers/plans/2026-10-16-first-draw.md`，2026-10-16）：
   - round53 run `CB36CC00`：首个 draw 普查（`Documents/DrawCensus`）——提交 2 第 272 条 DrawElements，6 个 u8 索引，程序 vs `b6ef435899b15f38` / fs `b56073e27e6d9488`，RGBA8 1920×1080 目标、视口 1280×720，深度模式 NEAR_IS_MINUS_W。
   - 离线链路：`tools/wonder_xlate`（D2R 翻译器的 Wonder 副本：顶点阶段做 NEAR_IS_MINUS_W 深度重映射；贴图句柄表按 sdk 实测为 `c[2][0x20+8r]`，不是 D2R 的 0x168；uniform r = c[3+r]）→ `tools/wonder_shader_build.py`（翻译查询全部取自普查）→ MSL 2.1 离散槽 + `.refl` 反射，随 App 进 `dm/shaders`，设备 `newLibraryWithSource` 编译并按键缓存。Mac 上没有离线 Metal 工具链，只出源码。
@@ -178,4 +178,4 @@ round23 启动时 debugger=1；round22 启动时检测为 debugger=0，但同样
 4. 真实游戏首帧、多个场景、输入、音频、存档与独立冷启动验收。
 5. DeviceGetInteger 的 D2R/Tegra 配置尚未逐项验证，StorageClass 仍是宿主类别；不能当作完整 NVN 55 或宿主硬件能力声明。
 
-先前 Metal 2 GPU 诊断及六份样本着色器编译证据保存在 [早期基线](METAL2-BASELINE-2026-10-15.md)，其中 GAME_RENDERER_PENDING 等停点仅代表当时状态。下一阶段设计见 [渲染计划](METAL2-RENDER-PLAN.md)。
+渲染层设计见 [渲染计划](RENDER-PLAN.md)。
