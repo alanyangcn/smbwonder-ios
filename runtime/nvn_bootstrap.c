@@ -40,7 +40,6 @@ static void caller_chain(uint64_t fp, uint64_t pc) {
 // (main+0x10cf930, returning to main+0x10cfae0) holds in x21 a pointer to {pool, base} at object+0x178; the object's
 // +0x100 is the buffer address and +0x108 the pool/allocator the game found for it (NULL here). The wrapper saves x21 at
 // fp+0x28 (stp x22, x21, [sp, #0x60] with fp = sp+0x40). Logs those fields and the host pool holding the address.
-const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_t *size);
 static int guest_read(uint64_t address, void *out, size_t size) {
     vm_size_t count = 0;
     return vm_read_overwrite(mach_task_self(), address, size, (vm_address_t)out, &count) == KERN_SUCCESS && count == size;

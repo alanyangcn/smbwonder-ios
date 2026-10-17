@@ -88,6 +88,7 @@ extern const struct wonder_nvn_entry wonder_nvn_command_entries[];
 extern const unsigned wonder_nvn_command_count;
 
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view);
+const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_t *size);   // registered pool holding address (diagnostics), NULL if none
 
 void wonder_host_resource_label(void *resource, const char *label);
 
