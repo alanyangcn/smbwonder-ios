@@ -19,6 +19,10 @@ int main(void) {
     assert(r.c1_buffer == 2 && r.c1_len == 3 && r.c1[0] == 0 && r.c1[2] == 0xff && r.support == 0 && (r.drv_read & 4) &&
            r.fout_mask == 2 && r.fout_type[1] == WONDER_SHADER_UINT && r.attr[0].type == WONDER_SHADER_SINT);
     assert(parse("stage vs\nc1 2 -\n", &r, err) == 0 && r.c1_buffer == 2 && r.c1_len == 0);
+    // Bytes each uniform buffer is read to (round222); unknown without a cbufext line.
+    assert(parse("stage vs\ncbuf 0 1\ncbufext 0 208\ncbuf 2 3\n", &r, err) == 0 && r.cbuf[0].extent == 208 && r.cbuf[1].extent == 0);
+    assert(parse("stage vs\ncbufext 0 16\n", &r, err) && strstr(err, "cbufext"));
+    assert(parse("stage vs\ncbuf 0 1\ncbufext 0 70000\n", &r, err) && strstr(err, "cbufext"));
     // Vertex depth convention the stage was built for.
     assert(parse("stage vs\ndepth minus_one\n", &r, err) == 0 && r.depth_minus_one == 1);
     assert(parse("stage vs\ndepth zero\n", &r, err) == 0 && r.depth_minus_one == 0);

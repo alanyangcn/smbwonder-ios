@@ -42,6 +42,12 @@ class PureHelpers(unittest.TestCase):
         # The load itself is clamped into range (the compiler may turn the ternary into load + select), then zeroed.
         self.assertIn('static inline __attribute__((unused)) float4 wonder_cb(constant float4 *a, int i) { float4 v = a[min(uint(i), 4095u)]; return uint(i) < 4096u ? v : float4(0.0); }', out)
         self.assertEqual(out.index('static inline __attribute__((unused)) float4 wonder_cb('), out.index('using namespace metal;\n') + len('using namespace metal;\n'))
+    def test_constant_buffer_extents(self):
+        # round222: bytes read per constant buffer binding; a computed index (wonder_cb) leaves it unknown (0).
+        msl = ("fragment main0_out main0(constant _16& fp_c3 [[buffer(2)]], constant _16& fp_c1 [[buffer(3)]], constant _16& fp_c5 [[buffer(4)]])\n"
+               "x = fp_c3._m0[3].z + fp_c3._m0[12u].x;\n"
+               "y = wonder_cb(fp_c1._m0, i) + fp_c1._m0[2].x;\n")
+        self.assertEqual(build.cbuf_extents(msl), {2: 13 * 16, 3: 0, 4: 16})
     def test_support_buffer_parameters(self):
         # Ryujinx's support buffer is the struct carrying render_scale (float[73]); its entry parameter needs no reflection.
         msl = ("struct _10\n{\n    uint _m0;\n    uint _m1[8];\n    float4 _m2;\n    float4 _m3;\n    int _m4;\n    float _m5[73];\n    int4 _m6;\n    int _m7;\n};\n"

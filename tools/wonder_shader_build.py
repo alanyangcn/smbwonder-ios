@@ -7,7 +7,7 @@ formats, depth remap from nvnDeviceSetDepthMode. Output: <key>.metal, <key>.refl
 
 Wonder SDK conventions (verified in sdk, not D2R's): uniform buffer r = c[3 + r] (BindUniformBuffer sdk+0x467950 writes
 slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x468840 writes at r * 8 + 0x20).
-.refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
+.refl lines: stage vs|ps|cs; depth minus_one|zero (vertex); cbuf <r> <buffer>; cbufext <r> <bytes>; c1 <buffer> <hex>; support <buffer>; drv <bank>;
              drv 0 <buffer> (c[0] read only inside the buffer address tables, filled by the host);
              tex <r> <texture> <sampler> <type>; attr <location> <nvn attribute> <type>; fout <color> <type>;
              compute: local <x> <y> <z>; shared <bytes>; uptr <r> <buffer> (uniform slot r read through its address in
@@ -178,6 +178,19 @@ def sampler_overflow(msl):
     decl = f'struct WonderSamplers\n{{\n    sampler s[{count}];\n}};\n// wonder_sampler_overflow {buffer} ' + ','.join(str(i) for _, i in over) + '\n\n'
     return head + decl + f'{m.group(1)} main0_out main0({params})' + body, buffer
 
+def cbuf_extents(msl):
+    """Bytes of each constant buffer parameter the stage reads (round222), by its [[buffer(n)]] binding: 16 x (largest
+    literal float4 index + 1); 0 when any read uses a computed index (wonder_cb, guard_cbuf_indices). The host binds the
+    game's buffer directly when this fits inside the bound size, instead of copying it into a zero-filled 64 KiB window."""
+    m = re.search(r'^(?:vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
+    names = dict(re.findall(r'constant \w+& (\w+_c\d+) \[\[buffer\((\d+)\)\]\]', m.group(1) if m else ''))
+    out = {}
+    for name, binding in names.items():
+        if re.search(r'wonder_cb\(' + name + r'\._m0\b', msl): out[int(binding)] = 0; continue
+        idx = [int(i) for i in re.findall(r'\b' + name + r'\._m0\[(\d+)u?\]', msl)]
+        out[int(binding)] = 16 * (max(idx) + 1) if idx else 16
+    return out
+
 def entry_bindings(msl):
     """[[buffer(n)]] / [[texture(n)]] / [[sampler(n)]] parameters of the entry point, and stage_in attribute locations."""
     m = re.search(r'^(vertex|fragment|kernel) \w+ main0\((.*)\)$', msl, re.M)
@@ -222,7 +235,7 @@ def reflect(census, stage_entry, job, res, msl, c1):
     if any(t > 30 for t in textures): raise ValueError(f'texture binding {max(textures)} beyond Metal [[texture(30)]]')
     ov = re.search(r'^// wonder_sampler_overflow (\d+) ', msl, re.M)
     if not ov and any(s_ > 15 for s_ in samplers): raise ValueError(f'sampler binding {max(samplers)} beyond Metal\'s 16 samplers per stage')
-    stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set()
+    stage_no = stage_entry['stage']; lines = [f"stage {job['stage']}"]; used = set(); extents = cbuf_extents(msl)
     if ov: lines.append(f'smpov {ov.group(1)}'); used.add(int(ov.group(1)))   # samplers 16.. in the argument buffer (sampler_overflow)
     if job['stage'] == 'vs': lines.append('depth ' + ('minus_one' if job['depth_minus_one'] else 'zero'))
     if job['stage'] == 'cs': lines += ['local ' + ' '.join(map(str, job['local'])), f"shared {job['shared']}"]
@@ -232,6 +245,7 @@ def reflect(census, stage_entry, job, res, msl, c1):
         if kind == 'drv' and r == 0:
             check_driver_c0(msl, cb['binding'], job['stage']); lines.append(f"drv 0 {cb['binding']}")
         else: lines.append(f"cbuf {r} {cb['binding']}" if kind == 'cbuf' else f"c1 {cb['binding']} {c1.hex() or '-'}" if kind == 'c1' else f"drv {r}")
+        if kind == 'cbuf': lines.append(f"cbufext {r} {extents.get(cb['binding'], 0)}")
         used.add(cb['binding'])
     if res['images'] and job['stage'] != 'cs': raise ValueError('images outside compute are not built yet')
     images_bound = {i['index'] for i in census.get('images', []) if i['stage'] == stage_no and i['texture']}

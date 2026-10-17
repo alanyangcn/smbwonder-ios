@@ -153,6 +153,10 @@ int main(int argc, char **argv) {
         static struct wonder_shader_refl vr, fr; char err[128];
         const char *vt = "stage vs\nc1 2 00000000000000000000000000000000\nattr 0 0 float\n", *ft = "stage ps\ncbuf 0 1\ntex 0 1 1 2d\nfout 0 float\n";
         assert(!wonder_shader_refl_parse(vt, strlen(vt), &vr, err, sizeof err) && !wonder_shader_refl_parse(ft, strlen(ft), &fr, err, sizeof err));
+        if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past")) {   // round222: the stage reads 32 bytes of uniform slot 0
+            const char *ft2 = "stage ps\ncbuf 0 1\ncbufext 0 32\ntex 0 1 1 2d\nfout 0 float\n";
+            assert(!wonder_shader_refl_parse(ft2, strlen(ft2), &fr, err, sizeof err) && fr.cbuf[0].extent == 32);
+        }
         static struct wonder_host_draw d; memset(&d, 0, sizeof d);
         d.vs = (__bridge_retained void *)function(vs_src); d.fs = (__bridge_retained void *)function(fs_src); d.vr = &vr; d.fr = &fr;
         strcpy(d.vs_key, "1111111111111111"); strcpy(d.fs_key, "2222222222222222");
@@ -178,6 +182,8 @@ int main(int argc, char **argv) {
             d.stream[0].fetch_size = 4 * 16;
         }
         d.ubo[1][0] = (struct wonder_host_span){(__bridge void *)pool, 0x200, 16};
+        if (!strcmp(mode, "ubo_direct")) {   // bound 32: both reads inside, the buffer is bound in place (beyond = 0 in the pool)
+            memset((uint8_t *)pool.contents + 0x210, 0, 16); d.ubo[1][0].size = 32; }
         // 2x2 RGBA8 texture in TX1 block-linear storage: texel (0,1) (sampled at uv 0.25,0.75) is green.
         nvn_texdesc td = {.target = 1, .format = 0x25, .samples = 0, .width = 2, .height = 2, .depth = 1, .levels = 1};
         nvn_texlayout lay; nvn_tex_layout(&td, &lay);
@@ -301,7 +307,7 @@ int main(int argc, char **argv) {
             d.states_set |= 2; d.channel_mask.mask = 0;
             assert(wonder_host_draw(&d) == 0);
         }
-        if (strcmp(mode, "draw") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array") && strcmp(mode, "default_attr")) return 4;   // stop cases must not get here
+        if (strcmp(mode, "draw") && strcmp(mode, "ubo_direct") && strcmp(mode, "ubo_past") && strcmp(mode, "back_facing") && strcmp(mode, "mask") && strcmp(mode, "view") && strcmp(mode, "bc") && strcmp(mode, "blend_color") && strcmp(mode, "fetch_pad") && strcmp(mode, "cube_view") && strcmp(mode, "linear") && strcmp(mode, "array") && strcmp(mode, "default_attr")) return 4;   // stop cases must not get here
         char png[1024]; snprintf(png, sizeof png, "%s/target.png", argc > 2 ? argv[2] : "/tmp");
         char zpng[1024]; snprintf(zpng, sizeof zpng, "%s/depth.png", argc > 2 ? argv[2] : "/tmp");
         if (!strcmp(mode, "draw")) {
@@ -328,6 +334,12 @@ int main(int argc, char **argv) {
         if (!strcmp(mode, "blend_color")) { assert((centre[0] == 127 || centre[0] == 128) && centre[1] == 255 && centre[2] == 255); puts("metal3 encode blend colour OK"); return 0; }
         if (!strcmp(mode, "bc")) { assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0); puts("metal3 encode BC native OK"); return 0; }
         if (!strcmp(mode, "view")) { assert(centre[0] == 255 && centre[1] == 0 && centre[2] == 255); puts("metal3 encode texture view OK"); return 0; }
+        if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past")) {
+            // green texel x tint either way; past the bound 16 bytes the copy reads zeros (the pool holds 1s there)
+            assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && z[32 * 64 + 32] == 0.25f);
+            extern void wonder_host_tbdr_window(char *, size_t); char w[256]; wonder_host_tbdr_window(w, sizeof w);
+            assert(strstr(w, !strcmp(mode, "ubo_direct") ? "ubo_direct=1 ubo_copied=0" : "ubo_direct=0 ubo_copied=1"));
+            printf("metal3 encode %s uniform buffer OK\n", mode); return 0; }
         assert(centre[0] == 0 && (centre[1] == 127 || centre[1] == 128) && centre[2] == 0 && centre[3] == 255);   // green texel x tint
         assert(z[32 * 64 + 32] == 0.25f);
         for (int i = 0; i < 200 && access(png, F_OK); i++) usleep(10000);   // written by the command buffer's completion handler

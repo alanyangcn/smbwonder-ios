@@ -530,7 +530,7 @@ struct draw_encoding {
     MTLCullMode cull; MTLWinding winding; MTLViewport viewport; MTLScissorRect scissor; MTLPrimitiveType primitive; MTLIndexType itype; NSUInteger ib_offset;
 };
 static MTLRenderPassDescriptor *batch_pass; static NSMutableArray *batch_blocks, *batch_buffers; static NSMutableData *batch_reads; static struct draw_copy *batch_copies; static int batch_ncopies, batch_cap;
-static unsigned batch_draws_total, batch_passes_total;
+static unsigned batch_draws_total, batch_passes_total, direct_ubos, copied_ubos;
 // Scratch windows for copies: carved from 4 MiB private buffers, never reused (the command buffer retains each chunk
 // until it completes), instead of one 64 KiB allocation per uniform buffer per draw.
 static id<MTLBuffer> scratch_chunk; static NSUInteger scratch_used;
@@ -691,13 +691,13 @@ void wonder_host_draw_flush_locked(void) { batch_close(); queue_drain(); }
 // HOST_MEMORY window report (host_graphics.m, every 300 presents): planning counters since the last call; WONDER_TBDR=ab
 // switches planning for the next window.
 void wonder_host_tbdr_window(char *out, size_t size) {
-    static struct tbdr_stats last; static unsigned last_drains, last_ops;
+    static struct tbdr_stats last; static unsigned last_drains, last_ops, last_direct, last_copied;
     wonder_host_replay_lock(); tbdr_init();
     struct tbdr_stats s = tbdr_totals;
-    snprintf(out, size, "tbdr=%s drains=%u ops=%u folded_clears=%u dropped_clears=%u dontcare=%u stored=%u", tbdr_active ? "on" : "off",
+    snprintf(out, size, "tbdr=%s drains=%u ops=%u folded_clears=%u dropped_clears=%u dontcare=%u stored=%u ubo_direct=%u ubo_copied=%u", tbdr_active ? "on" : "off",
              queue_drains - last_drains, queue_ops_total - last_ops, s.folded_clears - last.folded_clears, s.dropped_clears - last.dropped_clears,
-             s.dontcare_stores - last.dontcare_stores, s.stores - last.stores);
-    last = s; last_drains = queue_drains; last_ops = queue_ops_total;
+             s.dontcare_stores - last.dontcare_stores, s.stores - last.stores, direct_ubos - last_direct, copied_ubos - last_copied);
+    last = s; last_drains = queue_drains; last_ops = queue_ops_total; last_direct = direct_ubos; last_copied = copied_ubos;
     if (tbdr_mode == 2) tbdr_active = !tbdr_active;
     wonder_host_replay_unlock();
 }
@@ -957,8 +957,13 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
         id<MTLBuffer> src = (__bridge id<MTLBuffer>)u->buffer; NSUInteger n = MIN((NSUInteger)u->size, (NSUInteger)0x10000);
         if (!src || u->offset + n > src.length) unsupported(d, "uniform buffer span outside its pool buffer, slot", slot);
+        // round222: a stage whose reads of this buffer all use literal indices inside the bound size (cbufext) reads
+        // nothing past it, so the game's buffer is bound in place; the copy below (~4000 per world-map frame, 64 KiB
+        // each) only remains for computed indices and reads past the bound size.
+        uint32_t extent = refl[stage]->cbuf[i].extent;
+        if (extent && extent <= n) { ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; direct_ubos++; continue; }
         NSUInteger offset; id<MTLBuffer> window = scratch_window(0x10000, &offset);
-        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, n, 0x10000};
+        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, n, 0x10000}; copied_ubos++;
         ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
     }
     // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).

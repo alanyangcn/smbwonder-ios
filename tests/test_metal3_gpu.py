@@ -48,6 +48,10 @@ class Metal3EncodeTests(unittest.TestCase):
         self.assertIn('tbdr=on',runs['1'][1]); self.assertIn('folded_clears=2 dropped_clears=0 dontcare=1 stored=3',runs['1'][1])
     def test_draw_textured_triangle_with_depth(self):
         p=self.run_case('draw'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode draw OK',p.stdout)
+    def test_uniform_buffer_read_inside_its_bound_size_is_bound_in_place(self):
+        p=self.run_case('ubo_direct'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode ubo_direct uniform buffer OK',p.stdout)
+    def test_uniform_buffer_read_past_its_bound_size_is_copied_with_zeros(self):
+        p=self.run_case('ubo_past'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode ubo_past uniform buffer OK',p.stdout)
     def test_back_facing_triangle_is_culled(self):
         p=self.run_case('back_facing'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('back face culled OK',p.stdout)
     def test_bound_zero_channel_mask_gets_its_own_pipeline(self):
