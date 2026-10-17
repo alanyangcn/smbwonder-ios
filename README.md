@@ -2,7 +2,9 @@
 
 《超级马里奥 惊奇》1.2.0 的原生 iOS 移植研究项目。当前目标为 iPhone 18 Pro（iOS 27），渲染走 Metal 3 / MSL 3.2。
 
-当前进度：游戏在真机上稳定显示启动加载画面与标题主视觉图（round108），尚未进入可玩状态。详见 [STATUS.md](STATUS.md)。
+当前进度：可在 iPhone 18 Pro 上从标题一路玩到各世界关卡，画面、文字、声音、存档、触屏与手柄输入正常；最重的世界地图视角约 60 fps（长时间满载后发热降频）。详见 [STATUS.md](STATUS.md)。
+
+**移植方法论**（从零到可玩的流程、难点与解法，可用于其他游戏 / 平台）：[docs/PORTING-METHODOLOGY.md](docs/PORTING-METHODOLOGY.md)。
 
 **新机器搭建（工具链、导入自己的游戏包、着色器普查迁移）见 [SETUP.md](SETUP.md)。**
 
