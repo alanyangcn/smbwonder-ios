@@ -1209,10 +1209,15 @@ int main(void) {
         unsigned before = released_resources;
         ((void (*)(void *))slot("nvnMemoryPoolFinalize"))(wt_pool);
         assert(forgotten_pool == (const void *)wt_pool);   // GPU textures stored in the pool go with it
-        assert(released_resources == before + 1);
+        assert(released_resources == before);              // its host view outlives it for the grace presents (round210)
         EXPECT_STOP(((int (*)(const void *))slot("nvnMemoryPoolGetFlags"))(wt_pool), "NVN_INVALID_OBJECT");
-        // Its memory no longer resolves; the stop names the finalized pool (round208).
-        { struct wonder_nvn_pool_view v; EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
+        // Within the grace presents its memory still resolves (the GPU reads it after the finalize on the console);
+        // afterwards the view is released and the stop names the finalized pool (round208/210).
+        { struct wonder_nvn_pool_view v; wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v);
+          assert(v.memory == wt_memory + 0x100 && v.size == 0x10);
+          for (int k = 0; k < 3; k++) wonder_nvn_frame_advance();
+          assert(released_resources == before + 1);
+          EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
           assert(strstr(last_stop, "+0x100")); }
     }
     puts("NVN_STRICT_BOOTSTRAP_OK");

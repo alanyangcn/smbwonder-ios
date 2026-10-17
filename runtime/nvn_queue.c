@@ -31,7 +31,7 @@ static struct replay_state state = {.render_enable = 1, .depth_range = {0.0f, 1.
 static _Atomic unsigned frame_draws, frame_index; static _Atomic uint64_t frame_hash = 1469598103934665603ull;
 // Every present advances the frame number the per-frame diagnostics use (WONDER_DRAW_LOG, WONDER_FRAME_DUMP_EVERY);
 // before round153 only WONDER_PRESENT_EVERY advanced it, so frame dumps never fired.
-void wonder_nvn_frame_advance(void) { atomic_fetch_add(&frame_index, 1); }
+void wonder_nvn_frame_advance(void) { atomic_fetch_add(&frame_index, 1); wonder_nvn_reap_pools(); }
 unsigned wonder_nvn_frame_number(void) { return atomic_load(&frame_index); }
 void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash) {
     static unsigned clears_at_last; unsigned c = state.clears;

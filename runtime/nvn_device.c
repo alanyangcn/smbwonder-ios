@@ -308,6 +308,40 @@ const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_
 #define FREED_POOLS 64
 static struct freed_pool { const void *pool; uint64_t lo, hi; char chain[400]; } freed_pools[FREED_POOLS]; static unsigned freed_next;
 void (*wonder_nvn_stop_context)(char *out, size_t size);
+// Finalized plain pools stay resolvable for WONDER_POOL_GRACE_FRAMES presents (round210: a world-map object's destructor,
+// main+0x5c00fc on a loader thread, finalized its 64 KiB pool while a later submit still drew with the 0xf50-byte uniform
+// buffer in it). On the console the GPU runs behind the CPU and reads the app's memory, still in place, after such a
+// finalize; here the replay reads the same memory through the kept host view, which is released once the grace ends.
+#define WONDER_POOL_GRACE_FRAMES 3
+static struct dead_pool { uint8_t *memory; uint64_t size; uint32_t flags; void *host_buffer; uint64_t host_offset; unsigned frame; int used; } dead_pools[32];
+static unsigned stale_reads;
+static void bury_pool_locked(const struct memory_pool *m) {   // with pool_registry_lock held
+    unsigned slot = 0;
+    for (unsigned i = 0; i < 32; i++) { if (!dead_pools[i].used) { slot = i; break; } if (dead_pools[i].frame < dead_pools[slot].frame) slot = i; }
+    if (dead_pools[slot].used && dead_pools[slot].host_buffer) wonder_host_release(dead_pools[slot].host_buffer);   // all slots busy: the oldest goes now
+    dead_pools[slot] = (struct dead_pool){m->memory, m->size, m->flags, m->host_buffer, m->host_offset, wonder_nvn_frame_number(), 1};
+}
+void wonder_nvn_reap_pools(void) {
+    unsigned now = wonder_nvn_frame_number();
+    pthread_mutex_lock(&pool_registry_lock);
+    for (unsigned i = 0; i < 32; i++)
+        if (dead_pools[i].used && now - dead_pools[i].frame >= WONDER_POOL_GRACE_FRAMES) {
+            if (dead_pools[i].host_buffer) wonder_host_release(dead_pools[i].host_buffer);
+            dead_pools[i].used = 0;
+        }
+    pthread_mutex_unlock(&pool_registry_lock);
+}
+static int dead_pool_view(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {   // with pool_registry_lock held
+    for (unsigned i = 0; i < 32; i++) {
+        const struct dead_pool *d = &dead_pools[i]; uint64_t base = (uintptr_t)d->memory;
+        if (!d->used || address < base || address - base >= d->size) continue;
+        uint64_t off = address - base;
+        if (size > d->size - off) return 0;
+        *view = (struct wonder_nvn_pool_view){d->memory + off, size, d->flags, d->host_buffer, d->host_offset + off};
+        return 1;
+    }
+    return 0;
+}
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {
     static __thread struct pool_range last; static __thread uint64_t last_generation;
     const struct memory_pool *pool = NULL;
@@ -318,6 +352,15 @@ void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_
         pool = pool_at(address);
         if (pool) { last = (struct pool_range){(uintptr_t)pool->memory, (uintptr_t)pool->memory + pool->size, pool}; last_generation = generation; }
         pthread_mutex_unlock(&pool_registry_lock);
+    }
+    if (!pool) {
+        pthread_mutex_lock(&pool_registry_lock);
+        int kept = dead_pool_view(address, size, view);
+        pthread_mutex_unlock(&pool_registry_lock);
+        if (kept) {
+            if (stale_reads++ < 16) wonder_nvn_report("NVN_STALE_POOL_READ resource=%#llx size=%#llx (pool finalized within %d presents)", (unsigned long long)address, (unsigned long long)size, WONDER_POOL_GRACE_FRAMES);
+            return;
+        }
     }
     if (!pool) {   // round208: say whether the address belonged to a finalized pool, and where the replay was
         char where[160] = "", freed[600] = "";
@@ -672,11 +715,13 @@ void wonder_nvnMemoryPoolFinalize(void *pool) {
         f->pool = pool; f->lo = (uintptr_t)m->memory; f->hi = (uintptr_t)m->memory + m->size; f->chain[0] = 0;
         extern void (*wonder_nvn_frames_hook)(uint64_t fp, uint64_t lr, char *out, size_t size);
         if (wonder_nvn_frames_hook) wonder_nvn_frames_hook((uint64_t)(uintptr_t)__builtin_frame_address(0), (uint64_t)(uintptr_t)__builtin_return_address(0), f->chain, sizeof f->chain); }
+    int keep = !(m->flags & 0x200);   // plain pools stay readable for the grace frames; virtual reservations go now
+    if (keep) bury_pool_locked(m);
     rebuild_pool_index();
     pthread_mutex_unlock(&pool_registry_lock);
     wonder_host_pool_forget(pool);
     wonder_cmdstore_forget_range((uint64_t)(uintptr_t)m->memory, m->size);   // records of command memory in this pool
-    if (m->host_buffer) wonder_host_release(m->host_buffer);
+    if (m->host_buffer && !keep) wonder_host_release(m->host_buffer);
     if (m->flags & 0x200) wonder_host_unreserve(m->memory, m->size);
     free(m->mappings);
     wonder_nvn_report("NVN_POOL_FINALIZED pool=%p memory=%p size=%#llx flags=%#x", pool, (void *)m->memory, (unsigned long long)m->size, m->flags);
