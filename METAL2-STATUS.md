@@ -70,6 +70,8 @@
     - **已释放内存池宽限（round210–212，已修复）**：调用链确认是世界地图对象析构（main+0x5c00fc，加载线程）先 Finalize 64 KiB 池，之后的提交仍用池内 0xf50 字节统一缓冲；主机上游戏内存仍在，GPU 照读。round210 起普通池 Finalize 后保留零拷贝视图 3 帧，round211 大地图上仍停（超过 3 帧才读）；round212（run DA18DE52，提交 651b8eb）延长到 600 帧、64 槽，报错附带距 Finalize 的帧数。玩家确认玩一阵不再卡。另：Documents/missing-shaders.txt 记录首次遇到的缺失程序与场景（Stage 文件名）。
     - **大地图其余世界显示“？？？”（round215）**：世界名由 UIMapWorldNamePartsScreen（main+0x1d4b938）选择：未开放则用 label "_Hidden"（GrandWorldMapRef WorldName_Hidden “？？？”）。开放条件来自每个世界结构的成员 IsVisitedWorld / IsHeardWorldNameByPrince（事件 Event_SetFlagVisitedWorld / Event_SetFlagHeardWorldNameByPrince，经 main+0x4716b0 置位；GameDataList 的 Struct 项给出“成员名哈希 → 标志哈希”）。tools/save_unlock.py 现把 10 个世界的这 20 个标志置真；手机存档（备份 work/save-backup/20261017-145917）已写入，玩家确认大地图其余世界都显示名字。
     - **未绑定存储缓冲（round213–215）**：大地图上片元程序读未绑定的存储槽 0 → 绑定 64 KiB 全零块（Maxwell 空槽读 0）；计算派发写未绑定槽 0 → 写入单独的 64 KiB 丢弃块（同模拟器的哑缓冲）。玩家确认 round214 后原处不再卡。
+    - **屏幕帧率（round216，40347B6D）**：左上角显示帧率（runtime/fps_meter.c，按半秒窗口统计 present；WONDER_FPS=0 隐藏）。
+    - **启动环境变量漏传（round212–215）**：这几轮 WONDER_ENVS 为空，覆盖了 Documents/launch-env.txt，普查扫描（WONDER_CENSUS_SWEEP=1）和 WONDER_TBDR=0 / WONDER_RT=0 都没开，于是缺失程序 b60a2a91-3b2d04ba 变成停止（玩家看到卡住）。round216 恢复。b60a2a91（vs）是已知读 c[0]+0x610 的两个阶段之一（DrawArrays 4 点，普查已收），c[0]+0x610 的驱动语义未定，仍留在 19 个之外；扫描模式下该绘制跳过。
     - 真机签名：当前安装为个人团队 MFXJ9AKFM5 / local.smbwonder.loaderprobe，轮次需 `WONDER_TEAM=MFXJ9AKFM5 WONDER_BUNDLE=local.smbwonder.loaderprobe WONDER_EXTENDED_VA=0`。
     - 诊断工具：wonder_diag_scan_screen / wonder_diag_scan_u32（LLDB 调用，输出到 Documents/loader-probe.log；该日志 80 MB 封顶）；LLDB 分块读取整个客体堆约 20 MB/s。
 
