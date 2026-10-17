@@ -24,7 +24,7 @@ targets:
     platform: iOS
     sources:
       - path: '${SMBW_REFERENCE}/ios-probe/LoaderProbe.m'
-      - path: '${SMBW_WORK}/build/loader-probe/project/Assets.xcassets'   # app icon: the game's own when imported (tools/build_loader_probe.py)
+      - path: '${SMBW_REFERENCE}/ios-probe/Assets.xcassets'   # app icon: the game's own (control data icon_SimplifiedChinese, scaled to 1024)
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/loader.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/hle.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/entry.S'
