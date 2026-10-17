@@ -56,6 +56,22 @@ def validate_inputs(work, profile):
             raise ValueError('Verification evidence changed or failed: ' + check['path'])
 
 
+def make_asset_catalog(work, destination):
+    """App icon catalog for the Xcode build (project.yml): the game's own icon from its control data
+    (work/game/control-update/icon_<language>.dat, 256x256 JPEG, scaled to 1024 by sips) when imported, otherwise
+    the original drawn icon of ios-probe/Assets.xcassets (tools/make_app_icon.py). Game art stays in work/."""
+    destination = Path(destination)
+    if destination.exists(): shutil.rmtree(destination)
+    shutil.copytree(REPOSITORY / 'ios-probe/Assets.xcassets', destination)
+    control = work / 'game/control-update'
+    for language in ('SimplifiedChinese', 'AmericanEnglish', 'Japanese'):
+        icon = control / f'icon_{language}.dat'
+        if icon.exists():
+            target = destination / 'AppIcon.appiconset/AppIcon.png'
+            subprocess.run(['sips', '-s', 'format', 'png', '-z', '1024', '1024', str(icon), '--out', str(target)], check=True, capture_output=True)
+            return f'game icon ({language})'
+    return 'drawn icon'
+
 def copy_shaders(source, destination):
     """Copy a tools/wonder_shader_build.py output into the app (dm/shaders): manifest.json plus each key's .metal and .refl,
     every file checked against the manifest's sha256. No build = no shaders (draws then stop with NVN_SHADER_MISSING)."""
@@ -144,6 +160,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
     if xcodegen:
         project = output / 'project'
         project.mkdir(exist_ok=True)
+        print('app icon:', make_asset_catalog(work, project / 'Assets.xcassets'))
         xcode_info = dict(info, CFBundleExecutable='$(EXECUTABLE_NAME)')
         with (project / 'ProbeInfo.plist').open('wb') as stream:
             plistlib.dump(xcode_info, stream)

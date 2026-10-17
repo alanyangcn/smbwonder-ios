@@ -24,6 +24,7 @@ targets:
     platform: iOS
     sources:
       - path: '${SMBW_REFERENCE}/ios-probe/LoaderProbe.m'
+      - path: '${SMBW_WORK}/build/loader-probe/project/Assets.xcassets'   # app icon: the game's own when imported (tools/build_loader_probe.py)
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/loader.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/hle.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/host/entry.S'
@@ -109,5 +110,6 @@ targets:
       base:
         INFOPLIST_FILE: '${SMBW_WORK}/build/loader-probe/project/ProbeInfo.plist'
         GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: '1,2'
     scheme: {}
