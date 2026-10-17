@@ -687,19 +687,26 @@ static void queue_push(WonderQueuedOp *q) {
     [queued addObject:q];
     if (queued.count >= 1024) queue_drain();   // bounded lookahead: the rest of the queue counts as unknown
 }
-static void batch_close(void) {
+// Why batches close (round234 diagnostic, HOST_MEMORY): 0 other targets, 1 samples a batch attachment, 2 samples its
+// own attachment, 3 writes storage, 4 clear, 5 queued work (fill / update / copy), 6 flush (compute, commit, readback).
+enum { CLOSE_TARGETS, CLOSE_SAMPLED, CLOSE_SELF, CLOSE_STORAGE, CLOSE_CLEAR, CLOSE_WORK, CLOSE_FLUSH, CLOSE_REASONS };
+static unsigned close_counts[CLOSE_REASONS], close_single[CLOSE_REASONS], copy_dynamic, copy_past, copy_stream;
+static void batch_close_for(int reason);
+static void batch_close(void) { batch_close_for(CLOSE_FLUSH); }
+static void batch_close_for(int reason) {
     if (!batch_pass) return;
+    close_counts[reason]++; if (batch_blocks.count == 1) close_single[reason]++;
     WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_PASS; q->pass = batch_pass; q->blocks = [batch_blocks copy]; q->buffers = [batch_buffers copy];
     q->copies = batch_ncopies ? [NSData dataWithBytes:batch_copies length:sizeof *batch_copies * (size_t)batch_ncopies] : nil; q->reads = [batch_reads copy];
     batch_pass = nil; [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0; batch_reads.length = 0;
     queue_push(q);
 }
 void wonder_host_draw_queue_clear_locked(void *render_pass) {
-    batch_close();
+    batch_close_for(CLOSE_CLEAR);
     WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_CLEAR; q->pass = (__bridge MTLRenderPassDescriptor *)render_pass; queue_push(q);
 }
 void wonder_host_draw_queue_work_locked(void (^work)(id<MTLCommandBuffer>)) {
-    batch_close();
+    batch_close_for(CLOSE_WORK);
     WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_NEUTRAL; q->work = work; queue_push(q);
 }
 static void add_att(struct tbdr_op *o, __unsafe_unretained MTLRenderPassAttachmentDescriptor **ad, MTLRenderPassAttachmentDescriptor *a, int plane) {
@@ -772,12 +779,21 @@ void wonder_host_draw_flush_locked(void) { batch_close(); queue_drain(); }
 // switches planning for the next window.
 void wonder_host_tbdr_window(char *out, size_t size) {
     static struct tbdr_stats last; static unsigned last_drains, last_ops, last_direct, last_copied;
+    static unsigned last_close[CLOSE_REASONS], last_single[CLOSE_REASONS], last_dyn, last_past, last_stream;
     wonder_host_replay_lock(); tbdr_init();
     struct tbdr_stats s = tbdr_totals;
     snprintf(out, size, "tbdr=%s drains=%u ops=%u folded_clears=%u dropped_clears=%u dontcare=%u stored=%u ubo_direct=%u ubo_copied=%u", tbdr_active ? "on" : "off",
              queue_drains - last_drains, queue_ops_total - last_ops, s.folded_clears - last.folded_clears, s.dropped_clears - last.dropped_clears,
              s.dontcare_stores - last.dontcare_stores, s.stores - last.stores, direct_ubos - last_direct, copied_ubos - last_copied);
     last = s; last_drains = queue_drains; last_ops = queue_ops_total; last_direct = direct_ubos; last_copied = copied_ubos;
+    size_t at = strlen(out);   // round234: pass closes by reason (single-draw ones in brackets) and copies by reason
+    at += (size_t)snprintf(out + at, size > at ? size - at : 0, " closes targets=%u[%u] sampled=%u[%u] self=%u[%u] storage=%u[%u] clear=%u[%u] work=%u[%u] flush=%u[%u] copies dynamic=%u past=%u stream=%u",
+        close_counts[0] - last_close[0], close_single[0] - last_single[0], close_counts[1] - last_close[1], close_single[1] - last_single[1],
+        close_counts[2] - last_close[2], close_single[2] - last_single[2], close_counts[3] - last_close[3], close_single[3] - last_single[3],
+        close_counts[4] - last_close[4], close_single[4] - last_single[4], close_counts[5] - last_close[5], close_single[5] - last_single[5],
+        close_counts[6] - last_close[6], close_single[6] - last_single[6], copy_dynamic - last_dyn, copy_past - last_past, copy_stream - last_stream);
+    memcpy(last_close, close_counts, sizeof last_close); memcpy(last_single, close_single, sizeof last_single);
+    last_dyn = copy_dynamic; last_past = copy_past; last_stream = copy_stream;
     if (tbdr_mode == 2) tbdr_active = !tbdr_active;
     wonder_host_replay_unlock();
 }
@@ -1081,6 +1097,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         uint32_t extent = refl[stage]->cbuf[i].extent;
         if (extent && extent <= n) { ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; direct_ubos++; continue; }
         // The window covers what the stage reads: its extent when known (round226), else the whole 64 KiB a c[n] declares.
+        if (extent) copy_past++; else copy_dynamic++;
         NSUInteger span = extent ? (NSUInteger)extent : 0x10000, offset; id<MTLBuffer> window = scratch_window(span, &offset);
         copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; copied_ubos++;
         ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
@@ -1092,7 +1109,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (!src || d->stream[s].span.offset + d->stream[s].span.size > src.length) unsupported(d, "vertex stream span outside its pool buffer, stream", s);
         NSUInteger n = (NSUInteger)((d->stream[s].fetch_size + 15) & ~15ull), offset;
         id<MTLBuffer> window = scratch_window(n, &offset);
-        copies[ncopies++] = (struct draw_copy){src, d->stream[s].span.offset, window, offset, d->stream[s].span.size, n};
+        copies[ncopies++] = (struct draw_copy){src, d->stream[s].span.offset, window, offset, d->stream[s].span.size, n}; copy_stream++;
         stream_copies[s] = window; stream_offsets[s] = offset;
     }
     // Everything the encoder needs, by value: the block runs at flush time, after `d` was reused (blocks cannot capture
@@ -1177,15 +1194,15 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     int writes = 0;
     for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->nsbuf; i++) writes |= refl[stage]->sbuf[i].write;
     wonder_host_replay_lock();
-    if (draw_batch_open() && (!draw_batch_same_pass(pass) || draw_batch_attachment_sampled(textures[0], refl[0]->ntex) || draw_batch_attachment_sampled(textures[1], refl[1]->ntex)))
-        batch_close();
+    if (draw_batch_open() && !draw_batch_same_pass(pass)) batch_close_for(CLOSE_TARGETS);
+    else if (draw_batch_open() && (draw_batch_attachment_sampled(textures[0], refl[0]->ntex) || draw_batch_attachment_sampled(textures[1], refl[1]->ntex))) batch_close_for(CLOSE_SAMPLED);
     if (!draw_batch_open() && (draw_batch_attachment_sampled_by(pass, textures[0], refl[0]->ntex) || draw_batch_attachment_sampled_by(pass, textures[1], refl[1]->ntex))) {
         // The draw samples one of its own attachments: a pass of its own, as before batching.
-        draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex); batch_close();
+        draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex); batch_close_for(CLOSE_SELF);
     } else {
         if (!draw_batch_open()) draw_batch_begin(pass);
         draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex);
-        if (writes) batch_close();
+        if (writes) batch_close_for(CLOSE_STORAGE);
     }
     wonder_host_replay_unlock();
     static int draw_sync = -1; if (draw_sync < 0) draw_sync = getenv("WONDER_DRAW_SYNC") != NULL;
