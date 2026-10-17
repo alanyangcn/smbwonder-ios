@@ -120,6 +120,17 @@ class CensusBuild(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): cls.tmp.cleanup()
     def refl(self, stage): return (self.out / f"{self.keys[stage]}.refl").read_text().splitlines()
+    def test_cached_translation_equals_full_build(self):
+        # Round197: translator outputs are cached by job content; a second build from the cache writes the same files.
+        with tempfile.TemporaryDirectory() as cache, tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            old = os.environ.get('WONDER_XLATE_CACHE'); os.environ['WONDER_XLATE_CACHE'] = cache
+            try:
+                build.build([CENSUS], a); self.assertTrue(any(Path(cache).glob('*.spv')))
+                build.build([CENSUS], b)
+            finally:
+                if old is None: os.environ.pop('WONDER_XLATE_CACHE', None)
+                else: os.environ['WONDER_XLATE_CACHE'] = old
+            self.assertEqual(json.loads((Path(a) / 'manifest.json').read_text())['keys'], json.loads((Path(b) / 'manifest.json').read_text())['keys'])
     def test_keys_match_census(self):
         self.assertEqual(set(self.manifest['keys']), set(self.keys.values()))
         for name, key in self.keys.items():

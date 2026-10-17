@@ -14,7 +14,7 @@ slot (r + 3) << 20); texture slot r handle = c[2][0x20 + 8r] (BindTexture sdk+0x
              c[0][0x210 + 16r]); img <r> <texture> <type> r|w|rw (image slot r = handle at c[2][0x120 + 8r]).
 Usage: wonder_shader_build.py <census dir>... --out <dir>
 """
-import argparse, hashlib, json, os, re, subprocess, tempfile
+import argparse, hashlib, json, os, re, shutil, subprocess, tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -346,17 +346,37 @@ def build(census_dirs, out):
                     early_failed[key] = {'stage': STAGES.get(entry['stage'], str(entry['stage'])), 'reason': str(error)[:300], 'census_sha256': sha(raw)}
                     continue
                 jobs.append(job); sources[key] = (census, entry, sha(raw))
-        (tmp / 'jobs.json').write_text(json.dumps(jobs))
-        subprocess.run([str(XLATE), str(tmp / 'jobs.json'), str(tmp)], env=env)   # failures are retried / reported per key
-        retry = [dict(j, debug=True) for j in jobs if not (tmp / f"{j['key']}.spv").exists()]
+        # Translator outputs are cached by job content (round197: a census round adds a handful of stages to ~9000): the
+        # job without its temp code path, the code bytes and the translator source hash. Everything after the translator
+        # runs on every stage as before, so a cached build equals a full one.
+        translator_sha = subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip()
+        cache = Path(os.environ.get('WONDER_XLATE_CACHE', ROOT / 'work/build/xlate-cache')); cache.mkdir(parents=True, exist_ok=True)
+        def job_hash(j):
+            return sha(json.dumps({k: v for k, v in j.items() if k != 'code'}, sort_keys=True).encode() + Path(j['code']).read_bytes() + translator_sha.encode())
+        todo = []
+        for j in jobs:
+            h = cache / job_hash(j)
+            if (h.with_suffix('.spv')).exists() and (h.with_suffix('.res.json')).exists():
+                for suffix in ('.spv', '.res.json'): shutil.copyfile(h.with_suffix(suffix), tmp / f"{j['key']}{suffix}")
+                if (h.with_suffix('.debug')).exists(): j['debug'] = True
+            else: todo.append(j)
+        if todo:
+            (tmp / 'jobs.json').write_text(json.dumps(todo))
+            subprocess.run([str(XLATE), str(tmp / 'jobs.json'), str(tmp)], env=env)   # failures are retried / reported per key
+        retry = [dict(j, debug=True) for j in todo if not (tmp / f"{j['key']}.spv").exists()]
         if retry:   # DebugMode skips Ryujinx's AST optimizer (round77: d51f7f835e14a83b InvalidCastException in StructuredIr)
             (tmp / 'retry.json').write_text(json.dumps(retry))
             subprocess.run([str(XLATE), str(tmp / 'retry.json'), str(tmp)], env=env)
             for r in retry:
                 for j in jobs:
                     if j['key'] == r['key']: j['debug'] = True
+        for j in todo:
+            if (tmp / f"{j['key']}.spv").exists() and (tmp / f"{j['key']}.res.json").exists():
+                h = cache / job_hash(j)   # every job already runs in DebugMode (job_for), so a retry does not change its hash
+                for suffix in ('.spv', '.res.json'): shutil.copyfile(tmp / f"{j['key']}{suffix}", h.with_suffix(suffix))
+                if any(r['key'] == j['key'] for r in retry): h.with_suffix('.debug').write_text('retried in DebugMode\n')
         manifest = {'scope': 'Wonder draw-census shader build (MSL 3.2, discrete bindings)', 'spirv_cross_command': [str(CROSS), '<key>.spv', *CROSS_FLAGS],
-                    'translator_source_sha': subprocess.run([str(XLATE), '--source-sha'], check=True, capture_output=True, text=True, env=env).stdout.strip(),
+                    'translator_source_sha': translator_sha,
                     'keys': {}}
         manifest['failed'] = dict(early_failed); built = {}
         for job in jobs:
