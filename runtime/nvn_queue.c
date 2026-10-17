@@ -39,19 +39,21 @@ void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash)
 }
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
-// Report writes recorded in this submit that the GPU may not have executed yet (report_shadow.h): conditional renders
-// read them from here instead of finishing the GPU. WONDER_VERIFY_CONDITIONAL=1 finishes anyway and counts mismatches.
-static struct wonder_report_shadow report_shadow;
+// Pending GPU writes (report_shadow.h, declared above make_cpu_visible): conditional renders read their records without
+// finishing the GPU when no unknown write touches them. WONDER_VERIFY_CONDITIONAL=1 finishes anyway and counts mismatches.
 static unsigned conditional_shadowed, conditional_mismatches;
 // UpdateUniformBuffer ranges recorded since the replay last finished the GPU (GPU-ordered writes the CPU cannot see yet,
 // including earlier submits still pending). Reading such memory on the CPU first finishes the work recorded so far.
 static struct { uint64_t address, size; } ubo_updates[64]; static unsigned ubo_update_count, ubo_update_overflow;
+static struct wonder_report_shadow report_shadow;
+static void replay_finish(void) {   // GPU done: every recorded write has landed
+    wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; wonder_report_shadow_clear(&report_shadow);
+}
 static void make_cpu_visible(uint64_t address, uint64_t size) {
     int overlap = ubo_update_overflow;
     for (unsigned i = 0; !overlap && i < ubo_update_count; i++) overlap = address < ubo_updates[i].address + ubo_updates[i].size && ubo_updates[i].address < address + size;
     if (!overlap) return;
-    wonder_host_finish();
-    ubo_update_count = 0; ubo_update_overflow = 0;
+    replay_finish();
 }
 // Rasterizer state the Metal path cannot honour except at its NVN defaults (refused at draw time when changed).
 static struct { int rasterizer_discard, depth_clamp, restart, restart_index; uint32_t sample_mask; float line_width;
@@ -346,6 +348,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
             if (!draw_state.storage_buffer[stage][slot].address || !draw_state.storage_buffer[stage][slot].size) {
                 snprintf(why, sizeof why, "unbound storage buffer stage %d slot %d", stage, slot); replay_stop(opcode, why); }
             d.sbuf[stage][slot] = span_of(opcode, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
+            if (r->sbuf[i].write) wonder_report_shadow_unknown(&report_shadow, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
         }
         for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, stage, &r->tex[i], &d, stage);
     }
@@ -575,6 +578,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
         if (!draw_state.storage_buffer[5][slot].address || !draw_state.storage_buffer[5][slot].size) {
             snprintf(why, sizeof why, "unbound storage buffer compute slot %d", slot); replay_stop(opcode, why); }
         x.sbuf[slot] = span_of(opcode, draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
+        if (r->sbuf[i].write) wonder_report_shadow_unknown(&report_shadow, draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
     }
     memcpy(x.res.vs_key, x.key, sizeof x.key); memcpy(x.res.fs_key, "-", 2);
     for (int i = 0; i < r->ntex; i++) resolve_texture(opcode, 5, &r->tex[i], &x.res, 0);
@@ -666,14 +670,15 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         // Records whose pending writes are report values of this submit are known without the GPU (round199: the
         // finish per conditional, ~50 per frame, serialised CPU and GPU).
         static int verify = -1; if (verify < 0) { const char *e = getenv("WONDER_VERIFY_CONDITIONAL"); verify = e && *e == '1'; }
-        uint32_t la, lb; int ka = wonder_report_shadow_lookup(&report_shadow, c->a[1], &la), kb = wonder_report_shadow_lookup(&report_shadow, c->a[1] + 16, &lb);
-        int shadowed = ka == 1 && kb == 1 && wonder_report_shadow_lookup(&report_shadow, c->a[1] + 4, &(uint32_t){0}) == 0 &&
-                       wonder_report_shadow_lookup(&report_shadow, c->a[1] + 20, &(uint32_t){0}) == 0;
-        if (!shadowed || verify) { wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; }
+        static const unsigned words[4] = {0, 4, 16, 20}; uint32_t known[4]; int kind[4], shadowed = 1;
+        for (int w = 0; w < 4; w++) { kind[w] = wonder_report_shadow_lookup(&report_shadow, c->a[1] + words[w], &known[w]); if (kind[w] < 0) shadowed = 0; }
+        if (!shadowed || verify) replay_finish();
         struct wonder_nvn_pool_view v; wonder_nvn_address_span(c->a[1], 32, &v);
         uint64_t a, b; memcpy(&a, v.memory, 8); memcpy(&b, v.memory + 16, 8);
         if (shadowed) {
-            uint64_t sa = (a & ~0xffffffffull) | la, sb = (b & ~0xffffffffull) | lb;   // high words: no pending write
+            uint32_t m[4]; memcpy(&m[0], &a, 4); memcpy(&m[1], (uint8_t *)&a + 4, 4); memcpy(&m[2], &b, 4); memcpy(&m[3], (uint8_t *)&b + 4, 4);
+            for (int w = 0; w < 4; w++) if (kind[w] == 1) m[w] = known[w];   // pending value writes; the rest is current in memory
+            uint64_t sa = (uint64_t)m[1] << 32 | m[0], sb = (uint64_t)m[3] << 32 | m[2];
             if (verify && (sa != a || sb != b) && conditional_mismatches++ < 16)
                 wonder_nvn_report("NVN_CONDITIONAL_SHADOW_MISMATCH address=%#llx shadow=%llu,%llu memory=%llu,%llu (submit %u)", (unsigned long long)c->a[1],
                                   (unsigned long long)sa, (unsigned long long)sb, (unsigned long long)a, (unsigned long long)b, state.submits);
@@ -732,11 +737,13 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         if (value != b * 0x01010101u) replay_stop(opcode, "non-byte-repeating fill value needs a compute fill");
         void *buffer; size_t offset; host_span(c->a[0], c->a[1], opcode, &buffer, &offset);
         if (wonder_host_fill_buffer(buffer, offset, (size_t)c->a[1], b)) replay_stop(opcode, "host fill failed");
+        wonder_report_shadow_unknown(&report_shadow, c->a[0], c->a[1]);
         break;
     }
     case WONDER_NVN_CMD_UPDATE_UNIFORM_BUFFER: {
         uint64_t address = c->a[0] + c->a[2]; size_t bytes = c->blob_size;
         if (ubo_update_count < 64) { ubo_updates[ubo_update_count].address = address; ubo_updates[ubo_update_count++].size = bytes; } else ubo_update_overflow = 1;
+        if (bytes) wonder_report_shadow_unknown(&report_shadow, address, bytes);
         if (!bytes) break;
         void *buffer; size_t offset; host_span(address, bytes, opcode, &buffer, &offset);
         if (wonder_host_write_buffer(buffer, offset, blob, bytes)) replay_stop(opcode, "host buffer update failed");
@@ -883,7 +890,7 @@ static void submit_on_replay_stack(void *arg) {
     char gpu_error[256];
     if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
         wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);
-    state.submits++; replay_queue = "main"; wonder_report_shadow_clear(&report_shadow);
+    state.submits++; replay_queue = "main";
     unsigned before = state.commands, clears = state.clears;
     for (int i = 0; i < count; i++) {
         if (!wonder_nvn_command_handle_valid(handles[i]))

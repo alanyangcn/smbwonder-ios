@@ -1,10 +1,11 @@
 #pragma once
-// Pending report writes of the replay (round199): ReportValue commands write a constant 32-bit value at their GPU
-// position. A conditional render compares report records the same command stream wrote earlier; instead of finishing
-// the GPU to read them back (one CPU/GPU round trip per conditional, ~50 per frame in a course), the replay keeps what
-// each pending write will store. Writes whose value is not known in advance (timestamps) mark their range unknown.
+// GPU writes to memory the replay recorded since it last finished the GPU (round199/200): ReportValue stores a constant
+// 32-bit value; timestamps, buffer clears, uniform updates and shader storage writes store bytes the CPU does not track
+// (unknown). A conditional render (one CPU/GPU round trip per conditional, ~50 per frame in a course, when it always
+// finished the GPU) reads its records from memory when no pending write touches them, from here when only value
+// writes do, and finishes the GPU otherwise. Cleared only after the GPU was finished.
 #include <stdint.h>
-#define WONDER_REPORT_SHADOW_SLOTS 512
+#define WONDER_REPORT_SHADOW_SLOTS 4096
 struct wonder_report_shadow {
     unsigned count; int overflow;
     struct { uint64_t address, size; uint32_t value; int known; } entry[WONDER_REPORT_SHADOW_SLOTS];
