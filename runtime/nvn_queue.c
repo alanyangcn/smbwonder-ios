@@ -180,13 +180,23 @@ static int draw_log_frame(unsigned f) {
     if (draw_log_first < 0) { const char *e = getenv("WONDER_DRAW_LOG"); draw_log_first = 0; draw_log_last = -1; if (e) sscanf(e, "%d-%d", &draw_log_first, &draw_log_last); }
     return (int)f >= draw_log_first && (int)f <= draw_log_last;
 }
-struct report { uint64_t address; uint32_t value; int timestamp; };
+// GPU timestamps (round219): the time the replay reaches the report, divided by 256 -- the "fast GPU time" of Ryujinx
+// (GraphicsConfig.FastGpuTime) and yuzu. Wonder times its GPU work with these; host completion times jumped with every
+// GPU round trip, the measured GPU time swung and the world map's quality/resolution flipped every few frames (the
+// flicker of rounds 203-218; constant timestamps, WONDER_DIAG_FREEZE_TS, stopped it). Known at replay time, the whole
+// record is a known value for the conditional-render shadow. Monotonic; only differences are meaningful (the game never
+// compares them with a CPU clock: nvnDeviceGetCurrentTimestamp* is not imported).
+#define WONDER_GPU_TIME_DIVISOR 256
+static uint64_t gpu_timestamp_ns(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec) / WONDER_GPU_TIME_DIVISOR;
+}
+struct report { uint64_t address; uint32_t value; int timestamp; uint64_t time; };
 static void write_report(void *arg) {
     struct report *r = arg; struct wonder_nvn_pool_view view;
     wonder_nvn_address_span(r->address, r->timestamp ? 16 : 4, &view);
     if (r->timestamp) {
-        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
-        uint64_t data[2] = {0, (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec};   // NVNcounterData {counter, timestamp ns}
+        uint64_t data[2] = {0, r->time};   // NVNcounterData {counter, timestamp}
         {   // Diagnostic (WONDER_DIAG_FREEZE_TS=1): every GPU timestamp reads the same value, so measured GPU time is 0
             // (round185: does the game's dynamic resolution / quality drop the course hedges' colour passes?)
             static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DIAG_FREEZE_TS"); on = e && *e == '1'; }
@@ -723,10 +733,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         // Records no untracked GPU write touches are read without finishing the GPU (round199: a finish per conditional,
         // ~50 per frame, serialised the game, the replay and the GPU). Pending writes are tracked by the host memory they
         // land in (round203: tracked by GPU address, a virtual-pool alias went unseen and the world map flickered).
-        // WONDER_FAST_CONDITIONAL: 0 always finishes (default), 1 fast; WONDER_VERIFY_CONDITIONAL=1 with it also finishes
+        // WONDER_FAST_CONDITIONAL: 1 fast (default since round219, the flicker was the timestamps), 0 always finishes; WONDER_VERIFY_CONDITIONAL=1 with it also finishes
         // after every 8th fast decision and logs a mismatch with the record's pool.
         static int fast = -1, verify = 0;
-        if (fast < 0) { const char *f = getenv("WONDER_FAST_CONDITIONAL"), *e = getenv("WONDER_VERIFY_CONDITIONAL"); fast = f && *f == '1'; verify = e && *e == '1'; }
+        if (fast < 0) { const char *f = getenv("WONDER_FAST_CONDITIONAL"), *e = getenv("WONDER_VERIFY_CONDITIONAL"); fast = !(f && *f == '0'); verify = e && *e == '1'; }
         static const unsigned words[4] = {0, 4, 16, 20}; uint32_t known[4], m[4]; int kind[4], shadowed = fast; const uint8_t *host[4];
         for (int w = 0; w < 4; w++) {
             struct wonder_nvn_pool_view wv; wonder_nvn_address_span(c->a[1] + words[w], 4, &wv); host[w] = wv.memory;
@@ -831,10 +841,10 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         }
         struct report *r = malloc(sizeof *r);
         if (!r) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY report");
-        *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp};
-        // A timestamp report stores {counter 0, timestamp} (write_report): its counter half is a known 0 (round218: every
-        // conditional render that still finished the GPU on the world map read that half); only the time is unknown.
-        if (timestamp) { pending_value(c->a[1], 0); pending_value(c->a[1] + 4, 0); pending_unknown(c->a[1] + 8, 8, PENDING_TIMESTAMP); } else pending_value(c->a[1], (uint32_t)c->a[0]);
+        *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp, timestamp ? gpu_timestamp_ns() : 0};
+        // A timestamp report stores {counter 0, time} (write_report), all known now (round218: every conditional render that
+        // still finished the GPU on the world map read a timestamp record's counter half).
+        if (timestamp) { pending_value(c->a[1], 0); pending_value(c->a[1] + 4, 0); pending_value(c->a[1] + 8, (uint32_t)r->time); pending_value(c->a[1] + 12, (uint32_t)(r->time >> 32)); } else pending_value(c->a[1], (uint32_t)c->a[0]);
         wonder_host_after_gpu(write_report, r);
         break;
     }

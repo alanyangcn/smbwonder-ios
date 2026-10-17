@@ -10,6 +10,7 @@
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 #include <string.h>
 #include <stdlib.h>
 #include <CommonCrypto/CommonDigest.h>
@@ -773,6 +774,9 @@ int main(void) {
         ((void (*)(void *, void *, int, int))slot("nvnQueueFenceSync"))(queue, fence_sync, 0, 0);
         assert(sync_wait(fence_sync, UINT64_MAX) == 0 && report[0] == 0xabcd && stamp[0] == 0 && stamp[1] != 7);
         assert(stamp_top[0] == 0 && stamp_top[1] != 7 && stamp_top[1] >= stamp[1]);
+        {   // round219: replay time / 256 ("fast GPU time"), monotonic
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); uint64_t now = (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+            assert(stamp[1] <= now / 256 && stamp[1] > now / 256 - 10000000000ull / 256); }
         ((void (*)(void *))slot("nvnQueueFlush"))(queue); ((void (*)(void *))slot("nvnQueueFinish"))(queue);
         // Present returns the texture to the window; the next acquire can reuse it.
         void (*present)(void *, void *, int) = slot("nvnQueuePresentTexture");
