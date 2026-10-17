@@ -30,7 +30,7 @@
 8. SDK_STAGE_OK _init_libc2
 9. SDK_INIT_COMPLETE
 
-最终复验的日志路径、代码哈希与结果见 sdk-device-result.json。早期原始失败日志保留在外部工作区：第一次为未实现的 ConnectToNamedPort（SVC 0x1f）；另一次直接打开旧版时出现 1 GiB 地址预留 ENOMEM，已加入资源回退，具体回退档位是否在真机命中以最终日志为准。
+最终复验的日志路径、代码哈希与结果见 evidence/sdk-device-result.json。早期原始失败日志保留在外部工作区：第一次为未实现的 ConnectToNamedPort（SVC 0x1f）；另一次直接打开旧版时出现 1 GiB 地址预留 ENOMEM，已加入资源回退，具体回退档位是否在真机命中以最终日志为准。
 
 ## 尚未验收
 

@@ -143,7 +143,7 @@
 
 ## 本轮接续审查与修复
 
-详见 [审查记录](REVIEW-2026-10-15.md)。保留其他会话的工作，修复了目标 ABI、边界校验、并发映射和线程退出问题：
+详见 [审查记录](docs/history/REVIEW-2026-10-15.md)。保留其他会话的工作，修复了目标 ABI、边界校验、并发映射和线程退出问题：
 
 - CPU_NO_ACCESS 物理池的刷新误拒绝：按目标 SDK 的 CPU_CACHED 分支修正。
 - TextureView 从错误的 40 字节改为目标 SDK 的 16 字节真实布局，避免覆盖相邻 copyRegion。
@@ -181,4 +181,4 @@ round23 启动时 debugger=1；round22 启动时检测为 debugger=0，但同样
 4. 真实游戏首帧、多个场景、输入、音频、存档与独立冷启动验收。
 5. DeviceGetInteger 的 D2R/Tegra 配置尚未逐项验证，StorageClass 仍是宿主类别；不能当作完整 NVN 55 或宿主硬件能力声明。
 
-渲染层设计见 [渲染计划](RENDER-PLAN.md)。
+渲染层设计见 [渲染计划](docs/RENDER-PLAN.md)。

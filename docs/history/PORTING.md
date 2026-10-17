@@ -1,12 +1,12 @@
-> 最新进度见 [STATUS.md](STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
+> 最新进度见 [STATUS.md](../../STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
 
 > 最新持续推进记录见 [ADVANCE-STATUS.md](ADVANCE-STATUS.md)：已越过核心掩码阻塞并在真机读取真实 RomFS；下文保留此前冷启动验证记录。
 
 # Super Mario Bros. Wonder → iOS
 
-**最新进度：无调试器冷启动、独立 1 MiB 主线程、SDK 和两个模块 DT_INIT 均已通过，并在 nnMain 中执行真实接口调用。** 当前停在未实现的 SetThreadCoreMask（SVC 0x0f），界面显示 BOOT_BLOCKED；游戏完整启动及 RomFS/图形等后续接口未完成。详见 [BOOT-STATUS.md](BOOT-STATUS.md) 和 [boot-device-result.json](boot-device-result.json)。25 项宿主回归测试通过。
+**最新进度：无调试器冷启动、独立 1 MiB 主线程、SDK 和两个模块 DT_INIT 均已通过，并在 nnMain 中执行真实接口调用。** 当前停在未实现的 SetThreadCoreMask（SVC 0x0f），界面显示 BOOT_BLOCKED；游戏完整启动及 RomFS/图形等后续接口未完成。详见 [BOOT-STATUS.md](BOOT-STATUS.md) 和 [boot-device-result.json](evidence/boot-device-result.json)。25 项宿主回归测试通过。
 
-**上一阶段记录：SDK 初始化链已在 FlyMe 上通过（使用宿主服务初始化后端）。** 最终版真机日志到达 `SDK_INIT_COMPLETE`，20 项宿主回归测试通过；全局构造函数与 nnMain 尚未执行。详细范围见 [SDK-STATUS.md](SDK-STATUS.md)，证据和构建哈希见 [sdk-device-result.json](sdk-device-result.json)。下文保留较早阶段记录，不代表最新状态仍停在单条 RET。
+**上一阶段记录：SDK 初始化链已在 FlyMe 上通过（使用宿主服务初始化后端）。** 最终版真机日志到达 `SDK_INIT_COMPLETE`，20 项宿主回归测试通过；全局构造函数与 nnMain 尚未执行。详细范围见 [SDK-STATUS.md](SDK-STATUS.md)，证据和构建哈希见 [sdk-device-result.json](evidence/sdk-device-result.json)。下文保留较早阶段记录，不代表最新状态仍停在单条 RET。
 
 目标：以 D2R Mobile 的离线改写、Horizon 宿主、NVN→Metal 和签名映射方法，实现用户本地游戏在 iOS 上原生运行。最终目标由用户报告为 iPhone 18 Pro / iOS 27，尚未连接验证；当前使用已连接的 FlyMe（iPhone 8 Plus，实测 iOS 16.7.16）调试 CPU 与装载。参考图形后端需要 A14/M1，不能在 A11 上验收完整渲染。
 
@@ -14,7 +14,7 @@
 
 ## 已核验的输入与环境
 
-- 输入：用户提供的本体与更新 NSZ。原始包的 SHA-256、PFS0 条目及更新内置 CNMT XML 元数据见 `input-inventory.json`。
+- 输入：用户提供的本体与更新 NSZ。原始包的 SHA-256、PFS0 条目及更新内置 CNMT XML 元数据见 `evidence/input-inventory.json`。
 - Application ID：`010015100B514000`；Patch ID：`010015100B514800`；更新 CNMT 版本整数 `262144`。Control/NACP 实际显示版本已确认是 **1.2.0**。
 - 工作区：`/Users/yanglipeng/funny/smbwonder-ios/work`。游戏派生文件、工具、缓存和私有密钥配置仅放此目录，不提交到参考仓库。
 - 原始游戏文件和用户提供的密钥文件不修改；不输出密钥值。
@@ -58,7 +58,7 @@
 - 更新合并完成：`game/update-262144-nstool/0` 为 ExeFS，`1` 为合并 RomFS（19,034 个文件）。游戏文件保存在外部工作区。
 - `main` / `sdk` 离线改写均未匹配 D2R CUTS、OBS 或 PARAMS。两模块独立 LLVM 结构检查通过；Unicorn 等价检查合计 34,546 个站点，600 个变异样本均被检出。宿主门只做结构检查，这些结果不证明 SVC 或并发语义正确。
 - 修复了验证器把整个 TSD 映射内的客体写入误删的问题，现在只排除改写器的确切 8 字节内部槽写入；保留了复现回归用例。Xcode 缺少 llvm-objcopy 时使用 clang 包装 Mach-O 后独立反汇编，未放松结构规则。
-- `verified-inputs.json` 固定原 NSO、改写映像、布局/门元数据及四份通过日志的 SHA-256；`tools/build_loader_probe.py` 在构建前逐项验证，不接受换版产物。
+- `verified-inputs.json`（仓库根） 固定原 NSO、改写映像、布局/门元数据及四份通过日志的 SHA-256；`tools/build_loader_probe.py` 在构建前逐项验证，不接受换版产物。
 - `ios-probe/LoaderProbe.m` 只链接 loader、hle、entry，未链接 D2R main/thread/玩法文件。装载后只允许调用事先核验为单条 RET 的 `_init_libc0`，明确停止于 SDK 初始化、构造函数和 nnMain 之前。弱符号解析等装载器后续完善项仍未处理，不能用探针通过证明游戏启动正确。
 - shader 已识别为 Zstandard 包装的 BFSHA/SARC，包含 BNSH；尚未转换为 MSL，也没有目标游戏画面。
 
@@ -92,4 +92,4 @@ main 重定位 relative=368204、abs/glob=2782、jump=1056；sdk 为 10988、152
 
 用户已直接确认：从 FlyMe 主屏幕打开后，最后一行为 `PROBE_COMPLETE: stopped before SDK initialization, constructors and nnMain`。重新取得 Documents 日志，与成功标记一致；详细证据更新于 `device-result.json`。未把前台打开等同于经过强制结束的新进程冷启动，也未扩大为 SDK 初始化通过。
 
-`startup-analysis.json` 固定目标模块身份并记录实际 `nn::init::Start` 调用顺序。SDK 的 `_init_libc1` 是跳转，并非 RET；必须继续分析其目标，不能因 `_init_libc0/2` 为空而跳过整个 libc 初始化。游戏的 `nninitStartup` 会查询内存、设置堆、分配 32 MiB 内存块并注册线程本地分配器；SDK 初始化涉及虚拟地址空间、oe/aoc/fs/pctl 等服务。下一次执行前先核实目标线程对象/TLR/TLS 布局和严格失败策略，不使用 D2R 的固定线程结构或返回成功的服务空桩推进。
+`evidence/startup-analysis.json` 固定目标模块身份并记录实际 `nn::init::Start` 调用顺序。SDK 的 `_init_libc1` 是跳转，并非 RET；必须继续分析其目标，不能因 `_init_libc0/2` 为空而跳过整个 libc 初始化。游戏的 `nninitStartup` 会查询内存、设置堆、分配 32 MiB 内存块并注册线程本地分配器；SDK 初始化涉及虚拟地址空间、oe/aoc/fs/pctl 等服务。下一次执行前先核实目标线程对象/TLR/TLS 布局和严格失败策略，不使用 D2R 的固定线程结构或返回成功的服务空桩推进。

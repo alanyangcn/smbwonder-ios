@@ -1,4 +1,4 @@
-> 最新进度见 [STATUS.md](STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
+> 最新进度见 [STATUS.md](../../STATUS.md)：A11 已通过 Metal 2 GPU 绘制/回读，以及六个目标着色器阶段的设备编译检查；游戏首帧仍待接通。
 
 # 持续移植进度
 
@@ -50,7 +50,7 @@
 - `advance-run5/Documents/loader-probe.log`、`advance-final/Documents/loader-probe.log`：重复验证 GPU 实测和 DEVICE_UPGRADE_REQUIRED；最终一次启动后已正常分离调试器。
 - `advance-tests5.log`、`advance-xcode5.log`：28 项测试及签名构建。
 - `romfs-pack.log`、`romfs-upload.log`：本地归档与传输。
-- `advance-device-result.json`（源码目录）：对应输入、源码、App、日志的 SHA-256。
+- `evidence/advance-device-result.json`：对应输入、源码、App、日志的 SHA-256。
 
 游戏尚无图形、菜单或可玩流程，线程/同步等后续依赖将按实际运行继续补齐。
 

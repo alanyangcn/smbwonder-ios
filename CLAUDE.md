@@ -5,7 +5,7 @@
 ## 先读
 - `STATUS.md`：当前停点、每轮结果、导入服务接管统计。**开工前读“首帧推进”一节的最后几条。**
 - `work/analysis/first-frame/ledger.md`：逐轮执行记录（英文，含 run id、sdk/main 偏移证据和裁定）。
-- 计划：`docs/superpowers/plans/2026-10-15-first-game-frame.md`；渲染设计：`RENDER-PLAN.md`。
+- 计划：`docs/superpowers/plans/2026-10-15-first-game-frame.md`；渲染设计：`docs/RENDER-PLAN.md`；历史阶段文档与早期证据在 `docs/history/`。
 
 ## 设备与环境
 - 新机器搭建 `work/`：`tools/setup_env.sh`（工具链）→ `tools/import_game.sh`（游戏包 + prod.keys，按 verified-inputs.json 核对）→ `tools/local_state.sh import`（着色器普查）。详见 SETUP.md。

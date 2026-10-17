@@ -14,10 +14,12 @@
 - `ios-probe/`：iOS 宿主界面和 XcodeGen 工程模板。
 - `tools/`：构建、真机验证、资源与着色器分析工具。
 - `tests/`：宿主回归测试和 GPU 诊断。
+- `docs/`：移植方法论、渲染设计（`RENDER-PLAN.md`）、分阶段计划（`superpowers/plans/`）；`docs/history/` 存放早期阶段（SDK / BOOT / ADVANCE / NVN / Metal 2）的计划、状态、审查记录与 `evidence/` 证据 JSON，仅作历史参考。
+- `verified-inputs.json`：输入与改写映像的哈希基线，`tools/import_game.sh` 和 `tools/build_loader_probe.py` 构建前核对。
 - `vendor/d2r-mobile/`：本地保存的 D2R Mobile 依赖源码及原许可证；构建不读取旁边的参考仓库。
 - `work/`：本地游戏资源、工具链、构建产物、设备日志与历史验证证据，全部排除出 Git；由 `tools/setup_env.sh`、`tools/import_game.sh`、`tools/local_state.sh` 重建（见 SETUP.md）。
 
-进度见 [STATUS.md](STATUS.md)，审查见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)，迁移说明见 [MIGRATION.md](MIGRATION.md)。
+进度见 [STATUS.md](STATUS.md)，早期审查见 [docs/history/REVIEW-2026-10-15.md](docs/history/REVIEW-2026-10-15.md)，迁移说明见 [docs/history/MIGRATION.md](docs/history/MIGRATION.md)。
 
 ## 常用命令
 
@@ -32,7 +34,7 @@ python3 -m unittest discover -s tests -q
 
 ```sh
 export DEVELOPER_DIR=$(xcode-select -p)
-python3 tools/build_loader_probe.py --stage main --graphics-backend metal2 \
+python3 tools/build_loader_probe.py --stage main \
   --xcodegen "$PWD/work/tools/xcodegen/xcodegen/bin/xcodegen"
 ```
 

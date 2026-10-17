@@ -17,7 +17,7 @@
 
 ## 接续审查（2026-10-15）
 
-代码审查及修复见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)；最新验收状态见 [STATUS.md](STATUS.md)。修复包括 16 字节 TextureView ABI、刷新检查、区域溢出、物理映射解析、内核并发映射、线程退出/关闭和 TLS 所有权。采样器新增 7 个状态设置入口，加上两项命令内存绑定，当前 137 个宿主入口 / 397 个停止跳板；入口数不是实现完成率。
+代码审查及修复见 [REVIEW-2026-10-15.md](REVIEW-2026-10-15.md)；最新验收状态见 [STATUS.md](../../STATUS.md)。修复包括 16 字节 TextureView ABI、刷新检查、区域溢出、物理映射解析、内核并发映射、线程退出/关闭和 TLS 所有权。采样器新增 7 个状态设置入口，加上两项命令内存绑定，当前 137 个宿主入口 / 397 个停止跳板；入口数不是实现完成率。
 
 round21b 的旧日志（run 531713E2-2369-440A-81F4-3900317FC801）仍报告 128 个入口，不能作为新版真机证据。连接恢复后使用 round22 重新构建、签名、安装及启动。
 
@@ -48,7 +48,7 @@ round21b 的旧日志（run 531713E2-2369-440A-81F4-3900317FC801）仍报告 128
 | nvn-review-round23 | 新运行43B805CA-CFFE-4DEA-A2A4-794982D63490，修正命令缓冲SDK55 ABI，512字节控制内存绑定成功 | AddCommandMemory，请求4 MiB |
 | nvn-round17 | 真机已取证；共 128 个入口，存储类别、虚拟池和贴图写入代码已接入，但尚未全部实际执行 | CPU_NO_ACCESS 物理池上的 MemoryPoolFlushMappedRange 被宿主误拒绝 |
 | （历史）nvn-round16 设计 | 贴图拆为 nvn_texture.c（Builder 全套、通用贴图、Get*、视图、贴图池注册按序号快照）+ nvn_state.c（8 类状态对象 33 个）；复用 dm/gfx/tex 的格式映射与 BC 解码；共 123 个 | 预计命令缓冲 AddCommandMemory/BeginRecording（B1） |
-| （历史）nvn-round15 设计 | 快速清除色登记（4 个）、Buffer 地址、内存池 Map/GetFlags/Flush/Invalidate（共 64 个）；B 阶段设计见 RENDER-PLAN.md | 预计命令缓冲 AddCommandMemory/BeginRecording |
+| （历史）nvn-round15 设计 | 快速清除色登记（4 个）、Buffer 地址、内存池 Map/GetFlags/Flush/Invalidate（共 64 个）；B 阶段设计见 ../RENDER-PLAN.md | 预计命令缓冲 AddCommandMemory/BeginRecording |
 | （历史）nvn-round14 设计 | 加 extended-virtual-addressing + increased-memory-limit entitlement 试签名（用户选择） | 签名是否接受 |
 | （历史）nvn-round13 设计 | 二分实测最大可保留空间，留 512 MiB 余量；别名区 1792 MiB（容纳游戏 1750 MiB 虚拟堆）、栈区 256 MiB、其余为堆；不足 2.5 GiB 则明确报需 entitlement | — |
 | （历史）nvn-round12 设计 | 地址空间按主机布局重排（尝试 8/6/5/4 GiB 保留；别名区 2 GiB、栈区 512 MiB、堆区 3 GiB 起），应用池报主机值 3285 MiB（放不下时按堆区收缩），GetInfo 21 扣除系统资源、7/22 计入 VAMM 已映射页；全部惰性提交 | 预计回到 AllocateAddressRegion 之后 |

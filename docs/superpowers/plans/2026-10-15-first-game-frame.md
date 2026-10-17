@@ -5,7 +5,7 @@
 **Goal:** Render and present the first actual Wonder game frame on FlyMe, preserving game commands/resources and retaining strict failure boundaries.
 **Architecture:** Preserve SDK 55 command object fields used inline by main. Record typed host commands in guest-supplied command memory; detect native inline command words explicitly and handle them before accepting a submission. Replay supported commands into a persistent Metal 2 queue, with real resource/texture/shader bindings and completion/presentation evidence.
 **Tech Stack:** C11, Objective-C, AArch64 signed offline-rewritten modules, Metal 2 / MSL 2.1, Python, XcodeGen/Xcode.
-**Spec:** RENDER-PLAN.md and STATUS.md.
+**Spec:** docs/RENDER-PLAN.md and STATUS.md.
 
 ## Global Constraints
 

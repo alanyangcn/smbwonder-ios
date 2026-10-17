@@ -8,7 +8,7 @@
 
 **Tech Stack:** C11 / Objective-C、Metal 2 + MSL 2.1（离散槽，无 argument buffer、无 gpuAddress）、Python 3、.NET（work/tools/dotnet）、Ryujinx.Graphics.Shader、SPIRV-Cross（work/tools/spirv-cross）、XcodeGen/Xcode。
 
-**Spec:** `RENDER-PLAN.md`（§3–§6、实施顺序 B3/B4）与 `STATUS.md`。D2R 参考实现：`vendor/d2r-mobile/dm/gfx/README.md`、`tools/dmsh_build.py`、`tools/maxwell_refs.py`、`tools/dmsh_xlate/Program.cs`、`nvn/nvn_mtl.m`（support_buffer 布局约 2870 行）。
+**Spec:** `docs/RENDER-PLAN.md`（§3–§6、实施顺序 B3/B4）与 `STATUS.md`。D2R 参考实现：`vendor/d2r-mobile/dm/gfx/README.md`、`tools/dmsh_build.py`、`tools/maxwell_refs.py`、`tools/dmsh_xlate/Program.cs`、`nvn/nvn_mtl.m`（support_buffer 布局约 2870 行）。
 
 ## Global Constraints
 
