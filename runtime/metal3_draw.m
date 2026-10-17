@@ -349,11 +349,19 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
     int whole = base == 0 && count == levels && first == 0 && layers == slices && type == tex.textureType;
     if (whole && (identity || unset)) return tex;
+    // Views are reused within a frame (round198: a new view per draw was ~6% of the replay thread in a course). The cache
+    // is emptied when the frame number changes, so no view (each retains its parent) outlives the frame it was made in.
+    static NSMutableDictionary<NSString *, id<MTLTexture>> *views; static unsigned views_frame;
+    if (!views || views_frame != d->frame || views.count > 4096) { views = [NSMutableDictionary dictionary]; views_frame = d->frame; }
+    NSString *view_key = [NSString stringWithFormat:@"%p:%lu:%lu:%lu:%lu:%lu:%x", (__bridge void *)tex, (unsigned long)type, (unsigned long)base, (unsigned long)count,
+                          (unsigned long)first, (unsigned long)layers, identity || unset ? 0u : (unsigned)(z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24)];
+    id<MTLTexture> cached = views[view_key]; if (cached) return cached;
     id<MTLTexture> view = identity || unset   // the swizzle-taking call fails outright on GPUs without texture swizzle
         ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]
         : [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)
                                      swizzle:MTLTextureSwizzleChannelsMake(z[0], z[1], z[2], z[3])];
     if (!view) unsupported(d, "texture view creation on serial", (long)t->serial);
+    views[view_key] = view;
     return view;
 }
 // NVN_WRAP_MODE_CLAMP_TO_BORDER: Metal offers transparent black, opaque black and opaque white only.
@@ -697,6 +705,21 @@ void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes) { *draws = 
 static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
 static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
 static id<MTLBuffer> support_buffer;
+// The shader's own constants (c1) are fixed per stage: one buffer per reflection (reflections live for the process).
+// Driver segment c0 images (drv0) take few distinct values: one buffer per content. Both are read-only to the GPU
+// (round198: two fresh 64 KiB buffers per draw were ~14% of the replay thread in a course).
+static id<MTLBuffer> constants_for_stage(const struct wonder_shader_refl *r) {
+    static NSMutableDictionary<NSValue *, id<MTLBuffer>> *cache; if (!cache) cache = [NSMutableDictionary dictionary];
+    NSValue *k = [NSValue valueWithPointer:r]; id<MTLBuffer> b = cache[k];
+    if (!b) { b = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(b.contents, r->c1, r->c1_len); cache[k] = b; }
+    return b;
+}
+static id<MTLBuffer> driver_constants(const uint8_t *drv0, size_t size) {
+    static NSMutableDictionary<NSData *, id<MTLBuffer>> *cache; if (!cache || cache.count > 256) cache = [NSMutableDictionary dictionary];
+    NSData *k = [NSData dataWithBytes:drv0 length:size]; id<MTLBuffer> b = cache[k];
+    if (!b) { b = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(b.contents, drv0, size); cache[k] = b; }
+    return b;
+}
 // Diagnostic (WONDER_TEX_DUMP_FS=<fragment key prefix>[,<prefix>...]): the first draw of each listed fragment shader
 // (after present WONDER_TEX_DUMP_AFTER, default 0) saves every 2D texture it samples, each mip level, as
 // Documents/TexDump/<fs>-s<slot>-t<serial>-f<format>-l<level>.png (round155b: terrain masks that turn far hills blue).
@@ -901,10 +924,8 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
             }
         }
         if (stage == 1) tex_dump(d, r, textures[1]);
-        if (r->c1_buffer >= 0) {   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
-            c1_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffers[stage].contents, r->c1, r->c1_len);
-        }
-        if (r->drv0_buffer >= 0) { drv0_buffers[stage] = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(drv0_buffers[stage].contents, d->drv0, sizeof d->drv0); }
+        if (r->c1_buffer >= 0) c1_buffers[stage] = constants_for_stage(r);   // the shader's own constants; padded to the 64 KiB a constant buffer may declare
+        if (r->drv0_buffer >= 0) drv0_buffers[stage] = driver_constants(d->drv0, sizeof d->drv0);
         if (r->support >= 0 && !support_buffer) {   // Ryujinx support buffer (layout per D2R nvn_mtl.m): render_scale[0..72].x = 1, everything else 0
             support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
             for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;
@@ -1105,8 +1126,8 @@ int wonder_host_dispatch(const struct wonder_host_dispatch *x) {
         if (!images[i]) unsupported(d, "image view creation, serial", (long)s->texture.serial);
     }
     id<MTLBuffer> c1_buffer = nil, drv0_buffer = nil;
-    if (r->c1_buffer >= 0) { c1_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(c1_buffer.contents, r->c1, r->c1_len); }
-    if (r->drv0_buffer >= 0) { drv0_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared]; memcpy(drv0_buffer.contents, d->drv0, sizeof d->drv0); }
+    if (r->c1_buffer >= 0) c1_buffer = constants_for_stage(r);
+    if (r->drv0_buffer >= 0) drv0_buffer = driver_constants(d->drv0, sizeof d->drv0);
     if (r->support >= 0 && !support_buffer) {
         support_buffer = [device newBufferWithLength:0x10000 options:MTLResourceStorageModeShared];
         for (int k = 0; k < 73; k++) *(float *)((uint8_t *)support_buffer.contents + 192 + 16 * k) = 1.0f;

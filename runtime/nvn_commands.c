@@ -185,8 +185,17 @@ struct recorded_handle {
     uint8_t *control, *control_end;
     struct recorded_handle *next;
 };
-static struct recorded_handle *recorded_handles;
+// Hashed by handle (round198: the control memory rings through new addresses, so a single list grew to every handle
+// address ever recorded and CallCommands / EndRecording / the replay scanned it under handles_lock: ~70% of each guest
+// render thread in a course).
+#define HANDLE_BUCKETS 4096u
+static struct recorded_handle *recorded_handles[HANDLE_BUCKETS];
 static pthread_mutex_t handles_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct recorded_handle **handle_slot(uint64_t handle) {   // with handles_lock held: the link that holds or would hold it
+    struct recorded_handle **slot = &recorded_handles[(uint32_t)((handle >> 4) * 0x9E3779B97F4A7C15ull >> 52) & (HANDLE_BUCKETS - 1)];
+    while (*slot && (*slot)->handle != handle) slot = &(*slot)->next;
+    return slot;
+}
 
 typedef void (*memory_callback)(void *cmdbuf, int event, size_t min_size, void *data);
 static void record_command(void *cmdbuf, unsigned opcode, const void *payload, size_t size) {
@@ -362,14 +371,13 @@ void wonder_nvnCommandBufferCallCommands(void *cb, int count, const uint64_t *ha
     // queue runs it (round107: worker threads reuse handle addresses for the next frame during this frame's submit).
     struct call_segment { uint64_t cpu, bytes; } *list = NULL; size_t used = 0;
     pthread_mutex_lock(&handles_lock);
-    for (int i = 0; i < count; i++)
-        for (struct recorded_handle *p = recorded_handles; p; p = p->next) if (p->handle == handles[i]) {
-            struct call_segment *grown = realloc(list, (used + p->count + 1) * sizeof *list);
-            if (!grown) { pthread_mutex_unlock(&handles_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY CallCommands"); }
-            list = grown;
-            for (unsigned k = 0; k < p->count; k++) list[used++] = (struct call_segment){(uint64_t)(uintptr_t)p->segments[k].cpu, p->segments[k].bytes};
-            break;
-        }
+    for (int i = 0; i < count; i++) {
+        struct recorded_handle *p = *handle_slot(handles[i]); if (!p) continue;
+        struct call_segment *grown = realloc(list, (used + p->count + 1) * sizeof *list);
+        if (!grown) { pthread_mutex_unlock(&handles_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY CallCommands"); }
+        list = grown;
+        for (unsigned k = 0; k < p->count; k++) list[used++] = (struct call_segment){(uint64_t)(uintptr_t)p->segments[k].cpu, p->segments[k].bytes};
+    }
     pthread_mutex_unlock(&handles_lock);
     const uint64_t a[] = {(uint64_t)count, (uint64_t)used};
     rec(cb, WONDER_NVN_CMD_CALL_COMMANDS, a, 2, list, used * sizeof *list); free(list);
@@ -663,8 +671,7 @@ uint64_t wonder_nvnCommandBufferEndRecording(void *cmdbuf) {
     if (count) memcpy(copy, segments, count * sizeof *copy);
     *entry = (struct recorded_handle){(uint64_t)(uintptr_t)body, count, copy, body, control, NULL};
     pthread_mutex_lock(&handles_lock);
-    struct recorded_handle **slot = &recorded_handles;
-    while (*slot && (*slot)->handle != entry->handle) slot = &(*slot)->next;
+    struct recorded_handle **slot = handle_slot(entry->handle);
     if (*slot) { struct recorded_handle *old = *slot; entry->next = old->next; *slot = entry; free(old->segments); free(old); }
     else *slot = entry;
     pthread_mutex_unlock(&handles_lock);
@@ -678,15 +685,15 @@ uint64_t wonder_nvnCommandBufferEndRecording(void *cmdbuf) {
 long wonder_nvn_command_handle_bytes(uint64_t handle) {
     long bytes = -1;
     pthread_mutex_lock(&handles_lock);
-    for (struct recorded_handle *p = recorded_handles; p; p = p->next)
-        if (p->handle == handle) { bytes = 0; for (unsigned i = 0; i < p->count; i++) bytes += (long)p->segments[i].bytes; break; }
+    struct recorded_handle *p = *handle_slot(handle);
+    if (p) { bytes = 0; for (unsigned i = 0; i < p->count; i++) bytes += (long)p->segments[i].bytes; }
     pthread_mutex_unlock(&handles_lock);
     return bytes;
 }
 int wonder_nvn_command_handle_valid(uint64_t handle) {
     int found = 0;
     pthread_mutex_lock(&handles_lock);
-    for (struct recorded_handle *p = recorded_handles; p; p = p->next) if (p->handle == handle) { found = 1; break; }
+    found = *handle_slot(handle) != NULL;
     pthread_mutex_unlock(&handles_lock);
     return found;
 }
@@ -694,8 +701,8 @@ static void walk_segments(const struct segment *segments, unsigned count, uint64
 void wonder_nvn_command_walk(uint64_t handle, wonder_nvn_command_visitor visitor, void *context) {
     struct segment segments[MAX_SEGMENTS + 1]; unsigned count = 0; int found = 0;
     pthread_mutex_lock(&handles_lock);
-    for (struct recorded_handle *p = recorded_handles; p; p = p->next)
-        if (p->handle == handle) { found = 1; count = p->count; memcpy(segments, p->segments, count * sizeof *segments); break; }
+    struct recorded_handle *p = *handle_slot(handle);
+    if (p) { found = 1; count = p->count; memcpy(segments, p->segments, count * sizeof *segments); }
     pthread_mutex_unlock(&handles_lock);
     if (!found || !visitor) wonder_nvn_stop("NVN_INVALID_HANDLE command handle=%#llx", (unsigned long long)handle);
     walk_segments(segments, count, handle, visitor, context);
@@ -767,8 +774,7 @@ void wonder_nvnCommandBufferFinalize(void *p) {
 void wonder_nvnDeviceFinalizeCommandHandle(void *device, uint64_t handle) {
     wonder_nvn_device_check(device, "nvnDeviceFinalizeCommandHandle");
     pthread_mutex_lock(&handles_lock);
-    struct recorded_handle **slot = &recorded_handles;
-    while (*slot && (*slot)->handle != handle) slot = &(*slot)->next;
+    struct recorded_handle **slot = handle_slot(handle);
     struct recorded_handle *entry = *slot;
     if (entry) *slot = entry->next;
     pthread_mutex_unlock(&handles_lock);

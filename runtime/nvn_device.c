@@ -232,6 +232,26 @@ static struct pool_builder *pbuilder_of(void *p, const char *who) {
 struct pool_registration { const struct memory_pool *pool; struct pool_registration *next; };
 static struct pool_registration *pool_registry;
 static pthread_mutex_t pool_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+// Address index (round198: address_span scanned ~1200 registered pools per call, ~20% of the replay thread in a course):
+// pools sorted by CPU base, rebuilt on register / finalize (rare), binary search under the lock, and a per-thread last
+// hit checked against the index generation.
+struct pool_range { uint64_t base, end; const struct memory_pool *pool; };
+static struct pool_range *pool_index; static size_t pool_index_count; static _Atomic uint64_t pool_index_generation = 1;
+static int range_order(const void *a, const void *b) { uint64_t x = ((const struct pool_range *)a)->base, y = ((const struct pool_range *)b)->base; return (x > y) - (x < y); }
+static void rebuild_pool_index(void) {   // with pool_registry_lock held
+    size_t n = 0; for (struct pool_registration *p = pool_registry; p; p = p->next) n++;
+    struct pool_range *index = malloc((n ? n : 1) * sizeof *index);
+    if (!index) { pthread_mutex_unlock(&pool_registry_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY pool index"); }
+    n = 0; for (struct pool_registration *p = pool_registry; p; p = p->next)
+        index[n++] = (struct pool_range){(uintptr_t)p->pool->memory, (uintptr_t)p->pool->memory + p->pool->size, p->pool};
+    qsort(index, n, sizeof *index, range_order);
+    free(pool_index); pool_index = index; pool_index_count = n; atomic_fetch_add(&pool_index_generation, 1);
+}
+static const struct memory_pool *pool_at(uint64_t address) {   // with pool_registry_lock held
+    size_t lo = 0, hi = pool_index_count;
+    while (lo < hi) { size_t mid = (lo + hi) / 2; if (pool_index[mid].base <= address) lo = mid + 1; else hi = mid; }
+    return lo && address < pool_index[lo - 1].end ? pool_index[lo - 1].pool : NULL;
+}
 static void register_pool(const struct memory_pool *pool) {
     pthread_mutex_lock(&pool_registry_lock);
     for (struct pool_registration *p = pool_registry; p; p = p->next) if (p->pool == pool) {
@@ -240,6 +260,7 @@ static void register_pool(const struct memory_pool *pool) {
     struct pool_registration *entry = malloc(sizeof *entry);
     if (!entry) { pthread_mutex_unlock(&pool_registry_lock); wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY pool registry"); }
     *entry = (struct pool_registration){pool, pool_registry}; pool_registry = entry;
+    rebuild_pool_index();
     pthread_mutex_unlock(&pool_registry_lock);
 }
 static const struct memory_pool *pool_of(const void *p, const char *who) {
@@ -282,13 +303,16 @@ const void *wonder_nvn_pool_containing(uint64_t address, uint64_t *base, uint64_
     return pool;
 }
 void wonder_nvn_address_span(uint64_t address, uint64_t size, struct wonder_nvn_pool_view *view) {
+    static __thread struct pool_range last; static __thread uint64_t last_generation;
     const struct memory_pool *pool = NULL;
-    pthread_mutex_lock(&pool_registry_lock);
-    for (struct pool_registration *p = pool_registry; p; p = p->next) {
-        uint64_t base = (uintptr_t)p->pool->memory;
-        if (address >= base && address - base < p->pool->size) { pool = p->pool; break; }
+    if (last_generation == atomic_load(&pool_index_generation) && address >= last.base && address < last.end) pool = last.pool;
+    else {
+        pthread_mutex_lock(&pool_registry_lock);
+        uint64_t generation = atomic_load(&pool_index_generation);
+        pool = pool_at(address);
+        if (pool) { last = (struct pool_range){(uintptr_t)pool->memory, (uintptr_t)pool->memory + pool->size, pool}; last_generation = generation; }
+        pthread_mutex_unlock(&pool_registry_lock);
     }
-    pthread_mutex_unlock(&pool_registry_lock);
     if (!pool) wonder_nvn_stop("NVN_INVALID_ADDRESS resource=%#llx size=%#llx", (unsigned long long)address, (unsigned long long)size);
     if (pool->flags & 8) wonder_nvn_stop("NVN_INVALID_ADDRESS GPU_NO_ACCESS pool");
     wonder_nvn_pool_span(pool, address - (uintptr_t)pool->memory, size, view);
@@ -617,6 +641,7 @@ void wonder_nvnMemoryPoolFinalize(void *pool) {
                 }
     for (struct pool_registration **p = &pool_registry; *p; p = &(*p)->next)
         if ((*p)->pool == m) { struct pool_registration *dead = *p; *p = dead->next; free(dead); break; }
+    rebuild_pool_index();
     pthread_mutex_unlock(&pool_registry_lock);
     wonder_host_pool_forget(pool);
     wonder_cmdstore_forget_range((uint64_t)(uintptr_t)m->memory, m->size);   // records of command memory in this pool
