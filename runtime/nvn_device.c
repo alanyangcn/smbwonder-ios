@@ -569,11 +569,18 @@ static void descriptor_label(void *p, const char *label, uint32_t magic) {
 void wonder_nvnTexturePoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,TPOOL_MAGIC);}
 void wonder_nvnSamplerPoolSetDebugLabel(void *p, const char *s) {descriptor_label(p,s,SPOOL_MAGIC);}
 struct program_registration { void *object; struct wonder_nvn_program_shaders shaders; struct program_registration *next; };
-static struct program_registration *programs;
+// Hashed by object address (round199: ~9000 programs; BindProgram's snapshot scanned them all on every bind).
+#define PROGRAM_BUCKETS 4096u
+static struct program_registration *programs[PROGRAM_BUCKETS];
 static pthread_mutex_t programs_lock=PTHREAD_MUTEX_INITIALIZER;
+static struct program_registration **program_slot(const void *p) {   // with programs_lock held
+    struct program_registration **slot = &programs[(uint32_t)(((uintptr_t)p >> 4) * 0x9E3779B97F4A7C15ull >> 52) & (PROGRAM_BUCKETS - 1)];
+    while (*slot && (*slot)->object != p) slot = &(*slot)->next;
+    return slot;
+}
 static void program_check(void *p, const char *who) {
     int found=0;pthread_mutex_lock(&programs_lock);
-    for(struct program_registration *r=programs;r;r=r->next) if(r->object==p){found=1;break;}
+    found=*program_slot(p)!=NULL;
     pthread_mutex_unlock(&programs_lock);
     if(!found) wonder_nvn_stop("NVN_INVALID_OBJECT %s program=%p",who,p);
 }
@@ -590,8 +597,8 @@ uint32_t wonder_nvnProgramInitialize(void *program, const void *device) {
     struct program_registration *entry=calloc(1,sizeof *entry);
     if(!entry) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY program registry");
     entry->object=program;pthread_mutex_lock(&programs_lock);
-    struct program_registration *existing=programs;while(existing && existing->object!=program)existing=existing->next;
-    if(!existing){entry->next=programs;programs=entry;}else{existing->shaders=(struct wonder_nvn_program_shaders){0};free(entry);}
+    struct program_registration **slot=program_slot(program),*existing=*slot;
+    if(!existing)*slot=entry;else{existing->shaders=(struct wonder_nvn_program_shaders){0};free(entry);}
     pthread_mutex_unlock(&programs_lock);
     memset(program, 0, 0x80); memcpy((uint8_t *)program + 8, &device, sizeof device);
     wonder_nvn_report("NVN_PROGRAM_INITIALIZED program=%p device=%p shaders=0", program, device);
@@ -684,7 +691,7 @@ int wonder_nvnSamplerGetReductionFilter(const void *p) { return sampler_of(p, "n
 static struct wonder_nvn_program_shaders *program_shaders_of(void *p, const char *who) {
     struct wonder_nvn_program_shaders *found = NULL;
     pthread_mutex_lock(&programs_lock);
-    for (struct program_registration *r = programs; r; r = r->next) if (r->object == p) { found = &r->shaders; break; }
+    struct program_registration *r = *program_slot(p); if (r) found = &r->shaders;
     pthread_mutex_unlock(&programs_lock);
     if (!found) wonder_nvn_stop("NVN_INVALID_OBJECT %s program=%p", who, p);
     return found;
@@ -744,7 +751,7 @@ int wonder_nvn_program_snapshot(const void *program, struct wonder_nvn_program_s
 }
 void wonder_nvnProgramFinalize(void *program) {
     pthread_mutex_lock(&programs_lock);
-    struct program_registration **r = &programs;
+    struct program_registration **r = program_slot(program);
     while (*r && (*r)->object != program) r = &(*r)->next;
     struct program_registration *dead = *r; if (dead) *r = dead->next;
     pthread_mutex_unlock(&programs_lock);

@@ -351,10 +351,10 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (whole && (identity || unset)) return tex;
     // Views are reused within a frame (round198: a new view per draw was ~6% of the replay thread in a course). The cache
     // is emptied when the frame number changes, so no view (each retains its parent) outlives the frame it was made in.
-    static NSMutableDictionary<NSString *, id<MTLTexture>> *views; static unsigned views_frame;
+    static NSMutableDictionary<NSData *, id<MTLTexture>> *views; static unsigned views_frame;
     if (!views || views_frame != d->frame || views.count > 4096) { views = [NSMutableDictionary dictionary]; views_frame = d->frame; }
-    NSString *view_key = [NSString stringWithFormat:@"%p:%lu:%lu:%lu:%lu:%lu:%x", (__bridge void *)tex, (unsigned long)type, (unsigned long)base, (unsigned long)count,
-                          (unsigned long)first, (unsigned long)layers, identity || unset ? 0u : (unsigned)(z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24)];
+    const uintptr_t key_words[7] = {(uintptr_t)(__bridge void *)tex, type, base, count, first, layers, identity || unset ? 0u : (unsigned)(z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24)};
+    NSData *view_key = [NSData dataWithBytes:key_words length:sizeof key_words];   // binary key: a formatted string cost more than the view (round199)
     id<MTLTexture> cached = views[view_key]; if (cached) return cached;
     id<MTLTexture> view = identity || unset   // the swizzle-taking call fails outright on GPUs without texture swizzle
         ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]

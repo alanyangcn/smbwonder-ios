@@ -8,6 +8,7 @@
 #include "nvn_commands.h"
 #include "nvn_tex.h"
 #include "nvn_draw_census.h"
+#include "report_shadow.h"
 #include "host_draw.h"
 #include "nvn_fmt_mtl.h"
 #include <pthread.h>
@@ -38,6 +39,10 @@ void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash)
 }
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
+// Report writes recorded in this submit that the GPU may not have executed yet (report_shadow.h): conditional renders
+// read them from here instead of finishing the GPU. WONDER_VERIFY_CONDITIONAL=1 finishes anyway and counts mismatches.
+static struct wonder_report_shadow report_shadow;
+static unsigned conditional_shadowed, conditional_mismatches;
 // UpdateUniformBuffer ranges recorded since the replay last finished the GPU (GPU-ordered writes the CPU cannot see yet,
 // including earlier submits still pending). Reading such memory on the CPU first finishes the work recorded so far.
 static struct { uint64_t address, size; } ubo_updates[64]; static unsigned ubo_update_count, ubo_update_overflow;
@@ -658,9 +663,22 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         // Maxwell compares the 64-bit counters of the two report records at address and address+16 (EQUAL mode 0,
         // NOT_EQUAL mode 1). Metal has no draw predication: finish the GPU work recorded so far (report writes run in
         // its completion handlers), then evaluate on the CPU. A sync point, but exact.
-        wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0;
+        // Records whose pending writes are report values of this submit are known without the GPU (round199: the
+        // finish per conditional, ~50 per frame, serialised CPU and GPU).
+        static int verify = -1; if (verify < 0) { const char *e = getenv("WONDER_VERIFY_CONDITIONAL"); verify = e && *e == '1'; }
+        uint32_t la, lb; int ka = wonder_report_shadow_lookup(&report_shadow, c->a[1], &la), kb = wonder_report_shadow_lookup(&report_shadow, c->a[1] + 16, &lb);
+        int shadowed = ka == 1 && kb == 1 && wonder_report_shadow_lookup(&report_shadow, c->a[1] + 4, &(uint32_t){0}) == 0 &&
+                       wonder_report_shadow_lookup(&report_shadow, c->a[1] + 20, &(uint32_t){0}) == 0;
+        if (!shadowed || verify) { wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; }
         struct wonder_nvn_pool_view v; wonder_nvn_address_span(c->a[1], 32, &v);
         uint64_t a, b; memcpy(&a, v.memory, 8); memcpy(&b, v.memory + 16, 8);
+        if (shadowed) {
+            uint64_t sa = (a & ~0xffffffffull) | la, sb = (b & ~0xffffffffull) | lb;   // high words: no pending write
+            if (verify && (sa != a || sb != b) && conditional_mismatches++ < 16)
+                wonder_nvn_report("NVN_CONDITIONAL_SHADOW_MISMATCH address=%#llx shadow=%llu,%llu memory=%llu,%llu (submit %u)", (unsigned long long)c->a[1],
+                                  (unsigned long long)sa, (unsigned long long)sb, (unsigned long long)a, (unsigned long long)b, state.submits);
+            a = sa; b = sb; conditional_shadowed++;
+        }
         state.render_enable = c->a[0] == 0 ? a == b : a != b;
         conditional_evals++; if (!state.render_enable) conditional_skips++;
         static _Atomic unsigned logged;
@@ -741,6 +759,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         struct report *r = malloc(sizeof *r);
         if (!r) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY report");
         *r = (struct report){c->a[1], timestamp ? 0 : (uint32_t)c->a[0], timestamp};
+        if (timestamp) wonder_report_shadow_unknown(&report_shadow, c->a[1], 16); else wonder_report_shadow_value(&report_shadow, c->a[1], (uint32_t)c->a[0]);
         wonder_host_after_gpu(write_report, r);
         break;
     }
@@ -864,7 +883,7 @@ static void submit_on_replay_stack(void *arg) {
     char gpu_error[256];
     if (wonder_host_gpu_error(gpu_error, sizeof gpu_error))
         wonder_nvn_stop("NVN_GPU_ERROR an earlier replay command buffer failed: %s (before submit %u)", gpu_error, state.submits + 1);
-    state.submits++; replay_queue = "main";
+    state.submits++; replay_queue = "main"; wonder_report_shadow_clear(&report_shadow);
     unsigned before = state.commands, clears = state.clears;
     for (int i = 0; i < count; i++) {
         if (!wonder_nvn_command_handle_valid(handles[i]))
@@ -904,7 +923,7 @@ static void submit_on_replay_stack(void *arg) {
     unsigned submits = state.submits, commands = state.commands - before; clears = state.clears - clears;
     atomic_store(&replay_owner, (pthread_t *)NULL);
     wonder_host_note_submit(submits);
-    if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u", submits, disabled_draws, conditional_evals, conditional_skips);
+    if (submits % 600 == 0) wonder_nvn_report("NVN_RENDER_ENABLE submit=%u disabled_draws=%u conditional=%u skip=%u shadowed=%u shadow_mismatches=%u", submits, disabled_draws, conditional_evals, conditional_skips, conditional_shadowed, conditional_mismatches);
     if (submits <= 8 || submits % 600 == 0 || submit_programs[0])
         wonder_nvn_report("NVN_QUEUE_SUBMIT queue=%p submit=%u handles=%d commands=%u clears=%u draws=%u dispatches=%u programs=%s", queue, submits, count, commands, clears,
                           submit_draws, submit_dispatches, submit_programs[0] ? submit_programs : "-");

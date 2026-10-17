@@ -85,6 +85,7 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/nvn_buffer.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_commands.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_queue.c'
+      - path: '${SMBW_REFERENCE}/runtime/report_shadow.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_texture.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_state.c'
       - path: '${SMBW_REFERENCE}/vendor/d2r-mobile/dm/gfx/tex/nvn_fmt_mtl.c'
