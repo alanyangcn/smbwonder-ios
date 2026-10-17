@@ -70,6 +70,7 @@ void wonder_nvn_capture_shaders(const void *program, const struct wonder_nvn_pro
 // Fake translated-shader library and draw backend: the vertex key gets fake_refl[0], every other key fake_refl[1].
 static struct wonder_shader_refl fake_refl[2]; static char fake_vs_key[17]; static int shaders_available; static unsigned host_draws; static struct wonder_host_draw last_draw;
 void *wonder_host_shader_function(const char key[17], int stage) { (void)key; return (void *)(uintptr_t)(0xf000 + stage); }
+void *wonder_host_shader_function_retyped(const char key[17], const uint8_t types[32], const struct wonder_shader_refl **refl) { (void)key; (void)types; (void)refl; return (void *)(uintptr_t)0xf0f0; }
 // Compute: fake_cs_key gets fake_cs_refl and is available only while cs_available is set.
 static struct wonder_shader_refl fake_cs_refl; static char fake_cs_key[17]; static int cs_available; static unsigned host_dispatches; static struct wonder_host_dispatch last_dispatch;
 int wonder_host_shader_available(const char key[17]) { return shaders_available && (strcmp(key, fake_cs_key) || cs_available); }

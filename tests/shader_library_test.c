@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 static int parse(const char *text, struct wonder_shader_refl *r, char *err) { return wonder_shader_refl_parse(text, strlen(text), r, err, 128); }
 int main(void) {
     struct wonder_shader_refl r; char err[128];
@@ -73,6 +74,20 @@ int main(void) {
     assert(wonder_shader_format_class(0x30) == WONDER_SHADER_SINT && wonder_shader_format_class(0x6A) == WONDER_SHADER_SINT);   // RGBA32I, RGB10A2I
     assert(wonder_shader_format_class(0x25) == WONDER_SHADER_FLOAT && wonder_shader_format_class(0x2E) == WONDER_SHADER_FLOAT);   // RGBA8, RGBA32F
     assert(wonder_shader_format_class(0x38) == WONDER_SHADER_FLOAT && wonder_shader_format_class(0x3F) == WONDER_SHADER_FLOAT);   // RGBA8_SRGB, R11G11B10F
+    // Integer attributes bound to an offline-built (all float) vertex stage: rewritten as the translator writes them.
+    {
+        const char *msl = "struct main0_in\n{\n    float4 m_32 [[attribute(0)]];\n    float4 m_3 [[attribute(6)]];\n};\n"
+                          "    float _1 = in.m_32.x;\n    float _2 = in.m_3.y;\n    float3 _3 = in.m_3.xyz;\n    float4 _4 = in.m_3;\n    float _5 = in.m_32.w;\n";
+        uint8_t types[32] = {0}; types[6] = WONDER_SHADER_UINT; char *out = NULL;
+        assert(!wonder_shader_retype_attributes(msl, strlen(msl), types, &out, err, sizeof err));
+        assert(strstr(out, "    uint4 m_3 [[attribute(6)]];") && strstr(out, "    float4 m_32 [[attribute(0)]];"));
+        assert(strstr(out, "float _2 = as_type<float>(in.m_3.y);") && strstr(out, "float3 _3 = as_type<float3>(in.m_3.xyz);"));
+        assert(strstr(out, "float4 _4 = as_type<float4>(in.m_3);") && strstr(out, "float _1 = in.m_32.x;") && strstr(out, "float _5 = in.m_32.w;"));   // m_32 is not m_3
+        free(out);
+        types[6] = WONDER_SHADER_SINT; assert(!wonder_shader_retype_attributes(msl, strlen(msl), types, &out, err, sizeof err) && strstr(out, "    int4 m_3 [[attribute(6)]];")); free(out);
+        types[6] = 0; types[7] = WONDER_SHADER_UINT;
+        assert(wonder_shader_retype_attributes(msl, strlen(msl), types, &out, err, sizeof err) && strstr(err, "attribute(7)") && !out);   // no such attribute: stop
+    }
     puts("shader_library OK");
     return 0;
 }

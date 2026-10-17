@@ -44,6 +44,14 @@ static void positive(int argc, char **argv) {
     assert(f && ((__bridge id<MTLFunction>)f).functionType == MTLFunctionTypeVertex);
     assert(wonder_host_shader_function("aaaaaaaaaaaaaaaa", 0) == f);                     // cached by key
     const struct wonder_shader_refl *r = wonder_host_shader_refl("aaaaaaaaaaaaaaaa"); assert(r && r->stage == 0);
+    {   // Integer format bound to an offline float attribute: rewritten stage compiles, reflection says uint, cached per type set.
+        uint8_t types[32] = {0}; types[6] = WONDER_SHADER_UINT; const struct wonder_shader_refl *rr = NULL;
+        void *g = wonder_host_shader_function_retyped("dddddddddddddddd", types, &rr);
+        assert(g && ((__bridge id<MTLFunction>)g).functionType == MTLFunctionTypeVertex && rr && rr->nattr == 2);
+        assert(rr->attr[0].type == WONDER_SHADER_FLOAT && rr->attr[1].type == WONDER_SHADER_UINT);
+        assert(wonder_host_shader_refl("dddddddddddddddd")->attr[1].type == WONDER_SHADER_FLOAT);   // the plain build is untouched
+        const struct wonder_shader_refl *again = NULL; assert(wonder_host_shader_function_retyped("dddddddddddddddd", types, &again) == g && again == rr);
+    }
     // CLAMP_TO_BORDER: Metal has three fixed border colours.
     assert(wonder_host_border_color((const float[4]){0, 0, 0, 0}) == MTLSamplerBorderColorTransparentBlack);
     assert(wonder_host_border_color((const float[4]){0, 0, 0, 1}) == MTLSamplerBorderColorOpaqueBlack);
@@ -87,6 +95,10 @@ int main(int argc, char **argv) {
         put(@"aaaaaaaaaaaaaaaa", @"vs", vs, @"stage vs\n", keys);
         put(@"bbbbbbbbbbbbbbbb", @"ps", @"fragment float4 main0( {", @"stage ps\nfout 0 float\n", keys);
         put(@"cccccccccccccccc", @"vs", vs, @"stage vs\n", keys);
+        // Offline-built style (round196): every attribute float4, integer lanes read through as_type after the retype.
+        NSString *vs_attr = @"#include <metal_stdlib>\nusing namespace metal;\nstruct main0_in\n{\n    float4 m_10 [[attribute(0)]];\n    float4 m_1 [[attribute(6)]];\n};\n"
+            "struct o { float4 p [[position]]; };\nvertex o main0(main0_in in [[stage_in]]) { o r; float _1 = in.m_1.x; r.p = float4(in.m_10.xy, _1, 1); return r; }\n";
+        put(@"dddddddddddddddd", @"vs", vs_attr, @"stage vs\nattr 0 0 float\nattr 6 6 float\n", keys);
         [@"// edited after the build" writeToFile:[dir stringByAppendingString:@"/cccccccccccccccc.metal"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
         [[NSJSONSerialization dataWithJSONObject:@{@"keys": keys} options:0 error:nil] writeToFile:[dir stringByAppendingString:@"/manifest.json"] atomically:YES];
         wonder_host_draw_set_device((__bridge void *)device);

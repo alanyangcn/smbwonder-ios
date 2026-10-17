@@ -67,6 +67,26 @@ const struct wonder_shader_refl *wonder_host_shader_refl(const char key_c[17]) {
     pthread_mutex_unlock(&lock);
     return cached.pointerValue;
 }
+// Compiles one translated stage (MSL 3.2, no fast math, invariant positions); stops by name with the compiler's error.
+static id<MTLFunction> compile_stage(NSString *source, const char *label, int stage) {
+    MTLFunctionType want = stage == 5 ? MTLFunctionTypeKernel : stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex;
+    if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", label);
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.languageVersion = MTLLanguageVersion3_2; options.mathMode = MTLMathModeSafe;   // no fast math: keep the translator's precision contract
+    options.preserveInvariance = YES;   // [[position, invariant]] (wonder_shader_build.py): depth pre-pass + depth EQUAL passes
+    __block NSError *error = nil; __block id<MTLLibrary> library = nil;
+    on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:source options:options error:&e]; error = e; });
+    if (!library) {
+        NSString *first = nil;   // the compiler's own "program_source:L:C: error:" line when there is one
+        for (NSString *line in [error.localizedDescription componentsSeparatedByString:@"\n"]) if ([line containsString:@"error:"]) { first = line; break; }
+        if (!first) first = [error.localizedDescription componentsSeparatedByString:@"\n"].firstObject ?: @"?";
+        wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s error=%s", label, first.UTF8String);
+    }
+    id<MTLFunction> f = [library newFunctionWithName:@"main0"];
+    if (!f || f.functionType != want) wonder_nvn_stop("NVN_SHADER_STAGE key=%s: main0 is not a %s function", label, stage == 5 ? "kernel" : stage ? "fragment" : "vertex");
+    f.label = @(label);
+    return f;
+}
 void *wonder_host_shader_function(const char key_c[17], int stage) {
     pthread_mutex_lock(&lock);
     NSString *key = [NSString stringWithUTF8String:key_c];
@@ -74,24 +94,32 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
     MTLFunctionType want = stage == 5 ? MTLFunctionTypeKernel : stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex;
     if (!f) {
         NSData *source = verified(key, @"metal", @"msl_sha256", stage);
-        if (!device) wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s: no Metal device", key_c);
-        MTLCompileOptions *options = [MTLCompileOptions new];
-        options.languageVersion = MTLLanguageVersion3_2; options.mathMode = MTLMathModeSafe;   // no fast math: keep the translator's precision contract
-        options.preserveInvariance = YES;   // [[position, invariant]] (wonder_shader_build.py): depth pre-pass + depth EQUAL passes
-        __block NSError *error = nil; __block id<MTLLibrary> library = nil;
-        on_host_stack(^{ NSError *e = nil; library = [device newLibraryWithSource:[[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding] options:options error:&e]; error = e; });
-        if (!library) {
-            NSString *first = nil;   // the compiler's own "program_source:L:C: error:" line when there is one
-            for (NSString *line in [error.localizedDescription componentsSeparatedByString:@"\n"]) if ([line containsString:@"error:"]) { first = line; break; }
-            if (!first) first = [error.localizedDescription componentsSeparatedByString:@"\n"].firstObject ?: @"?";
-            wonder_nvn_stop("NVN_SHADER_COMPILE_FAILED key=%s error=%s", key_c, first.UTF8String);
-        }
-        f = [library newFunctionWithName:@"main0"];
-        if (!f || f.functionType != want) wonder_nvn_stop("NVN_SHADER_STAGE key=%s: main0 is not a %s function", key_c, stage == 5 ? "kernel" : stage ? "fragment" : "vertex");
-        f.label = key; functions[key] = f;
+        f = compile_stage([[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding], key_c, stage); functions[key] = f;
     } else if (f.functionType != want)
         wonder_nvn_stop("NVN_SHADER_STAGE key=%s bound as stage %d", key_c, stage);
     pthread_mutex_unlock(&lock);
+    return (__bridge void *)f;
+}
+void *wonder_host_shader_function_retyped(const char key_c[17], const uint8_t types[32], const struct wonder_shader_refl **refl_out) {
+    const struct wonder_shader_refl *base = wonder_host_shader_refl(key_c);
+    pthread_mutex_lock(&lock);
+    NSMutableString *variant = [NSMutableString stringWithUTF8String:key_c];
+    for (int loc = 0; loc < 32; loc++) if (types[loc] == WONDER_SHADER_UINT || types[loc] == WONDER_SHADER_SINT) [variant appendFormat:@":%d%c", loc, types[loc] == WONDER_SHADER_UINT ? 'u' : 'i'];
+    id<MTLFunction> f = functions[variant]; NSValue *r = reflections[variant];
+    if (!f) {
+        NSData *source = verified([NSString stringWithUTF8String:key_c], @"metal", @"msl_sha256", 0);
+        char *text = NULL, err[160];
+        if (wonder_shader_retype_attributes(source.bytes, source.length, types, &text, err, sizeof err))
+            wonder_nvn_stop("NVN_SHADER_RETYPE_FAILED key=%s: %s", key_c, err);
+        f = compile_stage(@(text), variant.UTF8String, 0); free(text); functions[variant] = f;
+        struct wonder_shader_refl *copy = malloc(sizeof *copy); if (!copy) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY retyped reflection");
+        *copy = *base;
+        for (int i = 0; i < copy->nattr; i++) if (types[copy->attr[i].location] == WONDER_SHADER_UINT || types[copy->attr[i].location] == WONDER_SHADER_SINT) copy->attr[i].type = types[copy->attr[i].location];
+        r = [NSValue valueWithPointer:copy]; reflections[variant] = r;   // lives for the process
+        fprintf(stderr, "HOST_SHADER_RETYPED %s (offline float attributes bound as integer formats)\n", variant.UTF8String);
+    }
+    pthread_mutex_unlock(&lock);
+    *refl_out = r.pointerValue;
     return (__bridge void *)f;
 }
 int wonder_host_shader_available(const char key_c[17]) {

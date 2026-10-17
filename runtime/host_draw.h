@@ -47,6 +47,9 @@ struct wonder_host_dispatch {
 int wonder_host_dispatch(const struct wonder_host_dispatch *x);            // 0 = encoded; unsupported state stops by name
 int wonder_host_shader_available(const char key[17]);                       // 1 = in the bundled shader build
 void *wonder_host_shader_function(const char key[17], int stage);           // id<MTLFunction> (stage 0 vertex, 1 fragment, 5 kernel); stops by name on failure
+// Vertex stage with integer attributes in place of the offline build's float ones (types[location] = WONDER_SHADER_UINT /
+// SINT, wonder_shader_retype_attributes); *refl receives the matching reflection. Stops by name on failure.
+void *wonder_host_shader_function_retyped(const char key[17], const uint8_t types[32], const struct wonder_shader_refl **refl);
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key[17]);
 int wonder_host_draw(const struct wonder_host_draw *d);                     // 0 = encoded; unsupported state stops by name
 uint32_t wonder_host_vertex_format(int nvn_format);

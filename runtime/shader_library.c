@@ -121,3 +121,53 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
     if (r->stage == 5 && !r->local[0]) return fail(err, n, "compute reflection without a local line");
     return 0;
 }
+#include <stdlib.h>
+#include <ctype.h>
+struct text { char *p; size_t n, cap; int failed; };
+static void append(struct text *t, const char *s, size_t n) {
+    if (t->failed) return;
+    if (t->n + n + 1 > t->cap) { size_t cap = t->cap ? t->cap * 2 : 4096; while (cap < t->n + n + 1) cap *= 2;
+        char *q = realloc(t->p, cap); if (!q) { t->failed = 1; return; } t->p = q; t->cap = cap; }
+    memcpy(t->p + t->n, s, n); t->n += n; t->p[t->n] = 0;
+}
+int wonder_shader_retype_attributes(const char *msl, size_t size, const uint8_t types[32], char **out, char *err, size_t errlen) {
+    *out = NULL;
+    char names[32][24] = {{0}};   // per location: the stage_in member name (m_N)
+    for (int loc = 0; loc < 32; loc++) {
+        if (types[loc] != WONDER_SHADER_UINT && types[loc] != WONDER_SHADER_SINT) continue;
+        char tag[40]; snprintf(tag, sizeof tag, " [[attribute(%d)]];", loc);
+        const char *at = memmem(msl, size, tag, strlen(tag));
+        if (!at) return fail(err, errlen, "no [[attribute(%d)]] declaration", loc);
+        const char *line = at; while (line > msl && line[-1] != '\n') line--;
+        const char *q = line; while (*q == ' ') q++;
+        if (strncmp(q, "float4 ", 7)) return fail(err, errlen, "attribute %d is not declared float4", loc);
+        q += 7; size_t len = (size_t)(at - q);
+        if (!len || len >= sizeof names[loc]) return fail(err, errlen, "attribute %d member name", loc);
+        memcpy(names[loc], q, len); names[loc][len] = 0;
+    }
+    struct text t = {0}; const char *p = msl, *end = msl + size;
+    while (p < end) {
+        int done = 0;
+        for (int loc = 0; loc < 32 && !done; loc++) {
+            if (!names[loc][0]) continue;
+            size_t len = strlen(names[loc]);
+            // declaration: "float4 <name> [[attribute(" -> uint4 / int4
+            if ((size_t)(end - p) > 7 + len && !strncmp(p, "float4 ", 7) && !strncmp(p + 7, names[loc], len) && p[7 + len] == ' ') {
+                const char *ty = types[loc] == WONDER_SHADER_UINT ? "uint4 " : "int4 "; append(&t, ty, strlen(ty)); p += 7; done = 1; break;
+            }
+            // read: "in.<name>[.swizzle]" (not a longer member name)
+            if ((size_t)(end - p) > 3 + len && !strncmp(p, "in.", 3) && !strncmp(p + 3, names[loc], len) && !isalnum((unsigned char)p[3 + len]) && p[3 + len] != '_') {
+                const char *s = p + 3 + len; size_t sw = 0;
+                if (*s == '.') { while (s + 1 + sw < end && s[1 + sw] && strchr("xyzwrgba", s[1 + sw])) sw++; }
+                if (*s == '.' && !sw) { t.failed = 1; break; }
+                size_t comps = sw ? sw : 4; if (comps > 4) { free(t.p); return fail(err, errlen, "attribute %d swizzle", loc); }
+                char head[24]; snprintf(head, sizeof head, comps == 1 ? "as_type<float>(" : "as_type<float%zu>(", comps);
+                append(&t, head, strlen(head)); append(&t, p, (size_t)(s - p) + (sw ? sw + 1 : 0)); append(&t, ")", 1);
+                p = s + (sw ? sw + 1 : 0); done = 1; break;
+            }
+        }
+        if (!done) { append(&t, p, 1); p++; }
+    }
+    if (t.failed) { free(t.p); return fail(err, errlen, "rewrite failed"); }
+    *out = t.p; return 0;
+}

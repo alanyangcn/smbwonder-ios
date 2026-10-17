@@ -37,3 +37,9 @@ int wonder_shader_refl_parse(const char *text, size_t size, struct wonder_shader
 // float / sRGB / scaled / compressed). Offline-built stages (tools/extract_shaders.py) assume float; the host compares
 // (round153).
 int wonder_shader_format_class(int nvn_format);
+// Offline-built vertex stages declare every attribute float (round153); a draw that binds an integer format there
+// (round193/196: RGBA8UI / R16UI) gets the stage rewritten the way the translator writes integer attributes: the
+// declaration `float4 m_N [[attribute(L)]]` becomes uint4 / int4 and each read `in.m_N.xyz` becomes
+// `as_type<float3>(in.m_N.xyz)` (the raw 32-bit lanes in the float registers Maxwell code works on).
+// types[L]: WONDER_SHADER_UINT / SINT to retype location L, anything else = keep. *out is malloc'd. 0 = ok.
+int wonder_shader_retype_attributes(const char *msl, size_t size, const uint8_t types[32], char **out, char *err, size_t errlen);

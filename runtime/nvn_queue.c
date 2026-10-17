@@ -313,7 +313,19 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
                  d.vr->depth_minus_one < 0 ? "without a depth line" : d.vr->depth_minus_one ? "for NEAR_IS_MINUS_W" : "for NEAR_IS_ZERO");
         replay_stop(opcode, why);
     }
-    d.vs = wonder_host_shader_function(d.vs_key, 0); d.fs = wonder_host_shader_function(d.fs_key, 1);
+    {   // Offline-built vertex stages read every attribute as float; integer formats bound there get the stage rewritten the
+        // way the translator writes integer attributes (round196: vs 01b4c315 attribute 6 R16UI). A stage that declares an
+        // integer attribute but is bound a float format still stops by name below.
+        uint8_t retype[32] = {0}; int any = 0;
+        for (int i = 0; i < d.vr->nattr; i++) {
+            int a = d.vr->attr[i].nvn;
+            if (a >= draw_state.nattrib || !draw_state.attrib[a].fmt || d.vr->attr[i].type != WONDER_SHADER_FLOAT) continue;
+            int cls = wonder_shader_format_class((int)draw_state.attrib[a].fmt);
+            if (cls != WONDER_SHADER_FLOAT && d.vr->attr[i].location < 32) { retype[d.vr->attr[i].location] = (uint8_t)cls; any = 1; }
+        }
+        d.vs = any ? wonder_host_shader_function_retyped(d.vs_key, retype, &d.vr) : wonder_host_shader_function(d.vs_key, 0);
+    }
+    d.fs = wonder_host_shader_function(d.fs_key, 1);
     if (d.vr->drv0_buffer >= 0 || d.fr->drv0_buffer >= 0) driver_c0(d.drv0, 0);
     const struct wonder_shader_refl *refl[2] = {d.vr, d.fr};
     for (int stage = 0; stage < 2; stage++) {
