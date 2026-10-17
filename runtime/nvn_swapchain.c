@@ -115,7 +115,10 @@ int wonder_nvnWindowAcquireTexture(void *window, void *sync, int *index) {
     // console acquire does when no texture is free.
     if (atomic_load(&w->released[*index]) != w->presented[*index]) {
         wonder_host_post_to_replay(flush_job, NULL);   // round221: after the queued submits and presents
+        struct timespec a0; clock_gettime(CLOCK_MONOTONIC, &a0);
         while (atomic_load(&w->released[*index]) != w->presented[*index]) { struct timespec ts = {0, 100000}; nanosleep(&ts, NULL); }
+        struct timespec a1; clock_gettime(CLOCK_MONOTONIC, &a1); extern _Atomic uint64_t wonder_nvn_acct[6];
+        atomic_fetch_add(&wonder_nvn_acct[2], (uint64_t)(a1.tv_sec - a0.tv_sec) * 1000000000u + (uint64_t)(a1.tv_nsec - a0.tv_nsec));
     }
     atomic_store(&s->signaled, 1); s->fence++;
     wonder_nvn_report("NVN_CALL nvnWindowAcquireTexture window=%p -> index %d (sync signaled)", window, *index);
@@ -187,8 +190,10 @@ int wonder_nvnSyncWait(const void *sync, uint64_t timeout_ns) {
     if (atomic_load(&s->signaled)) return 0;
     if (!s->fence) wonder_nvn_stop("NVN_INVALID_STATE nvnSyncWait on a sync that was never fenced (would wait forever)");
     struct timespec start; clock_gettime(CLOCK_MONOTONIC, &start);
+    extern _Atomic uint64_t wonder_nvn_acct[6]; atomic_fetch_add(&wonder_nvn_acct[4], 1);
     for (;;) {
-        if (atomic_load(&s->signaled)) return 1;
+        if (atomic_load(&s->signaled)) { struct timespec e; clock_gettime(CLOCK_MONOTONIC, &e);
+            atomic_fetch_add(&wonder_nvn_acct[3], (uint64_t)(e.tv_sec - start.tv_sec) * 1000000000u + (uint64_t)(e.tv_nsec - start.tv_nsec)); return 1; }
         struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
         uint64_t elapsed = (uint64_t)(now.tv_sec - start.tv_sec) * 1000000000u + (uint64_t)(now.tv_nsec - start.tv_nsec);
         if (timeout_ns != UINT64_MAX && elapsed >= timeout_ns) return 2;

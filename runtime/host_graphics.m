@@ -284,8 +284,11 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
   {  // round222 accounting over these 300 presents (ms): replay idle / finish waits / command buffer allocation / drawable, GPU time
    static uint64_t l_fin, l_fn, l_cb, l_dr, l_idle, l_gpu, l_cbs;
    uint64_t fin=atomic_load(&acct_finish_ns), fn=atomic_load(&acct_finish_n), cb=atomic_load(&acct_cbuf_ns), dr=atomic_load(&acct_drawable_ns), idle=atomic_load(&acct_idle_ns), gpu=atomic_load(&acct_gpu_ns), cbs=atomic_load(&acct_cbufs);
-   fprintf(stderr,"HOST_FRAME_TIME presents=300 wall_ms=%.0f replay_idle_ms=%.0f finish_ms=%.0f(%llu) cbuf_alloc_ms=%.0f(%llu) drawable_ms=%.0f gpu_ms=%.0f\n",last_t>0?(now-last_t)*1e3:0.0,
-           (idle-l_idle)/1e6,(fin-l_fin)/1e6,(unsigned long long)(fn-l_fn),(cb-l_cb)/1e6,(unsigned long long)(cbs-l_cbs),(dr-l_dr)/1e6,(gpu-l_gpu)/1e6);
+   extern _Atomic uint64_t wonder_nvn_acct[6]; static uint64_t l_n[6]; uint64_t n6[6]; for(int k=0;k<6;k++) n6[k]=atomic_load(&wonder_nvn_acct[k]);
+   fprintf(stderr,"HOST_FRAME_TIME presents=300 wall_ms=%.0f replay_idle_ms=%.0f finish_ms=%.0f(%llu: queue_finish %llu, replay %llu) cbuf_alloc_ms=%.0f(%llu) drawable_ms=%.0f gpu_ms=%.0f game: acquire_wait_ms=%.0f sync_wait_ms=%.0f(%llu) submit_ms=%.0f\n",last_t>0?(now-last_t)*1e3:0.0,
+           (idle-l_idle)/1e6,(fin-l_fin)/1e6,(unsigned long long)(fn-l_fn),(unsigned long long)(n6[0]-l_n[0]),(unsigned long long)(n6[1]-l_n[1]),(cb-l_cb)/1e6,(unsigned long long)(cbs-l_cbs),(dr-l_dr)/1e6,(gpu-l_gpu)/1e6,
+           (n6[2]-l_n[2])/1e6,(n6[3]-l_n[3])/1e6,(unsigned long long)(n6[4]-l_n[4]),(n6[5]-l_n[5])/1e6);
+   memcpy(l_n,n6,sizeof n6);
    l_fin=fin; l_fn=fn; l_cb=cb; l_dr=dr; l_idle=idle; l_gpu=gpu; l_cbs=cbs;
   }
   last_hv=wonder_host_draw_sampled_validations();

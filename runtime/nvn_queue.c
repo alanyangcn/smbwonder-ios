@@ -62,7 +62,12 @@ static void pending_value(uint64_t address, uint32_t value) {
     struct wonder_nvn_pool_view v; wonder_nvn_address_span(address, 4, &v);
     wonder_report_shadow_value(&report_shadow, (uint64_t)(uintptr_t)v.memory, value);
 }
+// Frame accounting (round225, printed by host_graphics.m with HOST_FRAME_TIME): finishes by origin and the game thread's
+// waits. [0] QueueFinish calls [1] replay finishes (CPU reads of GPU-written data) [2] acquire wait ns [3] sync wait ns
+// [4] sync waits [5] submit call ns on the game thread.
+_Atomic uint64_t wonder_nvn_acct[6];
 static void replay_finish(void) {   // GPU done: every recorded write has landed
+    atomic_fetch_add(&wonder_nvn_acct[1], 1);
     wonder_host_finish(); ubo_update_count = 0; ubo_update_overflow = 0; wonder_report_shadow_clear(&report_shadow);
 }
 static void make_cpu_visible(uint64_t address, uint64_t size) {
@@ -961,6 +966,7 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
       if (waited) wonder_nvn_report("NVN_GPU_GATE submit waited %.1f s for the app to become active", waited / 1e9); }
     wonder_nvn_queue_check(queue, "nvnQueueSubmitCommands");
     if (count < 0 || (count && !handles)) wonder_nvn_stop("NVN_INVALID_ARGUMENT nvnQueueSubmitCommands count=%d", count);
+    struct timespec t0; clock_gettime(CLOCK_MONOTONIC, &t0);
     static _Atomic int submitting;
     if (atomic_fetch_add(&submitting, 1)) wonder_nvn_stop("NVN_UNSUPPORTED nvnQueueSubmitCommands concurrent submitters");
     struct submit_job *job = malloc(sizeof *job + (size_t)count * sizeof job->handles[0]);
@@ -968,6 +974,8 @@ void wonder_nvnQueueSubmitCommands(void *queue, int count, const uint64_t *handl
     job->queue = queue; job->count = count; if (count) memcpy(job->handles, handles, (size_t)count * sizeof handles[0]);
     atomic_fetch_sub(&submitting, 1);   // the queue orders the replay; only overlapping calls are refused
     wonder_host_post_to_replay(submit_on_replay_stack, job);
+    struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+    atomic_fetch_add(&wonder_nvn_acct[5], (uint64_t)(t1.tv_sec - t0.tv_sec) * 1000000000u + (uint64_t)(t1.tv_nsec - t0.tv_nsec));
 }
 static void submit_on_replay_stack(void *arg) {
     struct submit_job *job = arg; void *queue = job->queue; int count = job->count; const uint64_t *handles = job->handles;
@@ -1024,7 +1032,7 @@ static void submit_on_replay_stack(void *arg) {
     submit_draws = 0; submit_dispatches = 0; submit_programs[0] = 0;
 }
 static void flush_job(void *unused) { (void)unused; wonder_host_flush(); }
-static void finish_job(void *unused) { (void)unused; wonder_host_finish(); }
+static void finish_job(void *unused) { (void)unused; atomic_fetch_add(&wonder_nvn_acct[0], 1); wonder_host_finish(); }
 void wonder_nvnQueueFlush(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFlush"); wonder_host_post_to_replay(flush_job, NULL); }
 void wonder_nvnQueueFinish(void *queue) { wonder_nvn_queue_check(queue, "nvnQueueFinish"); wonder_host_run_on_replay_stack(finish_job, NULL); }
 
