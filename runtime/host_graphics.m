@@ -96,10 +96,16 @@ int wonder_host_gpu_error(char *out,size_t size){ if(!atomic_load(&gpu_failed)) 
 // The pending command buffer as is (the draw batch flush encodes into it) and, for every other user, after the open
 // draw batch was encoded (metal3_draw.m pass batching keeps command order this way).
 void wonder_host_draw_flush_locked(void);
+// Frame-time accounting (round222, printed with HOST_MEMORY): where the replay thread's wall time goes, and the GPU's
+// command buffer time (GPUEndTime - GPUStartTime, overlapping buffers counted once each).
+static _Atomic uint64_t acct_finish_ns, acct_finish_n, acct_cbuf_ns, acct_drawable_ns, acct_idle_ns, acct_gpu_ns, acct_cbufs;
+static uint64_t now_ns(void){ return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static id<MTLCommandBuffer> raw_pending_buffer(void){
  if(!pending){
-  pending=[queue commandBuffer]; pending.label=@"Wonder NVN submit";
+  uint64_t t0=now_ns(); pending=[queue commandBuffer]; atomic_fetch_add(&acct_cbuf_ns,now_ns()-t0); atomic_fetch_add(&acct_cbufs,1);
+  pending.label=@"Wonder NVN submit";
   [pending addCompletedHandler:^(id<MTLCommandBuffer> b){
+   if(b.GPUEndTime>b.GPUStartTime) atomic_fetch_add(&acct_gpu_ns,(uint64_t)((b.GPUEndTime-b.GPUStartTime)*1e9));
    if(b.status==MTLCommandBufferStatusError&&!atomic_exchange(&gpu_failed,1)){
     snprintf(gpu_error_text,sizeof gpu_error_text,"%s in %s",b.error.localizedDescription.UTF8String?:"?",b.label.UTF8String?:"?");
     fprintf(stderr,"HOST_GPU_ERROR %s\n",gpu_error_text);
@@ -129,7 +135,7 @@ void wonder_host_finish(void){
  [pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; dispatch_semaphore_signal(done); }];
  commit_locked();
  pthread_mutex_unlock(&replay_mutex);
- dispatch_semaphore_wait(done,DISPATCH_TIME_FOREVER);
+ uint64_t t0=now_ns(); dispatch_semaphore_wait(done,DISPATCH_TIME_FOREVER); atomic_fetch_add(&acct_finish_ns,now_ns()-t0); atomic_fetch_add(&acct_finish_n,1);
 }
 void wonder_host_after_gpu(void (*fn)(void *), void *arg){
  pthread_mutex_lock(&replay_mutex); [raw_pending_buffer() addCompletedHandler:^(id<MTLCommandBuffer> b){ (void)b; fn(arg); }]; pthread_mutex_unlock(&replay_mutex);
@@ -275,13 +281,20 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
   char tbdr[160]; wonder_host_tbdr_window(tbdr,sizeof tbdr);
   fprintf(stderr,"HOST_MEMORY present=%u footprint_mb=%llu render_targets=%u sampled=%u glyph_cache(serial %llu) nonzero/64=%zu draws/passes=%u/%u fps=%.1f texture_hashes=%u watched=%u %s\n",presents,(unsigned long long)(footprint>>20),targets,wonder_host_draw_sampled_count(),(unsigned long long)gserial,glyphs,
           bd-last_bd,bp-last_bp,last_t>0?300.0/(now-last_t):0.0,wonder_host_draw_sampled_validations()-last_hv,wonder_guard_count(),tbdr);
+  {  // round222 accounting over these 300 presents (ms): replay idle / finish waits / command buffer allocation / drawable, GPU time
+   static uint64_t l_fin, l_fn, l_cb, l_dr, l_idle, l_gpu, l_cbs;
+   uint64_t fin=atomic_load(&acct_finish_ns), fn=atomic_load(&acct_finish_n), cb=atomic_load(&acct_cbuf_ns), dr=atomic_load(&acct_drawable_ns), idle=atomic_load(&acct_idle_ns), gpu=atomic_load(&acct_gpu_ns), cbs=atomic_load(&acct_cbufs);
+   fprintf(stderr,"HOST_FRAME_TIME presents=300 wall_ms=%.0f replay_idle_ms=%.0f finish_ms=%.0f(%llu) cbuf_alloc_ms=%.0f(%llu) drawable_ms=%.0f gpu_ms=%.0f\n",last_t>0?(now-last_t)*1e3:0.0,
+           (idle-l_idle)/1e6,(fin-l_fin)/1e6,(unsigned long long)(fn-l_fn),(cb-l_cb)/1e6,(unsigned long long)(cbs-l_cbs),(dr-l_dr)/1e6,(gpu-l_gpu)/1e6);
+   l_fin=fin; l_fn=fn; l_cb=cb; l_dr=dr; l_idle=idle; l_gpu=gpu; l_cbs=cbs;
+  }
   last_hv=wonder_host_draw_sampled_validations();
   last_bd=bd; last_bp=bp; last_t=now;
  }
  if(present_setup()) return EIO;
  if(t.pixelFormat==MTLPixelFormatRGBA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
  else if(t.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB) t=[t newTextureViewWithPixelFormat:MTLPixelFormatBGRA8Unorm];
- CAMetalLayer *layer=(CAMetalLayer*)surface.layer; id<CAMetalDrawable> drawable=[layer nextDrawable]; if(!drawable) return EAGAIN;
+ CAMetalLayer *layer=(CAMetalLayer*)surface.layer; uint64_t td=now_ns(); id<CAMetalDrawable> drawable=[layer nextDrawable]; atomic_fetch_add(&acct_drawable_ns,now_ns()-td); if(!drawable) return EAGAIN;
  // Widescreen (widescreen.h): the game framed a wider view into this 16:9 image; stretching it to the game's aspect
  // undoes the squeeze. Then it is fitted to the drawable as before (bars only past WONDER_WIDESCREEN_MAX_ASPECT).
  double stretch=wonder_widescreen_get()/((double)crop[2]/crop[3]); if(stretch<1) stretch=1;
@@ -335,7 +348,7 @@ static void *replay_thread_main(void *unused){
  (void)unused;
  atomic_store(&replay_port,pthread_mach_thread_np(pthread_self()));
  for(;;){
-  pthread_mutex_lock(&job_lock); while(!job_head) pthread_cond_wait(&job_ready,&job_lock);
+  pthread_mutex_lock(&job_lock); uint64_t ti=now_ns(); while(!job_head) pthread_cond_wait(&job_ready,&job_lock); atomic_fetch_add(&acct_idle_ns,now_ns()-ti);
   struct replay_job *j=job_head; pthread_mutex_unlock(&job_lock);
   @autoreleasepool { j->fn(j->arg); }   // a stop inside exits this thread; the guest is parked by the stop
   pthread_mutex_lock(&job_lock);
