@@ -129,7 +129,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
                 *RUNTIME_GRAPHICS)]
     command += [str(embed), '-framework', 'UIKit', '-framework', 'Foundation', '-framework', 'CoreGraphics', '-framework', 'CoreText', '-framework', 'Metal', '-framework', 'QuartzCore', '-framework', 'ImageIO', '-framework', 'GameController', '-framework', 'AudioToolbox', '-framework', 'AVFAudio', *flags, '-o', str(app / 'LoaderProbe')]
     subprocess.run(command, check=True, env=env)
-    info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe',
+    info = {'CFBundleIdentifier': bundle_id, 'CFBundleName':'Wonder Loader Probe', 'CFBundleDisplayName':'马里奥 惊奇',
             'CFBundleExecutable':'LoaderProbe', 'CFBundlePackageType':'APPL',
             'CFBundleShortVersionString':'0.1', 'CFBundleVersion':'4', 'WonderBootStage':stage,
             'MinimumOSVersion':'18.0', 'LSRequiresIPhoneOS':True, 'UIDeviceFamily':[1, 2],

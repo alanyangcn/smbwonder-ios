@@ -1140,7 +1140,12 @@ int main(void) {
             // Storage buffers: refl slot 2 of the fragment stage bound with BindStorageBuffer (round89).
             { const char *fs_sb = "stage ps\nsbuf 2 3 r\nfout 0 float\n";
               assert(!wonder_shader_refl_parse(fs_sb, strlen(fs_sb), &fake_refl[1], err, sizeof err));
-              REVIEW_STOP((void)0, "unbound storage buffer stage 1 slot 2");
+              REVIEW_OK((void)0);   // read-only and unbound: a zero block, as Maxwell's empty slot reads zeros (round213)
+              assert(last_draw.sbuf[1][2].size == 0x10000 && last_draw.sbuf[1][2].buffer);
+              const char *fs_sbw = "stage ps\nsbuf 2 3 rw\nfout 0 float\n";
+              assert(!wonder_shader_refl_parse(fs_sbw, strlen(fs_sbw), &fake_refl[1], err, sizeof err));
+              REVIEW_STOP((void)0, "unbound storage buffer stage 1 slot 2");   // a write to an unbound slot stops
+              assert(!wonder_shader_refl_parse(fs_sb, strlen(fs_sb), &fake_refl[1], err, sizeof err));
               REVIEW_OK(((void (*)(void *, int, int, uint64_t, size_t))slot("nvnCommandBufferBindStorageBuffer"))(dcb, 1, 2, (uintptr_t)(cb_memory + 0x9800), 0x40));
               assert(last_draw.sbuf[1][2].size == 0x40 && last_draw.sbuf[1][2].buffer);
               fake_refl[1] = fs_parsed; }

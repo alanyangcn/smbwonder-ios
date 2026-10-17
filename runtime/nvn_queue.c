@@ -211,6 +211,18 @@ static void sync_draw_state(void) {
 static struct wonder_host_span span_of(unsigned opcode, uint64_t address, uint64_t size) {
     struct wonder_host_span s = {0}; host_span(address, size, opcode, &s.buffer, &s.offset); s.size = (size_t)size; return s;
 }
+// Storage slot a stage reads that the game left unbound (round213: a world-map fragment program declares slot 0 and the
+// game binds nothing there). The translated code reads it through c[0], where the slot's address and size stay 0, as the
+// driver leaves them; Maxwell's bounds-checked global-to-storage reads of an empty slot return zeros. The host binds a
+// 64 KiB zero page block read-only so those reads are zeros. A stage that writes an unbound slot still stops by name.
+static struct wonder_host_span unbound_storage(unsigned opcode, int write, const char *where, int slot) {
+    if (write) { char why[96]; snprintf(why, sizeof why, "unbound storage buffer %s slot %d", where, slot); replay_stop(opcode, why); }
+    static uint8_t zeros[0x10000] __attribute__((aligned(16384))); static void *buffer; static size_t offset; static unsigned logged;
+    if (!buffer) buffer = wonder_host_pool_buffer(zeros, sizeof zeros, &offset);
+    if (!buffer) replay_stop(opcode, "unbound storage buffer: no host view of the zero block");
+    if (logged++ < 8) wonder_nvn_report("NVN_UNBOUND_STORAGE_READ %s slot %d reads zeros (no storage buffer bound)", where, slot);
+    return (struct wonder_host_span){buffer, offset, sizeof zeros};
+}
 // Texture slot (or bindless handle) of NVN stage `stage` read by reflection entry rt -> out->tex[out_stage][slot]: the pool
 // registration, its sampler and, for textures without a host GPU copy, the pool storage they are uploaded from.
 static void resolve_texture(unsigned opcode, int stage, const struct wonder_shader_tex *rt, struct wonder_host_draw *out, int out_stage) {
@@ -377,7 +389,7 @@ static void draw(unsigned opcode, struct wonder_nvn_draw_call call) {
         for (int i = 0; i < r->nsbuf; i++) {
             int slot = r->sbuf[i].slot;
             if (!draw_state.storage_buffer[stage][slot].address || !draw_state.storage_buffer[stage][slot].size) {
-                snprintf(why, sizeof why, "unbound storage buffer stage %d slot %d", stage, slot); replay_stop(opcode, why); }
+                d.sbuf[stage][slot] = unbound_storage(opcode, r->sbuf[i].write, stage ? "stage 1" : "stage 0", slot); continue; }
             d.sbuf[stage][slot] = span_of(opcode, draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
             if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[stage][slot].address, draw_state.storage_buffer[stage][slot].size);
         }
@@ -607,7 +619,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
     for (int i = 0; i < r->nsbuf; i++) {
         int slot = r->sbuf[i].slot;
         if (!draw_state.storage_buffer[5][slot].address || !draw_state.storage_buffer[5][slot].size) {
-            snprintf(why, sizeof why, "unbound storage buffer compute slot %d", slot); replay_stop(opcode, why); }
+            x.sbuf[slot] = unbound_storage(opcode, r->sbuf[i].write, "compute", slot); continue; }
         x.sbuf[slot] = span_of(opcode, draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
         if (r->sbuf[i].write) pending_unknown(draw_state.storage_buffer[5][slot].address, draw_state.storage_buffer[5][slot].size);
     }
