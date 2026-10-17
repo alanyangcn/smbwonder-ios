@@ -26,10 +26,25 @@ static NSString *directory; static NSDictionary *manifest;
 static NSMutableDictionary<NSString *, id<MTLFunction>> *functions;
 static NSMutableDictionary<NSString *, NSValue *> *reflections;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+// round226: per-draw lookups by the 16-character key go through this C table first (an NSString and three dictionary
+// lookups per stage per draw were ~5% of the replay thread). Filled from the dictionaries above; cleared with them.
+#define SHADER_SLOTS 32768
+static struct shader_slot { char key[17]; int8_t available; const struct wonder_shader_refl *refl; void *fn[6]; } *shader_table;
+static struct shader_slot *shader_slot_locked(const char key_c[17]) {   // with lock held
+    if (!shader_table) { shader_table = calloc(SHADER_SLOTS, sizeof *shader_table); if (!shader_table) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY shader table"); }
+    uint64_t h = 0xcbf29ce484222325ull; for (int i = 0; i < 16 && key_c[i]; i++) { h ^= (uint8_t)key_c[i]; h *= 0x100000001b3ull; }
+    for (uint64_t i = h & (SHADER_SLOTS - 1), n = 0; n < SHADER_SLOTS; i = (i + 1) & (SHADER_SLOTS - 1), n++) {
+        struct shader_slot *e = &shader_table[i];
+        if (!e->key[0]) { memcpy(e->key, key_c, 16); e->key[16] = 0; e->available = -1; return e; }
+        if (!strncmp(e->key, key_c, 16)) return e;
+    }
+    wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY shader table full");
+}
 void wonder_host_draw_set_device(void *mtl_device) { device = (__bridge id<MTLDevice>)mtl_device; }
 void wonder_host_shader_set_directory(const char *path) {
     pthread_mutex_lock(&lock);
     directory = [NSString stringWithUTF8String:path]; manifest = nil; functions = [NSMutableDictionary dictionary]; reflections = [NSMutableDictionary dictionary];
+    if (shader_table) memset(shader_table, 0, SHADER_SLOTS * sizeof *shader_table);
     pthread_mutex_unlock(&lock);
 }
 static NSString *sha256(NSData *data) {
@@ -56,6 +71,8 @@ static NSData *verified(NSString *key, NSString *suffix, NSString *hash_field, i
 }
 const struct wonder_shader_refl *wonder_host_shader_refl(const char key_c[17]) {
     pthread_mutex_lock(&lock);
+    struct shader_slot *slot = shader_slot_locked(key_c);
+    if (slot->refl) { const struct wonder_shader_refl *r = slot->refl; pthread_mutex_unlock(&lock); return r; }
     NSString *key = [NSString stringWithUTF8String:key_c];
     NSValue *cached = reflections[key];
     if (!cached) {
@@ -64,6 +81,7 @@ const struct wonder_shader_refl *wonder_host_shader_refl(const char key_c[17]) {
         if (!r || wonder_shader_refl_parse(text.bytes, text.length, r, err, sizeof err)) wonder_nvn_stop("NVN_SHADER_REFLECTION key=%s: %s", key_c, r ? err : "out of memory");
         cached = [NSValue valueWithPointer:r]; reflections[key] = cached;   // lives for the process
     }
+    slot->refl = cached.pointerValue;
     pthread_mutex_unlock(&lock);
     return cached.pointerValue;
 }
@@ -89,6 +107,8 @@ static id<MTLFunction> compile_stage(NSString *source, const char *label, int st
 }
 void *wonder_host_shader_function(const char key_c[17], int stage) {
     pthread_mutex_lock(&lock);
+    struct shader_slot *slot = shader_slot_locked(key_c);
+    if (stage >= 0 && stage < 6 && slot->fn[stage]) { void *fn = slot->fn[stage]; pthread_mutex_unlock(&lock); return fn; }   // checked for this stage before
     NSString *key = [NSString stringWithUTF8String:key_c];
     id<MTLFunction> f = functions[key];
     MTLFunctionType want = stage == 5 ? MTLFunctionTypeKernel : stage ? MTLFunctionTypeFragment : MTLFunctionTypeVertex;
@@ -97,6 +117,7 @@ void *wonder_host_shader_function(const char key_c[17], int stage) {
         f = compile_stage([[NSString alloc] initWithData:source encoding:NSUTF8StringEncoding], key_c, stage); functions[key] = f;
     } else if (f.functionType != want)
         wonder_nvn_stop("NVN_SHADER_STAGE key=%s bound as stage %d", key_c, stage);
+    if (stage >= 0 && stage < 6) slot->fn[stage] = (__bridge void *)f;   // functions[] keeps it alive
     pthread_mutex_unlock(&lock);
     return (__bridge void *)f;
 }
@@ -124,11 +145,14 @@ void *wonder_host_shader_function_retyped(const char key_c[17], const uint8_t ty
 }
 int wonder_host_shader_available(const char key_c[17]) {
     pthread_mutex_lock(&lock);
+    struct shader_slot *slot = shader_slot_locked(key_c);
+    if (slot->available >= 0) { int a = slot->available; pthread_mutex_unlock(&lock); return a; }
     if (!manifest && directory) {
         NSData *raw = [NSData dataWithContentsOfFile:[directory stringByAppendingPathComponent:@"manifest.json"]];
         manifest = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
     }
     int available = [manifest[@"keys"] isKindOfClass:NSDictionary.class] && manifest[@"keys"][[NSString stringWithUTF8String:key_c]] != nil;
+    if (manifest) slot->available = (int8_t)available;   // a missing manifest is looked for again next time
     pthread_mutex_unlock(&lock);
     return available;
 }
@@ -464,6 +488,7 @@ static struct wonder_host_span cpu_copy(struct wonder_host_span s) {   // bisect
     return (struct wonder_host_span){(__bridge_retained void *)b, 0, s.size};   // leaked on purpose: diagnostic run stops right after
 }
 // After a faulting draw: re-run it in separate command buffers with one resource class swapped each time.
+static int bisecting;   // the re-runs skip the per-draw sync check (WONDER_DRAW_SYNC)
 static void bisect(const struct wonder_host_draw *d, char *out, size_t n) {
     static struct wonder_host_draw v; size_t at = 0; char e[256];
     for (int variant = 0; variant < 4; variant++) {
@@ -472,7 +497,7 @@ static void bisect(const struct wonder_host_draw *d, char *out, size_t n) {
         if (variant == 2) for (int st = 0; st < 2; st++) for (int r = 0; r < 14; r++) if (v.ubo[st][r].buffer) v.ubo[st][r] = cpu_copy(v.ubo[st][r]);
         bisect_dummy_textures = variant == 3;
         wonder_host_gpu_error_reset();
-        unsetenv("WONDER_DRAW_SYNC"); wonder_host_draw(&v); setenv("WONDER_DRAW_SYNC", "1", 1);
+        bisecting = 1; wonder_host_draw(&v); bisecting = 0;
         wonder_host_finish();
         int faulted = 0; for (int i = 0; i < 100 && !(faulted = wonder_host_gpu_error(e, sizeof e)); i++) usleep(1000);
         static const char *const names[4] = {"same", "vertex+index copied", "uniforms copied", "dummy textures"};
@@ -702,8 +727,28 @@ void wonder_host_tbdr_window(char *out, size_t size) {
     wonder_host_replay_unlock();
 }
 void wonder_host_draw_batch_stats(unsigned *draws, unsigned *passes) { *draws = batch_draws_total; *passes = batch_passes_total; }
-static NSMutableDictionary<NSData *, id<MTLRenderPipelineState>> *pipelines;
-static NSMutableDictionary<NSData *, id<MTLDepthStencilState>> *depth_states;
+// Render pipelines by a plain C key (round226): open addressing, FNV-1a over the key bytes; states are kept for the run.
+struct pipeline_key { void *vs, *fs; uint32_t formats[10]; uint64_t blend[8]; uint8_t write_mask[8], blending[8]; uint32_t attr[16][3]; uint32_t stream[16][2]; };
+#define PIPELINE_SLOTS 16384
+static struct pipeline_slot { struct pipeline_key key; void *pso; } *pipeline_table; static unsigned pipeline_count;
+static uint64_t pipeline_hash(const struct pipeline_key *k) {
+    const uint8_t *b = (const uint8_t *)k; uint64_t h = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < sizeof *k; i++) { h ^= b[i]; h *= 0x100000001b3ull; }
+    return h;
+}
+static id<MTLRenderPipelineState> pipeline_lookup(const struct pipeline_key *k) {
+    if (!pipeline_table) return nil;
+    for (uint64_t i = pipeline_hash(k) & (PIPELINE_SLOTS - 1); pipeline_table[i].pso; i = (i + 1) & (PIPELINE_SLOTS - 1))
+        if (!memcmp(&pipeline_table[i].key, k, sizeof *k)) return (__bridge id<MTLRenderPipelineState>)pipeline_table[i].pso;
+    return nil;
+}
+static void pipeline_insert(const struct pipeline_key *k, id<MTLRenderPipelineState> pso) {
+    if (!pipeline_table) { pipeline_table = calloc(PIPELINE_SLOTS, sizeof *pipeline_table); if (!pipeline_table) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY pipeline table"); }
+    if (pipeline_count >= PIPELINE_SLOTS * 3 / 4) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED more than %u render pipelines", PIPELINE_SLOTS * 3 / 4);
+    uint64_t i = pipeline_hash(k) & (PIPELINE_SLOTS - 1);
+    while (pipeline_table[i].pso) i = (i + 1) & (PIPELINE_SLOTS - 1);
+    pipeline_table[i].key = *k; pipeline_table[i].pso = (__bridge_retained void *)pso; pipeline_count++;
+}
 static id<MTLBuffer> support_buffer;
 // The shader's own constants (c1) are fixed per stage: one buffer per reflection (reflections live for the process).
 // Driver segment c0 images (drv0) take few distinct values: one buffer per content. Both are read-only to the GPU
@@ -783,7 +828,11 @@ static void tex_dump(const struct wonder_host_draw *d, const struct wonder_shade
 }
 // Diagnostic lists of fragment key prefixes ("a,b,c") in an environment variable; logs the first match per variable.
 static int diag_fs_listed(const struct wonder_host_draw *d, const char *var) {
-    const char *list = getenv(var); if (!list || !*list) return 0;
+    static const char *names[4], *values[4]; static int n;   // read once per variable (round226: getenv per draw)
+    const char *list = NULL; int i = 0;
+    for (; i < n && strcmp(names[i], var); i++) {}
+    if (i < n) list = values[i]; else { list = getenv(var); if (n < 4) { names[n] = var; values[n++] = list; } }
+    if (!list || !*list) return 0;
     for (const char *p = list; *p; ) {
         size_t n = strcspn(p, ",");
         if (n && n <= strlen(d->fs_key) && !strncmp(p, d->fs_key, n)) {
@@ -810,8 +859,10 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     if (d->instances < 1) return 0;
     // Attachments.
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    pd.vertexFunction = (__bridge id<MTLFunction>)d->vs; pd.fragmentFunction = (__bridge id<MTLFunction>)d->fs;
+    // round226: the pipeline and depth state are looked up by a plain C key; their Objective-C descriptors are built only
+    // on a miss (building them on every draw, with an NSData key, was ~8% of the replay thread on the world map).
+    MTLPixelFormat color_format[8] = {MTLPixelFormatInvalid}, depth_format = MTLPixelFormatInvalid, stencil_format = MTLPixelFormatInvalid;
+    uint8_t write_mask[8] = {0}, blending[8] = {0};
     NSUInteger width = 0, height = 0;
     for (int i = 0; i < d->color_count && i < 8; i++) {
         if (!d->targets[i].valid) continue;
@@ -819,15 +870,12 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         pass.colorAttachments[i].texture = t; pass.colorAttachments[i].level = level;
         if (t.textureType == MTLTextureType3D) pass.colorAttachments[i].depthPlane = slice; else pass.colorAttachments[i].slice = slice;
         pass.colorAttachments[i].loadAction = MTLLoadActionLoad; pass.colorAttachments[i].storeAction = MTLStoreActionStore;
-        MTLRenderPipelineColorAttachmentDescriptor *c = pd.colorAttachments[i]; c.pixelFormat = t.pixelFormat;
+        color_format[i] = t.pixelFormat;
         unsigned m = (d->states_set & 2) ? d->channel_mask.mask >> (4 * i) & 15 : 15;   // NVN R1 G2 B4 A8
-        c.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0);
+        write_mask[i] = (uint8_t)((m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0));
         if ((d->states_set & 1) && (d->color.blend_en >> i & 1)) {
             if (!(d->blend_set >> i & 1)) unsupported(d, "blend enabled without a blend state for target", i);
-            const wonder_nvn_blend_state *b = &d->blend[i];
-            c.blendingEnabled = YES; c.sourceRGBBlendFactor = blend_factor(d, b->src_rgb); c.destinationRGBBlendFactor = blend_factor(d, b->dst_rgb);
-            c.sourceAlphaBlendFactor = blend_factor(d, b->src_a); c.destinationAlphaBlendFactor = blend_factor(d, b->dst_a);
-            c.rgbBlendOperation = blend_op(d, b->eq_rgb); c.alphaBlendOperation = blend_op(d, b->eq_a);
+            blending[i] = 1;
         }
         if (!width) { width = MAX((NSUInteger)1, t.width >> level); height = MAX((NSUInteger)1, t.height >> level); }
     }
@@ -836,70 +884,85 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         int level, slice; id<MTLTexture> t = attachment(d, ds, 1, &level, &slice);
         MTLPixelFormat f = t.pixelFormat;
         if (f != MTLPixelFormatStencil8) { pass.depthAttachment.texture = t; pass.depthAttachment.level = level; pass.depthAttachment.slice = slice;
-            pass.depthAttachment.loadAction = MTLLoadActionLoad; pass.depthAttachment.storeAction = MTLStoreActionStore; pd.depthAttachmentPixelFormat = f; }
+            pass.depthAttachment.loadAction = MTLLoadActionLoad; pass.depthAttachment.storeAction = MTLStoreActionStore; depth_format = f; }
         if (f == MTLPixelFormatStencil8 || f == MTLPixelFormatDepth32Float_Stencil8) { pass.stencilAttachment.texture = t; pass.stencilAttachment.level = level; pass.stencilAttachment.slice = slice;
-            pass.stencilAttachment.loadAction = MTLLoadActionLoad; pass.stencilAttachment.storeAction = MTLStoreActionStore; pd.stencilAttachmentPixelFormat = f; }
+            pass.stencilAttachment.loadAction = MTLLoadActionLoad; pass.stencilAttachment.storeAction = MTLStoreActionStore; stencil_format = f; }
         if (!width) { width = MAX((NSUInteger)1, t.width >> level); height = MAX((NSUInteger)1, t.height >> level); }
     }
     if (!width) unsupported(d, "draw without render targets", 0);
     // Vertex layout: attribute locations from the vertex reflection, streams at [[buffer(16 + stream)]].
-    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
     int uses_default = 0;
     for (int i = 0; i < d->nattr; i++) {
-        MTLVertexAttributeDescriptor *a = vd.attributes[d->vr->attr[i].location];
-        if (d->attr[i].stream == WONDER_HOST_DEFAULT_ATTRIBUTE) {   // one zero float, expanded by Metal to (0,0,0,1)
-            a.format = MTLVertexFormatFloat; a.offset = 0; a.bufferIndex = WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER; uses_default = 1; continue;
-        }
-        uint32_t f = wonder_host_vertex_format((int)d->attr[i].format);
-        if (!f) unsupported(d, "vertex format", (long)d->attr[i].format);
-        a.format = (MTLVertexFormat)f; a.offset = d->attr[i].offset; a.bufferIndex = WONDER_SHADER_STREAM_BUFFER_BASE + d->attr[i].stream;
+        if (d->attr[i].stream == WONDER_HOST_DEFAULT_ATTRIBUTE) { uses_default = 1; continue; }
+        if (!wonder_host_vertex_format((int)d->attr[i].format)) unsupported(d, "vertex format", (long)d->attr[i].format);
     }
-    if (uses_default) { MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
-                        l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
-    for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
-        MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_STREAM_BUFFER_BASE + s];
-        if (!d->stream[s].stride) { l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
-        else { l.stride = d->stream[s].stride; l.stepFunction = d->stream[s].divisor ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex; l.stepRate = d->stream[s].divisor ? d->stream[s].divisor : 1; }
-    }
-    pd.vertexDescriptor = vd;
     // Pipeline cache keyed by everything the descriptor depends on.
     // Keyed on the effective descriptor values (write masks, blending on/off), not raw state bytes: an unset (zeroed)
     // channel mask and a bound mask of 0 must not share a pipeline.
-    struct { void *vs, *fs; uint32_t formats[10]; uint64_t blend[8]; uint8_t write_mask[8], blending[8]; uint32_t attr[16][3]; uint32_t stream[16][2]; } pk;
+    struct pipeline_key pk;
     memset(&pk, 0, sizeof pk); pk.vs = d->vs; pk.fs = d->fs;
-    for (int i = 0; i < 8; i++) { pk.formats[i] = (uint32_t)pd.colorAttachments[i].pixelFormat; memcpy(&pk.blend[i], &d->blend[i], sizeof d->blend[i]); }
-    pk.formats[8] = (uint32_t)pd.depthAttachmentPixelFormat; pk.formats[9] = (uint32_t)pd.stencilAttachmentPixelFormat;
-    for (int i = 0; i < 8; i++) { pk.write_mask[i] = (uint8_t)pd.colorAttachments[i].writeMask; pk.blending[i] = pd.colorAttachments[i].blendingEnabled;
-                                   if (!pk.blending[i]) pk.blend[i] = 0; }
+    for (int i = 0; i < 8; i++) { pk.formats[i] = (uint32_t)color_format[i]; pk.write_mask[i] = write_mask[i]; pk.blending[i] = blending[i];
+                                   if (blending[i]) memcpy(&pk.blend[i], &d->blend[i], sizeof d->blend[i]); }
+    pk.formats[8] = (uint32_t)depth_format; pk.formats[9] = (uint32_t)stencil_format;
     for (int i = 0; i < d->nattr; i++) { pk.attr[i][0] = d->attr[i].format; pk.attr[i][1] = d->attr[i].offset; pk.attr[i][2] = d->attr[i].stream | (uint32_t)d->vr->attr[i].location << 8; }   // DEFAULT stream 0xff keyed too
     for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) { pk.stream[s][0] = d->stream[s].stride; pk.stream[s][1] = d->stream[s].divisor; }
-    NSData *pipeline_key = [NSData dataWithBytes:&pk length:sizeof pk];
-    if (!pipelines) { pipelines = [NSMutableDictionary dictionary]; depth_states = [NSMutableDictionary dictionary]; }
-    id<MTLRenderPipelineState> pso = pipelines[pipeline_key];
+    id<MTLRenderPipelineState> pso = pipeline_lookup(&pk);
     if (!pso) {
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = (__bridge id<MTLFunction>)d->vs; pd.fragmentFunction = (__bridge id<MTLFunction>)d->fs;
+        for (int i = 0; i < 8; i++) {
+            if (color_format[i] == MTLPixelFormatInvalid) continue;
+            MTLRenderPipelineColorAttachmentDescriptor *c = pd.colorAttachments[i]; c.pixelFormat = color_format[i]; c.writeMask = write_mask[i];
+            if (blending[i]) {
+                const wonder_nvn_blend_state *b = &d->blend[i];
+                c.blendingEnabled = YES; c.sourceRGBBlendFactor = blend_factor(d, b->src_rgb); c.destinationRGBBlendFactor = blend_factor(d, b->dst_rgb);
+                c.sourceAlphaBlendFactor = blend_factor(d, b->src_a); c.destinationAlphaBlendFactor = blend_factor(d, b->dst_a);
+                c.rgbBlendOperation = blend_op(d, b->eq_rgb); c.alphaBlendOperation = blend_op(d, b->eq_a);
+            }
+        }
+        pd.depthAttachmentPixelFormat = depth_format; pd.stencilAttachmentPixelFormat = stencil_format;
+        MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+        for (int i = 0; i < d->nattr; i++) {
+            MTLVertexAttributeDescriptor *a = vd.attributes[d->vr->attr[i].location];
+            if (d->attr[i].stream == WONDER_HOST_DEFAULT_ATTRIBUTE) {   // one zero float, expanded by Metal to (0,0,0,1)
+                a.format = MTLVertexFormatFloat; a.offset = 0; a.bufferIndex = WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER; continue;
+            }
+            a.format = (MTLVertexFormat)wonder_host_vertex_format((int)d->attr[i].format); a.offset = d->attr[i].offset; a.bufferIndex = WONDER_SHADER_STREAM_BUFFER_BASE + d->attr[i].stream;
+        }
+        if (uses_default) { MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_DEFAULT_ATTRIBUTE_BUFFER];
+                            l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
+        for (int s = 0; s < 16; s++) if (d->stream_mask >> s & 1) {
+            MTLVertexBufferLayoutDescriptor *l = vd.layouts[WONDER_SHADER_STREAM_BUFFER_BASE + s];
+            if (!d->stream[s].stride) { l.stepFunction = MTLVertexStepFunctionConstant; l.stepRate = 0; l.stride = 16; }
+            else { l.stride = d->stream[s].stride; l.stepFunction = d->stream[s].divisor ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex; l.stepRate = d->stream[s].divisor ? d->stream[s].divisor : 1; }
+        }
+        pd.vertexDescriptor = vd;
         __block NSError *error = nil; __block id<MTLRenderPipelineState> built = nil;
         on_host_stack(^{ NSError *e = nil; built = [device newRenderPipelineStateWithDescriptor:pd error:&e]; error = e; }); pso = built;
         if (!pso) wonder_nvn_stop("NVN_DRAW_PIPELINE_FAILED vs=%s fs=%s: %s", d->vs_key, d->fs_key, error.localizedDescription.UTF8String);
-        pipelines[pipeline_key] = pso;
+        pipeline_insert(&pk, pso);
     }
-    MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
-    if ((d->states_set & 4) && d->depth_stencil.dt && pd.depthAttachmentPixelFormat) { dd.depthCompareFunction = compare(d, d->depth_stencil.df); dd.depthWriteEnabled = d->depth_stencil.dw; }
+    MTLCompareFunction depth_compare = MTLCompareFunctionAlways; BOOL depth_write = NO;
+    if ((d->states_set & 4) && d->depth_stencil.dt && depth_format) { depth_compare = compare(d, d->depth_stencil.df); depth_write = d->depth_stencil.dw != 0; }
     {   // Diagnostic (WONDER_DEPTH_EQUAL_LEQUAL=1): EQUAL without depth writes tested as LEQUAL (round164: are D24 depth
         // pre-pass + EQUAL colour passes failing on Depth32Float?)
         static int on = -1; if (on < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_LEQUAL"); on = e && *e == '1'; }
-        if (on && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled) dd.depthCompareFunction = MTLCompareFunctionLessEqual;
+        if (on && depth_compare == MTLCompareFunctionEqual && !depth_write) depth_compare = MTLCompareFunctionLessEqual;
         // WONDER_DEPTH_EQUAL_AS=always|gequal (round188): the course hedges' colour pass runs on the CPU side
         // (main+0x1e555a0 -> 0xe5fe0 returns true, 0x606fc issues it) but with a vertex shader other than the pre-pass
         // 1451a723; does its EQUAL test fail because the two translated shaders' positions differ in the last bit?
         static int as = -1;
         if (as < 0) { const char *e = getenv("WONDER_DEPTH_EQUAL_AS"); as = !e ? 0 : !strcmp(e, "always") ? 1 : !strcmp(e, "gequal") ? 2 : 0; }
-        if (as && dd.depthCompareFunction == MTLCompareFunctionEqual && !dd.depthWriteEnabled)
-            dd.depthCompareFunction = as == 1 ? MTLCompareFunctionAlways : MTLCompareFunctionGreaterEqual;
+        if (as && depth_compare == MTLCompareFunctionEqual && !depth_write)
+            depth_compare = as == 1 ? MTLCompareFunctionAlways : MTLCompareFunctionGreaterEqual;
     }
-    if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) dd.depthCompareFunction = MTLCompareFunctionAlways;   // diagnostic: depth test off for listed fragment shaders
-    NSData *ds_key = [NSData dataWithBytes:(uint32_t[]){(uint32_t)dd.depthCompareFunction, dd.depthWriteEnabled} length:8];
-    id<MTLDepthStencilState> dss = depth_states[ds_key];
-    if (!dss) { dss = [device newDepthStencilStateWithDescriptor:dd]; depth_states[ds_key] = dss; }
+    if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) depth_compare = MTLCompareFunctionAlways;   // diagnostic: depth test off for listed fragment shaders
+    static id<MTLDepthStencilState> depth_states[8][2];   // by compare function and depth writes
+    id<MTLDepthStencilState> dss = depth_states[depth_compare & 7][depth_write];
+    if (!dss) {
+        MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new]; dd.depthCompareFunction = depth_compare; dd.depthWriteEnabled = depth_write;
+        dss = depth_states[depth_compare & 7][depth_write] = [device newDepthStencilStateWithDescriptor:dd];
+    }
     // Resolve every resource before taking the replay lock: texture lookups and render-target creation take the same
     // (non-recursive) lock in host_graphics.m (round55 deadlocked at the first draw).
     const struct wonder_shader_refl *refl[2] = {d->vr, d->fr};
@@ -962,8 +1025,9 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         // each) only remains for computed indices and reads past the bound size.
         uint32_t extent = refl[stage]->cbuf[i].extent;
         if (extent && extent <= n) { ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; direct_ubos++; continue; }
-        NSUInteger offset; id<MTLBuffer> window = scratch_window(0x10000, &offset);
-        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, n, 0x10000}; copied_ubos++;
+        // The window covers what the stage reads: its extent when known (round226), else the whole 64 KiB a c[n] declares.
+        NSUInteger span = extent ? (NSUInteger)extent : 0x10000, offset; id<MTLBuffer> window = scratch_window(span, &offset);
+        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; copied_ubos++;
         ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
     }
     // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
@@ -1023,10 +1087,13 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     if (diag_fs_listed(d, "WONDER_DIAG_NODEPTH_FS")) cull = MTLCullModeNone;   // diagnostic (with the depth test above)
     if (diag_fs_listed(d, "WONDER_DIAG_NOCULL_FS")) cull = MTLCullModeNone;   // diagnostic (round190): face culling only
     x.cull = cull; x.winding = winding; x.viewport = vp; x.scissor = scissor; x.primitive = primitive; x.itype = itype; x.ib_offset = ib_offset; x.uses_default = uses_default;
-    NSString *label = [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key];
+    // Debug groups name each draw in GPU captures only with WONDER_DEBUG_GROUPS=1 (round226: formatting the label for every
+    // draw cost the replay thread ~3%).
+    static int groups = -1; if (groups < 0) { const char *g = getenv("WONDER_DEBUG_GROUPS"); groups = g && *g == '1'; }
+    NSString *label = groups ? [NSString stringWithFormat:@"NVN draw vs=%s fs=%s", d->vs_key, d->fs_key] : nil;
     NSArray *vbufs = bufs[0], *fbufs = bufs[1], *vtex = stage_textures[0], *ftex = stage_textures[1], *vsmp = stage_samplers[0], *fsmp = stage_samplers[1];
     void (^encode)(id<MTLRenderCommandEncoder>) = ^(id<MTLRenderCommandEncoder> e) {
-        [e pushDebugGroup:label];
+        if (label) [e pushDebugGroup:label];
         [e setRenderPipelineState:pso]; [e setDepthStencilState:dss];
         [e setBlendColorRed:x.blend_color[0] green:x.blend_color[1] blue:x.blend_color[2] alpha:x.blend_color[3]];
         [e setCullMode:x.cull]; [e setFrontFacingWinding:x.winding]; [e setDepthClipMode:x.depth_clamp ? MTLDepthClipModeClamp : MTLDepthClipModeClip];
@@ -1048,7 +1115,7 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (x.index_type < 0) [e drawPrimitives:x.primitive vertexStart:(NSUInteger)x.first vertexCount:(NSUInteger)x.count instanceCount:(NSUInteger)x.instances baseInstance:(NSUInteger)x.base_instance];
         else [e drawIndexedPrimitives:x.primitive indexCount:(NSUInteger)x.count indexType:x.itype indexBuffer:ib indexBufferOffset:x.ib_offset
                        instanceCount:(NSUInteger)x.instances baseVertex:x.base_vertex baseInstance:(NSUInteger)x.base_instance];
-        [e popDebugGroup];
+        if (label) [e popDebugGroup];
     };
     // Batching rules: same attachments; no sampled texture is one of the batch's attachments (it must see the earlier
     // draws' output, i.e. a stored pass); a draw writing storage buffers ends its batch (later copies / draws read it).
@@ -1066,7 +1133,8 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         if (writes) batch_close();
     }
     wonder_host_replay_unlock();
-    if (getenv("WONDER_DRAW_SYNC")) sync_check(d);
+    static int draw_sync = -1; if (draw_sync < 0) draw_sync = getenv("WONDER_DRAW_SYNC") != NULL;
+    if (draw_sync && !bisecting) sync_check(d);
     return 0;
 }
 

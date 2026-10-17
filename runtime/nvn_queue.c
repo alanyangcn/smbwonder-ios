@@ -38,6 +38,8 @@ void wonder_nvn_frame_summary(unsigned *draws, unsigned *clears, uint64_t *hash)
     *draws = atomic_exchange(&frame_draws, 0); *hash = atomic_exchange(&frame_hash, 1469598103934665603ull);
     *clears = c - clears_at_last; clears_at_last = c;
 }
+// Diagnostic environment variables are read once (round226: getenv on every draw/bind was ~2.5% of the replay thread).
+#define CACHED_GETENV(name) ({ static const char *v_; static int s_; if (!s_) { v_ = getenv(name); s_ = 1; } v_; })
 // Bound program, vertex layout, buffers, textures and fixed-function state, kept for draws (and the draw census).
 static struct wonder_nvn_draw_state draw_state;
 // Pending GPU writes (report_shadow.h, declared above make_cpu_visible): conditional renders read their records without
@@ -176,7 +178,7 @@ static void *target_texture(const struct wonder_nvn_texture_snapshot *s, unsigne
     if (!host) replay_stop(opcode, "host render target creation failed");
     {   // Diagnostic (WONDER_WATCH_RT=<W>x<H>[,...]): the pool memory of render targets of those sizes is access-watched
         // (access_watch.h), once per storage: does the CPU read what the GPU renders there? (round180)
-        const char *list = getenv("WONDER_WATCH_RT");
+        const char *list = CACHED_GETENV("WONDER_WATCH_RT");
         if (list && *list) {
             char size[24]; snprintf(size, sizeof size, "%ux%u", t->desc.width, t->desc.height);
             int listed = 0; for (const char *q = list; *q && !listed; ) { size_t n = strcspn(q, ","); listed = n == strlen(size) && !strncmp(q, size, n); q += n; if (*q == ',') q++; }
@@ -637,7 +639,7 @@ static void dispatch(unsigned opcode, const struct wonder_nvn_cmd *c) {
     memcpy(x.key, draw_state.program.key[5], 17);
     {   // Diagnostic (WONDER_SKIP_CS=<kernel key prefix>[,...]): leave the listed dispatches out (round177: does kernel
         // 45bc61e5, run since the offline build, make the game stop issuing colour passes?)
-        const char *list = getenv("WONDER_SKIP_CS");
+        const char *list = CACHED_GETENV("WONDER_SKIP_CS");
         for (const char *q = list; q && *q; ) { size_t n = strcspn(q, ","); if (n && (!strncmp(q, x.key, n) || (n == 1 && *q == '*'))) {
             static _Atomic unsigned logged; if (atomic_fetch_add(&logged, 1) < 4) wonder_nvn_report("NVN_SKIP_CS %s (diagnostic)", x.key);
             return; } q += n; if (*q == ',') q++; }
@@ -910,7 +912,7 @@ static void replay_visit(unsigned opcode, const void *payload, size_t size, void
         }
         draw_state.program.serial = p.serial; draw_state.has_program = draw_state.program.mask != 0;
         {   // Diagnostic (WONDER_TRACE_VS): replayed binds of listed vertex shaders, and whether a draw follows (draw() logs it)
-            const char *list = getenv("WONDER_TRACE_VS");
+            const char *list = CACHED_GETENV("WONDER_TRACE_VS");
             if (list && *list && (draw_state.program.mask & 1)) {
                 const char *vs = draw_state.program.key[0]; trace_replay_vs = 0;
                 for (const char *q = list; *q; ) { size_t n = strcspn(q, ","); if (n && !strncmp(q, vs, n)) trace_replay_vs = 1; q += n; if (*q == ',') q++; }
