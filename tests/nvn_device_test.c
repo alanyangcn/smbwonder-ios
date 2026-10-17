@@ -1215,10 +1215,12 @@ int main(void) {
         // afterwards the view is released and the stop names the finalized pool (round208/210).
         { struct wonder_nvn_pool_view v; wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v);
           assert(v.memory == wt_memory + 0x100 && v.size == 0x10);
-          for (int k = 0; k < 3; k++) wonder_nvn_frame_advance();
+          for (int k = 0; k < 599; k++) wonder_nvn_frame_advance();
+          wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v); assert(v.memory == wt_memory + 0x100 && released_resources == before);   // round212: still there 599 presents later
+          wonder_nvn_frame_advance();
           assert(released_resources == before + 1);
           EXPECT_STOP(wonder_nvn_address_span((uint64_t)(uintptr_t)wt_memory + 0x100, 0x10, &v), "finalized");
-          assert(strstr(last_stop, "+0x100")); }
+          assert(strstr(last_stop, "+0x100") && strstr(last_stop, "600 presents ago")); }
     }
     puts("NVN_STRICT_BOOTSTRAP_OK");
 }
