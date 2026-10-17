@@ -87,7 +87,6 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/nvn_commands.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_queue.c'
       - path: '${SMBW_REFERENCE}/runtime/report_shadow.c'
-      - path: '${SMBW_REFERENCE}/runtime/widescreen.c'
       - path: '${SMBW_REFERENCE}/runtime/fps_meter.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_texture.c'
       - path: '${SMBW_REFERENCE}/runtime/nvn_state.c'

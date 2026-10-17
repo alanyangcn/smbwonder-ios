@@ -1,4 +1,3 @@
-#include "widescreen.h"
 #include <dlfcn.h>
 #include <stdatomic.h>
 #include "guest_tls.h"
@@ -170,17 +169,6 @@ void wonder_game_boot(const char *stage) {
     static char program[]="SuperMarioBrosWonder";static char *argv[]={program,NULL};
     ((void (*)(int))required("_ZN2nn2os11SetHostArgcEi"))(1);
     ((void (*)(char **))required("_ZN2nn2os11SetHostArgvEPPc"))(argv);
-    phase="widescreen";
-    {   // runtime/widescreen.h: the cameras' 16:9 constant becomes the screen's aspect (round206)
-        module_t *main_module=NULL; for(int i=0;i<g_nmod;i++) if(!strcmp(g_mod[i].name,"main")) main_module=&g_mod[i];
-        float aspect=wonder_widescreen_get();
-        if(!main_module) die("WIDESCREEN: no main module");
-        if(aspect!=16.0f/9.0f){
-            int r=wonder_widescreen_patch(main_module->base,main_module->size,aspect);
-            if(r) die("WIDESCREEN_CONSTANT_MISMATCH main+%#x is not the verified 16:9 constant (result %d)",WONDER_WIDESCREEN_CONSTANT,r);
-        }
-        LOG("WIDESCREEN aspect=%.4f stretch=%.4f",aspect,wonder_widescreen_stretch(aspect));
-    }
     phase="nnMain";
     void *entry=required("nnMain");module_t *module=module_of(entry);
     LOG("NNMAIN_ENTER %s+%#llx stack=%#zx",module?module->name:"?",module?(uint64_t)((uint8_t*)entry-module->base):0,pthread_get_stacksize_np(pthread_self()));

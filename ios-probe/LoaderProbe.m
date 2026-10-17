@@ -12,7 +12,6 @@ extern int wonder_fps_current(void);   // runtime/fps_meter.h
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
 #include "../runtime/gpu_gate.h"
-#include "../runtime/widescreen.h"
 #if !defined(__aarch64__)
 #error This probe requires a physical ARM64 iOS device, not an Intel simulator.
 #endif
@@ -181,11 +180,6 @@ uint64_t wonder_host_language(void) {
     if (![scene isKindOfClass:UIWindowScene.class] || self.window) return;
     static int started; if (started) return; started = 1;   // one game per process
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-    {   // Widescreen (runtime/widescreen.h), opt-in with WONDER_WIDESCREEN=1 (round206: the shared constant also reshaped the
-        // title screen's 2D layout; the course camera needs its own constant first).
-        const char *e = getenv("WONDER_WIDESCREEN"); CGRect b = ((UIWindowScene *)scene).screen.bounds;
-        wonder_widescreen_set(e && *e == '1' ? wonder_widescreen_aspect(b.size.width, b.size.height) : 16.0f / 9.0f);
-    }
     ProbeGameController *controller = [ProbeGameController new];
     controller.view.backgroundColor = UIColor.blackColor;
     gText = [[UITextView alloc] initWithFrame:CGRectZero];
