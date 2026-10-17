@@ -14,5 +14,8 @@
 int wonder_cmdstore_put(uint64_t addr, unsigned opcode, const void *payload, size_t size, uint32_t *seq);
 // Copy of the record for the stub at addr (caller frees), or NULL when there is none or seq does not match.
 void *wonder_cmdstore_get(uint64_t addr, uint32_t seq, unsigned *opcode, size_t *size);
+// Same, copied into buffer when the record fits capacity_bytes (*allocated = 0), else into a malloc'd copy the caller
+// frees (*allocated = 1); NULL as above (round232: one malloc/free per replayed command was ~10% of the replay).
+void *wonder_cmdstore_get_into(uint64_t addr, uint32_t seq, unsigned *opcode, size_t *size, void *buffer, size_t capacity_bytes, int *allocated);
 void wonder_cmdstore_forget_range(uint64_t base, uint64_t size);
 size_t wonder_cmdstore_count(void);

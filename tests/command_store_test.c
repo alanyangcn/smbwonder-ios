@@ -21,5 +21,16 @@ int main(void) {
     assert(!wonder_cmdstore_get(0x100000, s3, &op, &n));
     p = wonder_cmdstore_get(0x100000 + 8 * 4999, s3, &op, &n); assert(p); free(p);   // last record kept
     p = wonder_cmdstore_get(0x1000, s2, &op, &n); assert(p); free(p);
+    {   // round232: copy into the caller's buffer when it fits, else a malloc'd copy
+        uint32_t seq2; char big[3000]; memset(big, 7, sizeof big);
+        assert(!wonder_cmdstore_put(0x9000, 5, "abc", 3, &seq2));
+        char buf[16]; unsigned op = 0; size_t n = 0; int alloc = -1;
+        void *p = wonder_cmdstore_get_into(0x9000, seq2, &op, &n, buf, sizeof buf, &alloc);
+        assert(p == buf && !alloc && op == 5 && n == 3 && !memcmp(buf, "abc", 3));
+        assert(!wonder_cmdstore_put(0x9008, 6, big, sizeof big, &seq2));
+        p = wonder_cmdstore_get_into(0x9008, seq2, &op, &n, buf, sizeof buf, &alloc);
+        assert(p && p != buf && alloc == 1 && n == sizeof big && !memcmp(p, big, sizeof big)); free(p);
+        assert(!wonder_cmdstore_get_into(0x9008, seq2 + 1, &op, &n, buf, sizeof buf, &alloc));   // stale sequence
+    }
     puts("COMMAND_STORE_OK");
 }

@@ -725,8 +725,9 @@ static void walk_segments(const struct segment *segments, unsigned count, uint64
             memcpy(stub, command + offset, sizeof stub);
             if (stub[0] != WONDER_NVN_STUB_MAGIC)
                 wonder_nvn_stop("NVN_NATIVE_PACKET_UNSUPPORTED handle=%#llx segment=%u offset=%#zx word=%#x", (unsigned long long)handle, s, offset, stub[0]);
-            unsigned opcode = 0; size_t payload_size = 0;
-            void *copy = wonder_cmdstore_get((uint64_t)(uintptr_t)(command + offset), stub[1], &opcode, &payload_size);
+            unsigned opcode = 0; size_t payload_size = 0; int allocated = 0;
+            _Alignas(16) uint8_t local[1024];   // per walk: CallCommands nests walks (depth <= 8) on the replay thread's 16 MiB stack
+            void *copy = wonder_cmdstore_get_into((uint64_t)(uintptr_t)(command + offset), stub[1], &opcode, &payload_size, local, sizeof local, &allocated);
             if (!copy) wonder_nvn_stop("NVN_INVALID_COMMAND stale or unknown record handle=%#llx segment=%u offset=%#zx seq=%u", (unsigned long long)handle, s, offset, stub[1]);
             if (!opcode || opcode >= WONDER_NVN_CMD_COUNT) wonder_nvn_stop("NVN_INVALID_COMMAND record opcode=%u", opcode);
             if (opcode != WONDER_NVN_DRAW_ELEMENTS) {
@@ -735,7 +736,8 @@ static void walk_segments(const struct segment *segments, unsigned count, uint64
                     wonder_nvn_stop("NVN_INVALID_COMMAND %s malformed payload", wonder_nvn_command_name(opcode));
             }
             visitor(opcode, copy, payload_size, context);
-            free(copy); offset += sizeof stub;
+            if (allocated) free(copy);
+            offset += sizeof stub;
         }
     }
 }

@@ -248,6 +248,48 @@ size_t wonder_host_draw_purge_sampled(unsigned *count) {
     return bytes;
 }
 unsigned wonder_host_draw_sampled_count(void) { pthread_mutex_lock(&sampled_lock); unsigned n = (unsigned)sampled.count; pthread_mutex_unlock(&sampled_lock); return n; }
+// Texture view cache (round232): two generations of open-addressing tables; views held with a +1 retain.
+struct view_key { uintptr_t parent; uint32_t type, base, count, first, layers, swizzle; };
+#define VIEW_SLOTS 8192
+struct view_slot { struct view_key key; void *view; };
+static struct view_slot *view_tables[2]; static unsigned view_counts[2], view_frame; static int view_current;
+static uint64_t view_hash(const struct view_key *k) {
+    const uint8_t *b = (const uint8_t *)k; uint64_t h = 0xcbf29ce484222325ull;
+    for (size_t i = 0; i < sizeof *k; i++) { h ^= b[i]; h *= 0x100000001b3ull; }
+    return h;
+}
+static void view_clear(int g) {
+    if (!view_tables[g]) { view_tables[g] = calloc(VIEW_SLOTS, sizeof *view_tables[g]); if (!view_tables[g]) wonder_nvn_stop("NVN_HOST_OUT_OF_MEMORY view cache"); return; }
+    for (unsigned i = 0; i < VIEW_SLOTS; i++) if (view_tables[g][i].view) CFRelease(view_tables[g][i].view);
+    memset(view_tables[g], 0, VIEW_SLOTS * sizeof *view_tables[g]); view_counts[g] = 0;
+}
+static void view_generation(unsigned frame) {
+    if (!view_tables[0]) { view_clear(0); view_clear(1); view_frame = frame; return; }
+    if (frame == view_frame) return;
+    view_frame = frame; view_current ^= 1; view_clear(view_current);   // the older generation goes; the last one stays readable
+}
+static struct view_slot *view_find(int g, const struct view_key *k) {
+    for (uint64_t i = view_hash(k) & (VIEW_SLOTS - 1), n = 0; n < VIEW_SLOTS; i = (i + 1) & (VIEW_SLOTS - 1), n++) {
+        struct view_slot *e = &view_tables[g][i];
+        if (!e->view || !memcmp(&e->key, k, sizeof *k)) return e;
+    }
+    return NULL;
+}
+static void view_put(const struct view_key *k, id<MTLTexture> view) {
+    int g = view_current;
+    if (view_counts[g] >= VIEW_SLOTS * 3 / 4) view_clear(g);   // a frame with very many views starts its table again
+    struct view_slot *e = view_find(g, k);
+    if (!e) return;
+    if (e->view) CFRelease(e->view); else view_counts[g]++;
+    e->key = *k; e->view = (__bridge_retained void *)view;
+}
+static id<MTLTexture> view_take(const struct view_key *k) {
+    struct view_slot *e = view_find(view_current, k);
+    if (e && e->view) return (__bridge id<MTLTexture>)e->view;
+    struct view_slot *old = view_find(view_current ^ 1, k);
+    if (old && old->view) { id<MTLTexture> v = (__bridge id<MTLTexture>)old->view; view_put(k, v); return v; }
+    return nil;
+}
 static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stage, int slot) {
     const struct wonder_nvn_texture *t = &d->tex[stage][slot].texture.texture;
     const struct wonder_nvn_texture_registration *reg = &d->tex[stage][slot].texture;
@@ -385,19 +427,20 @@ static id<MTLTexture> sampled_texture(const struct wonder_host_draw *d, int stag
     if (!identity && !unset && (z[0] > 5 || z[1] > 5 || z[2] > 5 || z[3] > 5)) unsupported(d, "texture swizzle", z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24);
     int whole = base == 0 && count == levels && first == 0 && layers == slices && type == tex.textureType;
     if (whole && (identity || unset)) return tex;
-    // Views are reused within a frame (round198: a new view per draw was ~6% of the replay thread in a course). The cache
-    // is emptied when the frame number changes, so no view (each retains its parent) outlives the frame it was made in.
-    static NSMutableDictionary<NSData *, id<MTLTexture>> *views; static unsigned views_frame;
-    if (!views || views_frame != d->frame || views.count > 4096) { views = [NSMutableDictionary dictionary]; views_frame = d->frame; }
-    const uintptr_t key_words[7] = {(uintptr_t)(__bridge void *)tex, type, base, count, first, layers, identity || unset ? 0u : (unsigned)(z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24)};
-    NSData *view_key = [NSData dataWithBytes:key_words length:sizeof key_words];   // binary key: a formatted string cost more than the view (round199)
-    id<MTLTexture> cached = views[view_key]; if (cached) return cached;
+    // Views are reused (round198: a new view per draw was ~6% of the replay thread in a course). Round232: two generations
+    // keyed by a C struct -- a view not found in this frame's table is taken from the previous frame's (and moved up),
+    // so a view of a long-lived texture is made once, while one of a per-frame render target (a view retains its parent)
+    // is released after two frames without use.
+    struct view_key k = {(uintptr_t)(__bridge void *)tex, (uint32_t)type, (uint32_t)base, (uint32_t)count, (uint32_t)first, (uint32_t)layers,
+                         identity || unset ? 0u : (uint32_t)(z[0] | z[1] << 8 | z[2] << 16 | z[3] << 24)};
+    view_generation(d->frame);
+    id<MTLTexture> cached = view_take(&k); if (cached) return cached;
     id<MTLTexture> view = identity || unset   // the swizzle-taking call fails outright on GPUs without texture swizzle
         ? [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)]
         : [tex newTextureViewWithPixelFormat:tex.pixelFormat textureType:type levels:NSMakeRange(base, count) slices:NSMakeRange(first, layers)
                                      swizzle:MTLTextureSwizzleChannelsMake(z[0], z[1], z[2], z[3])];
     if (!view) unsupported(d, "texture view creation on serial", (long)t->serial);
-    views[view_key] = view;
+    view_put(&k, view);
     return view;
 }
 // NVN_WRAP_MODE_CLAMP_TO_BORDER: Metal offers transparent black, opaque black and opaque white only.
