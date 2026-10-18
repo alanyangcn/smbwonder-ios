@@ -1,6 +1,6 @@
 // Host input front end (host_input.h). Two sources, merged on the main thread and published with wonder_hid_publish:
 // - on-screen touch controls floating over the landscape game: ZL/L and R/ZR in the top corners, -/+ top centre, left
-//   stick on the left (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
+//   stick in the bottom-left corner (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
 //   layout) on the right; translucent, light haptic on press;
 // - GameController pads (Xbox / PlayStation / MFi), mapped by position: south = B, east = A, west = Y, north = X,
 //   as the Switch's own layout (a Nintendo-layout pad therefore keeps its printed labels).
@@ -82,13 +82,12 @@ static void publish(void) {
     CGFloat small = sh;
     [self buttonFor:WONDER_BTN_MINUS].frame = CGRectMake(w / 2 - gap - small, top, small, small);
     [self buttonFor:WONDER_BTN_PLUS].frame = CGRectMake(w / 2 + gap, top, small, small);
-    // Left: stick (middle height). Right: face buttons at the bottom.
+    // Bottom corners, mirrored: the stick on the left has the same centre height and edge distance as the A/B/X/Y group.
     CGFloat radius = b * 0.95, f = b * 0.9;
-    CGPoint stick = CGPointMake(left + sw / 2 + radius * 0.6, top + 2 * sh + gap * 3 + radius);
+    CGPoint face = CGPointMake(right - 1.5 * f, bottom - 1.5 * f), stick = CGPointMake(left + 1.5 * f, face.y);
     stickBase.frame = CGRectMake(stick.x - radius, stick.y - radius, 2 * radius, 2 * radius); stickBase.layer.cornerRadius = radius;
     CGFloat knob = radius * 0.9; stickKnob.bounds = CGRectMake(0, 0, knob, knob); stickKnob.layer.cornerRadius = knob / 2;
     if (!stickTouch) stickKnob.center = stickBase.center;
-    CGPoint face = CGPointMake(right - 1.5 * f, bottom - 1.5 * f);
     [self buttonFor:WONDER_BTN_X].frame = CGRectMake(face.x - f / 2, face.y - 1.5 * f, f, f);
     [self buttonFor:WONDER_BTN_B].frame = CGRectMake(face.x - f / 2, face.y + 0.5 * f, f, f);
     [self buttonFor:WONDER_BTN_Y].frame = CGRectMake(face.x - 1.5 * f, face.y - f / 2, f, f);
