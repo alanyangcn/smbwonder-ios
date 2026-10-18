@@ -1,6 +1,7 @@
 // Host input front end (host_input.h). Two sources, merged on the main thread and published with wonder_hid_publish:
 // - on-screen touch controls floating over the landscape game: ZL/L and R/ZR in the top corners, -/+ top centre, left
-//   stick in the bottom-left corner (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
+//   floating stick on the left (shown in the bottom-left corner; a touch anywhere in the lower left that is not on a
+//   button puts the stick's centre there, as zelda-la-android/android/touchpad.c does) (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
 //   layout) on the right; dark glass look (gradient fill, light rim, soft shadow), pressed buttons brighten and shrink,
 //   a firm haptic on each newly pressed button;
 // - GameController pads (Xbox / PlayStation / MFi), mapped by position: south = B, east = A, west = Y, north = X,
@@ -78,6 +79,8 @@ static void glass_shadow(UIView *v) {
     NSMutableArray<WonderPadButton *> *buttons;
     UIView *stickBase, *stickKnob;
     UITouch *stickTouch;
+    CGPoint stickHome;   // where the stick rests while not held
+    CGRect stickZone;    // a touch starting here (and not on a button) takes the stick, centred on the touch
     UIImpactFeedbackGenerator *haptic;
     CAGradientLayer *stickFill, *knobFill;
 }
@@ -133,7 +136,10 @@ static void glass_shadow(UIView *v) {
     // Bottom corners, mirrored: the stick on the left has the same centre height and edge distance as the A/B/X/Y group.
     CGFloat radius = b * 0.95, f = b * 0.9;
     CGPoint face = CGPointMake(right - 1.5 * f, bottom - 1.5 * f), stick = CGPointMake(left + 1.5 * f, face.y);
-    stickBase.frame = CGRectMake(stick.x - radius, stick.y - radius, 2 * radius, 2 * radius);
+    stickBase.bounds = CGRectMake(0, 0, 2 * radius, 2 * radius);
+    stickHome = stick; if (!stickTouch) stickBase.center = stickHome;
+    CGFloat zoneTop = top + 2 * sh + 2 * gap;   // below the L button, left 45% of the screen
+    stickZone = CGRectMake(0, zoneTop, w * 0.45, h - zoneTop);
     CGFloat knob = radius * 0.9; stickKnob.bounds = CGRectMake(0, 0, knob, knob);
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     stickFill.frame = stickBase.bounds; stickFill.cornerRadius = radius;
@@ -147,26 +153,37 @@ static void glass_shadow(UIView *v) {
     [self place:WONDER_BTN_Y rect:CGRectMake(face.x - 1.5 * f, face.y - f / 2, f, f)];
     [self place:WONDER_BTN_A rect:CGRectMake(face.x + 0.5 * f, face.y - f / 2, f, f)];
 }
+- (uint64_t)buttonsAt:(CGPoint)p {
+    uint64_t mask = 0;
+    for (WonderPadButton *b in buttons) {   // untransformed rect: a held button shrinks on screen, not its touch area
+        CGRect hit = CGRectMake(b.center.x - b.bounds.size.width / 2, b.center.y - b.bounds.size.height / 2, b.bounds.size.width, b.bounds.size.height);
+        if (CGRectContainsPoint(CGRectInset(hit, -6, -6), p)) mask |= b.mask;
+    }
+    return mask;
+}
 - (void)update:(UIEvent *)event {
     uint64_t pressed = 0; int stickAlive = 0;
     for (UITouch *t in [event touchesForView:self]) {
         if (t.phase == UITouchPhaseEnded || t.phase == UITouchPhaseCancelled) { if (t == stickTouch) stickTouch = nil; continue; }
         CGPoint p = [t locationInView:self];
-        if (!stickTouch && t.phase == UITouchPhaseBegan && CGRectContainsPoint(CGRectInset(stickBase.frame, -20, -20), p)) stickTouch = t;
+        uint64_t hit = t == stickTouch ? 0 : [self buttonsAt:p];
+        if (!stickTouch && !hit && t.phase == UITouchPhaseBegan && CGRectContainsPoint(stickZone, p)) {
+            stickTouch = t;   // the whole base stays on screen
+            CGFloat R = stickBase.bounds.size.width / 2, w = self.bounds.size.width, h = self.bounds.size.height;
+            stickBase.center = CGPointMake(fmin(fmax(p.x, R), w - R), fmin(fmax(p.y, R), h - R));
+        }
         if (t == stickTouch) {
             stickAlive = 1;
             CGFloat r = stickBase.bounds.size.width / 2, dx = p.x - stickBase.center.x, dy = p.y - stickBase.center.y, len = hypot(dx, dy);
             if (len > r) { dx *= r / len; dy *= r / len; }
             stickKnob.center = CGPointMake(stickBase.center.x + dx, stickBase.center.y + dy);
+            if (hypot(dx, dy) < 0.12 * r) dx = dy = 0;   // dead zone: the touch-down point is the centre
             touch_lx = (int32_t)lround(dx / r * WONDER_STICK_MAX); touch_ly = (int32_t)lround(-dy / r * WONDER_STICK_MAX);   // Switch: up positive
             continue;
         }
-        for (WonderPadButton *b in buttons) {   // untransformed rect: a held button shrinks on screen, not its touch area
-            CGRect hit = CGRectMake(b.center.x - b.bounds.size.width / 2, b.center.y - b.bounds.size.height / 2, b.bounds.size.width, b.bounds.size.height);
-            if (CGRectContainsPoint(CGRectInset(hit, -6, -6), p)) pressed |= b.mask;
-        }
+        pressed |= hit;
     }
-    if (!stickAlive) { stickTouch = nil; touch_lx = touch_ly = 0; stickKnob.center = stickBase.center; }
+    if (!stickAlive) { stickTouch = nil; touch_lx = touch_ly = 0; stickBase.center = stickHome; stickKnob.center = stickHome; }
     for (WonderPadButton *b in buttons) b.held = (pressed & b.mask) != 0;
     if (pressed & ~touch_buttons) { [haptic impactOccurredWithIntensity:1.0]; [haptic prepare]; }   // a newly pressed button
     touch_buttons = pressed; publish();
