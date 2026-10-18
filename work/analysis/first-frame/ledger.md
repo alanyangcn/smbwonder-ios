@@ -116,3 +116,4 @@ Round237 confirmed by the player: left-bar users button, right-bar FPS and the g
 Round238 92D975BC: touch D-pad removed (Wonder treats the left stick and the D-pad alike: MarioWiki controls, guide control tables); GameController D-pad mapping unchanged.
 Round239 6584529B: left stick moved to the bottom-left corner, mirroring the A/B/X/Y group (same centre height and edge distance).
 Round240 3567081F: touch controls restyled (gradient glass, rim, shadow, rounded font; pressed = brighter + 0.9 scale with untransformed hit areas); haptic Light -> Heavy at intensity 1.0, re-prepared after each impact.
+Round240 confirmed by the player: new look and stronger haptic both good.
