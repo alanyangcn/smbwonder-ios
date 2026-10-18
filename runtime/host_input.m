@@ -1,7 +1,8 @@
 // Host input front end (host_input.h). Two sources, merged on the main thread and published with wonder_hid_publish:
 // - on-screen touch controls floating over the landscape game: ZL/L and R/ZR in the top corners, -/+ top centre, left
 //   stick in the bottom-left corner (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
-//   layout) on the right; translucent, light haptic on press;
+//   layout) on the right; dark glass look (gradient fill, light rim, soft shadow), pressed buttons brighten and shrink,
+//   a firm haptic on each newly pressed button;
 // - GameController pads (Xbox / PlayStation / MFi), mapped by position: south = B, east = A, west = Y, north = X,
 //   as the Switch's own layout (a Nintendo-layout pad therefore keeps its printed labels).
 // Buttons are OR-ed; a pad stick outside its dead zone wins over the touch stick.
@@ -27,14 +28,50 @@ static void publish(void) {
 }
 
 // ---------- Touch controls ----------
-@interface WonderPadButton : UILabel
+// Shared look: a vertical gradient (lighter top) inside a light rim, with a soft drop shadow. Shapes are circles or
+// capsules, so the corner radius follows the size.
+static NSArray *glass(BOOL lit) {
+    return lit ? @[(id)[UIColor colorWithWhite:1 alpha:0.62].CGColor, (id)[UIColor colorWithWhite:0.78 alpha:0.48].CGColor]
+               : @[(id)[UIColor colorWithWhite:0.42 alpha:0.42].CGColor, (id)[UIColor colorWithWhite:0.04 alpha:0.42].CGColor];
+}
+static CAGradientLayer *glass_layer(void) {
+    CAGradientLayer *g = [CAGradientLayer layer];
+    g.colors = glass(NO); g.borderWidth = 1.5; g.borderColor = [UIColor colorWithWhite:1 alpha:0.42].CGColor;
+    return g;
+}
+static void glass_shadow(UIView *v) {
+    v.layer.shadowColor = UIColor.blackColor.CGColor; v.layer.shadowOpacity = 0.35; v.layer.shadowRadius = 4; v.layer.shadowOffset = CGSizeMake(0, 2);
+}
+@interface WonderPadButton : UIView
 @property(nonatomic) uint64_t mask;
+@property(nonatomic) BOOL held;
+@property(nonatomic, strong) UILabel *label;
+@property(nonatomic, strong) CAGradientLayer *fill;
 @end
 @implementation WonderPadButton
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect r = self.bounds; CGFloat radius = fmin(r.size.width, r.size.height) / 2;
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    self.fill.frame = r; self.fill.cornerRadius = radius;
+    self.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:r cornerRadius:radius].CGPath;
+    [CATransaction commit];
+    self.label.frame = r;
+    self.label.font = [UIFont systemFontOfSize:fmax(12, r.size.height * 0.42) weight:UIFontWeightBold];
+    UIFontDescriptor *rounded = [self.label.font.fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+    if (rounded) self.label.font = [UIFont fontWithDescriptor:rounded size:0];
+}
+- (void)setHeld:(BOOL)held {
+    if (held == _held) return;
+    _held = held;
+    [CATransaction begin]; [CATransaction setAnimationDuration:0.06];
+    self.fill.colors = glass(held);
+    [CATransaction commit];
+    self.label.textColor = held ? [UIColor colorWithWhite:0.1 alpha:0.9] : [UIColor colorWithWhite:1 alpha:0.92];
+    [UIView animateWithDuration:0.06 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ self.transform = held ? CGAffineTransformMakeScale(0.9, 0.9) : CGAffineTransformIdentity; } completion:nil];
+}
 @end
-
-#define IDLE [UIColor colorWithWhite:0.1 alpha:0.28]
-#define HELD [UIColor colorWithWhite:0.9 alpha:0.45]
 @interface WonderControlsView : UIView
 @end
 @implementation WonderControlsView {
@@ -42,23 +79,33 @@ static void publish(void) {
     UIView *stickBase, *stickKnob;
     UITouch *stickTouch;
     UIImpactFeedbackGenerator *haptic;
+    CAGradientLayer *stickFill, *knobFill;
 }
 - (WonderPadButton *)button:(NSString *)title mask:(uint64_t)mask round:(BOOL)round {
+    (void)round;   // every button is a circle or a capsule (corner radius = half the short side)
     WonderPadButton *b = [WonderPadButton new];
-    b.text = title; b.mask = mask; b.textAlignment = NSTextAlignmentCenter; b.textColor = UIColor.whiteColor;
-    b.font = [UIFont systemFontOfSize:18 weight:UIFontWeightSemibold];
-    b.backgroundColor = IDLE; b.layer.masksToBounds = YES; b.layer.borderWidth = 1; b.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor;
-    b.textColor = [UIColor colorWithWhite:1 alpha:0.8];
-    b.tag = round; [self addSubview:b]; [buttons addObject:b];
+    b.mask = mask; b.userInteractionEnabled = NO;
+    b.fill = glass_layer(); [b.layer addSublayer:b.fill]; glass_shadow(b);
+    b.label = [UILabel new]; b.label.text = title; b.label.textAlignment = NSTextAlignmentCenter;
+    b.label.textColor = [UIColor colorWithWhite:1 alpha:0.92]; [b addSubview:b.label];
+    [self addSubview:b]; [buttons addObject:b];
     return b;
 }
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.multipleTouchEnabled = YES; self.backgroundColor = UIColor.clearColor;
-    haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    // Heavy impact at full intensity: clearly felt through a held phone (the light style was easy to miss).
+    haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy]; [haptic prepare];
     buttons = [NSMutableArray array];
-    stickBase = [UIView new]; stickBase.backgroundColor = IDLE; stickBase.layer.borderWidth = 1; stickBase.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.35].CGColor; stickBase.userInteractionEnabled = NO; [self addSubview:stickBase];
-    stickKnob = [UIView new]; stickKnob.backgroundColor = [UIColor colorWithWhite:0.85 alpha:0.4]; stickKnob.userInteractionEnabled = NO; [self addSubview:stickKnob];
+    // Stick: a recessed well (darker towards the rim) and a raised knob with a grip ring.
+    stickBase = [UIView new]; stickBase.userInteractionEnabled = NO; [self addSubview:stickBase];
+    stickFill = glass_layer(); stickFill.type = kCAGradientLayerRadial; stickFill.startPoint = CGPointMake(0.5, 0.5); stickFill.endPoint = CGPointMake(1, 1);
+    stickFill.colors = @[(id)[UIColor colorWithWhite:0.2 alpha:0.22].CGColor, (id)[UIColor colorWithWhite:0.02 alpha:0.48].CGColor];
+    stickFill.borderColor = [UIColor colorWithWhite:1 alpha:0.32].CGColor; [stickBase.layer addSublayer:stickFill];
+    stickKnob = [UIView new]; stickKnob.userInteractionEnabled = NO; glass_shadow(stickKnob); [self addSubview:stickKnob];
+    knobFill = glass_layer(); knobFill.colors = @[(id)[UIColor colorWithWhite:0.92 alpha:0.55].CGColor, (id)[UIColor colorWithWhite:0.55 alpha:0.45].CGColor];
+    knobFill.borderColor = [UIColor colorWithWhite:1 alpha:0.6].CGColor; [stickKnob.layer addSublayer:knobFill];
+    CALayer *grip = [CALayer layer]; grip.borderWidth = 1.5; grip.borderColor = [UIColor colorWithWhite:0.15 alpha:0.25].CGColor; grip.name = @"grip"; [knobFill addSublayer:grip];
     [self button:@"ZL" mask:WONDER_BTN_ZL round:NO]; [self button:@"L" mask:WONDER_BTN_L round:NO];
     [self button:@"−" mask:WONDER_BTN_MINUS round:YES]; [self button:@"+" mask:WONDER_BTN_PLUS round:YES];
     [self button:@"R" mask:WONDER_BTN_R round:NO]; [self button:@"ZR" mask:WONDER_BTN_ZR round:NO];
@@ -66,6 +113,7 @@ static void publish(void) {
     [self button:@"A" mask:WONDER_BTN_A round:YES]; [self button:@"B" mask:WONDER_BTN_B round:YES];
     return self;
 }
+- (void)place:(uint64_t)mask rect:(CGRect)r { WonderPadButton *b = [self buttonFor:mask]; b.bounds = (CGRect){CGPointZero, r.size}; b.center = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r)); }
 - (WonderPadButton *)buttonFor:(uint64_t)mask { for (WonderPadButton *b in buttons) if (b.mask == mask) return b; return nil; }
 - (void)layoutSubviews {
     [super layoutSubviews];
@@ -75,24 +123,29 @@ static void publish(void) {
     CGFloat left = inset.left + m, right = w - inset.right - m, top = inset.top + m, bottom = h - inset.bottom - m;
     CGFloat b = fmin(h / 6.0, 72);
     CGFloat sw = b * 1.15, sh = b * 0.62;   // shoulders
-    [self buttonFor:WONDER_BTN_ZL].frame = CGRectMake(left, top, sw, sh);
-    [self buttonFor:WONDER_BTN_L].frame = CGRectMake(left, top + sh + gap, sw, sh);
-    [self buttonFor:WONDER_BTN_ZR].frame = CGRectMake(right - sw, top, sw, sh);
-    [self buttonFor:WONDER_BTN_R].frame = CGRectMake(right - sw, top + sh + gap, sw, sh);
+    [self place:WONDER_BTN_ZL rect:CGRectMake(left, top, sw, sh)];
+    [self place:WONDER_BTN_L rect:CGRectMake(left, top + sh + gap, sw, sh)];
+    [self place:WONDER_BTN_ZR rect:CGRectMake(right - sw, top, sw, sh)];
+    [self place:WONDER_BTN_R rect:CGRectMake(right - sw, top + sh + gap, sw, sh)];
     CGFloat small = sh;
-    [self buttonFor:WONDER_BTN_MINUS].frame = CGRectMake(w / 2 - gap - small, top, small, small);
-    [self buttonFor:WONDER_BTN_PLUS].frame = CGRectMake(w / 2 + gap, top, small, small);
+    [self place:WONDER_BTN_MINUS rect:CGRectMake(w / 2 - gap - small, top, small, small)];
+    [self place:WONDER_BTN_PLUS rect:CGRectMake(w / 2 + gap, top, small, small)];
     // Bottom corners, mirrored: the stick on the left has the same centre height and edge distance as the A/B/X/Y group.
     CGFloat radius = b * 0.95, f = b * 0.9;
     CGPoint face = CGPointMake(right - 1.5 * f, bottom - 1.5 * f), stick = CGPointMake(left + 1.5 * f, face.y);
-    stickBase.frame = CGRectMake(stick.x - radius, stick.y - radius, 2 * radius, 2 * radius); stickBase.layer.cornerRadius = radius;
-    CGFloat knob = radius * 0.9; stickKnob.bounds = CGRectMake(0, 0, knob, knob); stickKnob.layer.cornerRadius = knob / 2;
+    stickBase.frame = CGRectMake(stick.x - radius, stick.y - radius, 2 * radius, 2 * radius);
+    CGFloat knob = radius * 0.9; stickKnob.bounds = CGRectMake(0, 0, knob, knob);
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    stickFill.frame = stickBase.bounds; stickFill.cornerRadius = radius;
+    knobFill.frame = stickKnob.bounds; knobFill.cornerRadius = knob / 2;
+    stickKnob.layer.shadowPath = [UIBezierPath bezierPathWithOvalInRect:stickKnob.bounds].CGPath;
+    for (CALayer *l in knobFill.sublayers) if ([l.name isEqualToString:@"grip"]) { l.frame = CGRectInset(stickKnob.bounds, knob * 0.2, knob * 0.2); l.cornerRadius = knob * 0.3; }
+    [CATransaction commit];
     if (!stickTouch) stickKnob.center = stickBase.center;
-    [self buttonFor:WONDER_BTN_X].frame = CGRectMake(face.x - f / 2, face.y - 1.5 * f, f, f);
-    [self buttonFor:WONDER_BTN_B].frame = CGRectMake(face.x - f / 2, face.y + 0.5 * f, f, f);
-    [self buttonFor:WONDER_BTN_Y].frame = CGRectMake(face.x - 1.5 * f, face.y - f / 2, f, f);
-    [self buttonFor:WONDER_BTN_A].frame = CGRectMake(face.x + 0.5 * f, face.y - f / 2, f, f);
-    for (WonderPadButton *button in buttons) button.layer.cornerRadius = button.tag ? button.bounds.size.width / 2 : 10;
+    [self place:WONDER_BTN_X rect:CGRectMake(face.x - f / 2, face.y - 1.5 * f, f, f)];
+    [self place:WONDER_BTN_B rect:CGRectMake(face.x - f / 2, face.y + 0.5 * f, f, f)];
+    [self place:WONDER_BTN_Y rect:CGRectMake(face.x - 1.5 * f, face.y - f / 2, f, f)];
+    [self place:WONDER_BTN_A rect:CGRectMake(face.x + 0.5 * f, face.y - f / 2, f, f)];
 }
 - (void)update:(UIEvent *)event {
     uint64_t pressed = 0; int stickAlive = 0;
@@ -108,11 +161,14 @@ static void publish(void) {
             touch_lx = (int32_t)lround(dx / r * WONDER_STICK_MAX); touch_ly = (int32_t)lround(-dy / r * WONDER_STICK_MAX);   // Switch: up positive
             continue;
         }
-        for (WonderPadButton *b in buttons) if (CGRectContainsPoint(CGRectInset(b.frame, -6, -6), p)) pressed |= b.mask;
+        for (WonderPadButton *b in buttons) {   // untransformed rect: a held button shrinks on screen, not its touch area
+            CGRect hit = CGRectMake(b.center.x - b.bounds.size.width / 2, b.center.y - b.bounds.size.height / 2, b.bounds.size.width, b.bounds.size.height);
+            if (CGRectContainsPoint(CGRectInset(hit, -6, -6), p)) pressed |= b.mask;
+        }
     }
     if (!stickAlive) { stickTouch = nil; touch_lx = touch_ly = 0; stickKnob.center = stickBase.center; }
-    for (WonderPadButton *b in buttons) b.backgroundColor = (pressed & b.mask) ? HELD : IDLE;
-    if (pressed & ~touch_buttons) [haptic impactOccurred];   // a newly pressed button
+    for (WonderPadButton *b in buttons) b.held = (pressed & b.mask) != 0;
+    if (pressed & ~touch_buttons) { [haptic impactOccurredWithIntensity:1.0]; [haptic prepare]; }   // a newly pressed button
     touch_buttons = pressed; publish();
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { (void)touches; [self update:event]; }
