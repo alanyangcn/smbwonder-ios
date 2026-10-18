@@ -213,12 +213,10 @@ int wonder_host_fill_buffer(void *buffer,size_t offset,size_t size,uint8_t value
  pthread_mutex_unlock(&replay_mutex);
  return 0;
 }
-int wonder_host_write_buffer(void *buffer,size_t offset,const void *data,size_t size){
+int wonder_host_write_buffer(void *buffer,size_t offset,const void *data,size_t size){   // UpdateUniformBuffer (metal3_draw.m, round243)
  id<MTLBuffer> b=(__bridge id<MTLBuffer>)buffer; if(!b||offset+size>b.length) return EINVAL;
- id<MTLBuffer> staging=[device newBufferWithBytes:data length:size options:MTLResourceStorageModeShared]; if(!staging) return ENOMEM;
  pthread_mutex_lock(&replay_mutex);
- wonder_host_draw_queue_work_locked(^(id<MTLCommandBuffer> cb){ id<MTLBlitCommandEncoder> e=[cb blitCommandEncoder];
-  [e copyFromBuffer:staging sourceOffset:0 toBuffer:b destinationOffset:offset size:size]; [e endEncoding]; });
+ wonder_host_draw_update_buffer_locked(b,offset,data,size);
  pthread_mutex_unlock(&replay_mutex);
  return 0;
 }

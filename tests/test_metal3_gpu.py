@@ -52,6 +52,12 @@ class Metal3EncodeTests(unittest.TestCase):
         p=self.run_case('ubo_direct'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode ubo_direct uniform buffer OK',p.stdout)
     def test_uniform_buffer_read_past_its_bound_size_is_copied_with_zeros(self):
         p=self.run_case('ubo_past'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode ubo_past uniform buffer OK',p.stdout)
+    def test_uniform_update_between_draws_keeps_the_pass_open(self):
+        import os
+        for case in ('ubo_update','ubo_update_past'):
+            for inline in ('1','0'):
+                p=self.run_case(case,dict(os.environ,WONDER_UBO_INLINE=inline)); self.assertEqual(p.returncode,0,case+inline+p.stdout+p.stderr[-2000:])
+                self.assertIn(f'metal3 encode {case} OK',p.stdout)
     def test_computed_uniform_index_checks_the_bound_size(self):
         p=self.run_case('ubo_dynamic'); self.assertEqual(p.returncode,0,p.stdout+p.stderr[-2000:]); self.assertIn('metal3 encode dynamic uniform read OK',p.stdout)
     def test_back_facing_triangle_is_culled(self):

@@ -161,7 +161,8 @@ int main(int argc, char **argv) {
             const char *ft3 = "stage ps\ncbuf 0 1\ncbufext 0 16\ncbufdyn 0\ncbsz 2\ntex 0 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(ft3, strlen(ft3), &fr, err, sizeof err) && fr.cbuf[0].dynamic && fr.cbsz_buffer == 2);
         }
-        if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past")) {   // round222: the stage reads 32 bytes of uniform slot 0
+        int ubo_update = !strncmp(mode, "ubo_update", 10);   // round243: "ubo_update" (bound in place) / "ubo_update_past" (copied window)
+        if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_past") || ubo_update) {   // round222: the stage reads 32 bytes of uniform slot 0
             const char *ft2 = "stage ps\ncbuf 0 1\ncbufext 0 32\ntex 0 1 1 2d\nfout 0 float\n";
             assert(!wonder_shader_refl_parse(ft2, strlen(ft2), &fr, err, sizeof err) && fr.cbuf[0].extent == 32);
         }
@@ -190,7 +191,7 @@ int main(int argc, char **argv) {
             d.stream[0].fetch_size = 4 * 16;
         }
         d.ubo[1][0] = (struct wonder_host_span){(__bridge void *)pool, 0x200, 16};
-        if (!strcmp(mode, "ubo_direct")) {   // bound 32: both reads inside, the buffer is bound in place (beyond = 0 in the pool)
+        if (!strcmp(mode, "ubo_direct") || !strcmp(mode, "ubo_update")) {   // bound 32: both reads inside, the buffer is bound in place (beyond = 0 in the pool)
             memset((uint8_t *)pool.contents + 0x210, 0, 16); d.ubo[1][0].size = 32; }
         // 2x2 RGBA8 texture in TX1 block-linear storage: texel (0,1) (sampled at uv 0.25,0.75) is green.
         nvn_texdesc td = {.target = 1, .format = 0x25, .samples = 0, .width = 2, .height = 2, .depth = 1, .levels = 1};
@@ -278,6 +279,36 @@ int main(int argc, char **argv) {
         // Clear colour to blue, depth to 1.0, then draw.
         id<MTLTexture> color = (__bridge id<MTLTexture>)wonder_host_render_target(&d.targets[0].texture, MTLPixelFormatRGBA8Unorm);
         id<MTLTexture> depth = (__bridge id<MTLTexture>)wonder_host_render_target(&d.targets[1].texture, MTLPixelFormatDepth32Float);
+        if (ubo_update) {
+            // Two draws of one pass with an UpdateUniformBuffer between them: the left half must use the old tint (green
+            // 0.5), the right half the new one (green 1); with WONDER_UBO_INLINE on, the pass is not split.
+            MTLRenderPassDescriptor *c1 = [MTLRenderPassDescriptor renderPassDescriptor];
+            c1.colorAttachments[0].texture = color; c1.colorAttachments[0].loadAction = MTLLoadActionClear; c1.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 1, 1);
+            c1.colorAttachments[0].storeAction = MTLStoreActionStore;
+            c1.depthAttachment.texture = depth; c1.depthAttachment.loadAction = MTLLoadActionClear; c1.depthAttachment.clearDepth = 1; c1.depthAttachment.storeAction = MTLStoreActionStore;
+            wonder_host_replay_lock(); wonder_host_draw_queue_clear_locked((__bridge void *)c1); wonder_host_replay_unlock();
+            d.scissor_set = 1; d.scissor[0] = 0; d.scissor[1] = 0; d.scissor[2] = 32; d.scissor[3] = 64;
+            assert(wonder_host_draw(&d) == 0);
+            float tint2[4] = {1, 1, 1, 1}, other[4] = {9, 9, 9, 9};
+            wonder_host_replay_lock(); wonder_host_draw_update_buffer_locked(pool, 0x200, tint2, 16);
+            wonder_host_draw_update_buffer_locked(pool, 0x800, other, 16); wonder_host_replay_unlock();   // elsewhere: no patch
+            d.scissor[0] = 32;
+            assert(wonder_host_draw(&d) == 0);
+            char w[1024]; wonder_host_tbdr_window(w, sizeof w);
+            id<MTLBuffer> rb = [device newBufferWithLength:64 * 64 * 4 options:MTLResourceStorageModeShared];
+            id<MTLBlitCommandEncoder> b = [(__bridge id<MTLCommandBuffer>)wonder_host_replay_command_buffer() blitCommandEncoder];
+            [b copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(64, 64, 1) toBuffer:rb destinationOffset:0 destinationBytesPerRow:256 destinationBytesPerImage:256 * 64];
+            [b endEncoding]; [pending commit]; [pending waitUntilCompleted]; assert(pending.status == MTLCommandBufferStatusCompleted);
+            const uint8_t *left = (const uint8_t *)rb.contents + (32 * 64 + 28) * 4, *right = (const uint8_t *)rb.contents + (32 * 64 + 36) * 4;
+            printf("left %u %u %u right %u %u %u %s\n", left[0], left[1], left[2], right[0], right[1], right[2], w);
+            assert(left[0] == 0 && (left[1] == 127 || left[1] == 128) && left[2] == 0);
+            assert(right[0] == 0 && right[1] == 255 && right[2] == 0);
+            assert(!memcmp((uint8_t *)pool.contents + 0x200, tint2, 16) && !memcmp((uint8_t *)pool.contents + 0x800, other, 16));   // applied after the pass
+            const char *e = getenv("WONDER_UBO_INLINE"); int on = !(e && !strcmp(e, "0"));
+            assert(strstr(w, on ? "ubo_updates inline=2 queued=0 patched=1" : "ubo_updates inline=0 queued=2 patched=0"));
+            assert(strstr(w, on ? "work=0[0]" : "work=1[1]"));
+            printf("metal3 encode %s OK\n", mode); return 0;
+        }
         // Queued clears and load/store planning (WONDER_TBDR on / 0 give the same bytes): clear colour+depth, draw, clear depth
         // only, draw again; the first pass's depth is overwritten by the second clear (DontCare), both clears fold.
         if (!strcmp(mode, "tbdr")) {

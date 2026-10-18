@@ -68,8 +68,9 @@ void *wonder_host_replay_command_buffer(void);                               // 
 // under the lock: a full clear (render pass descriptor with Clear / Load attachments, no draws) and buffer-only work.
 void wonder_host_draw_queue_clear_locked(void *render_pass_descriptor);
 #ifdef __OBJC__
-@protocol MTLCommandBuffer;
+@protocol MTLCommandBuffer, MTLBuffer;
 void wonder_host_draw_queue_work_locked(void (^work)(id<MTLCommandBuffer>));
+void wonder_host_draw_update_buffer_locked(id<MTLBuffer> buffer, NSUInteger offset, const void *data, NSUInteger size);   // UpdateUniformBuffer (round243)
 #endif
 void wonder_host_tbdr_window(char *out, size_t size);                        // HOST_MEMORY planning counters (WONDER_TBDR)
 void *wonder_host_render_target_existing(const struct wonder_nvn_texture *t); // GPU-written texture for this serial, or NULL

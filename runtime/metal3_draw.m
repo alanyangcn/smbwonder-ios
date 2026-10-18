@@ -662,6 +662,56 @@ static void draw_batch_add(const struct draw_copy *c, int n, void (^encode)(id<M
     for (int i = 0; i < n; i++) { batch_copies[batch_ncopies++] = c[i]; [batch_buffers addObject:c[i].src]; [batch_buffers addObject:c[i].dst]; }   // retained until the flush
     [batch_blocks addObject:encode];
 }
+// ---------- UpdateUniformBuffer inside an open batch (round243) ----------
+// An update used to end the batch (a blit between passes): about half the world map's passes (~28 per frame) ended
+// this way. Now the batch stays open and the update is applied right after its pass (a work op queued behind it), so
+// the batch's earlier draws read the old bytes in place. A later draw of the batch whose uniform buffer overlaps an
+// update reads a copy instead, built ahead of the pass like the other draw copies: the buffer as the pass starts, then
+// the batch's updates so far, in order (draw_ubo_patch). Any other read of updated bytes in the batch (vertex stream,
+// index buffer, storage buffer, texture on the pool) ends the batch first, so the update is in place for it.
+// WONDER_UBO_INLINE=0 (diagnostic): every update ends the batch again.
+struct batch_update { __unsafe_unretained id<MTLBuffer> buffer, staging; NSUInteger offset, size, staging_offset; };
+static struct batch_update *batch_updates; static int batch_nupdates, batch_ucap;
+static unsigned ubo_updates_inline, ubo_updates_queued, ubo_patches;
+static int ubo_inline = -1;
+// Update bytes go into 4 MiB shared chunks, never reused (each command buffer retains the chunks it reads), instead of
+// one MTLBuffer per update.
+static id<MTLBuffer> upload_chunk; static NSUInteger upload_used;
+static id<MTLBuffer> upload_bytes(const void *data, NSUInteger size, NSUInteger *offset) {
+    NSUInteger need = (size + 15) & ~(NSUInteger)15;
+    if (!upload_chunk || upload_used + need > upload_chunk.length) {
+        upload_chunk = [device newBufferWithLength:MAX(need, (NSUInteger)4 << 20) options:MTLResourceStorageModeShared]; upload_used = 0;
+        if (!upload_chunk) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED upload buffer allocation of %lu bytes failed", (unsigned long)size);
+    }
+    memcpy((uint8_t *)upload_chunk.contents + upload_used, data, size);
+    *offset = upload_used; upload_used += need; return upload_chunk;
+}
+static int ranges_overlap(NSUInteger a, NSUInteger an, NSUInteger b, NSUInteger bn) { return a < b + bn && b < a + an; }
+static int batch_update_hits(__unsafe_unretained id<MTLBuffer> buffer, NSUInteger offset, NSUInteger size) {
+    for (int i = 0; i < batch_nupdates; i++)
+        if (batch_updates[i].buffer == buffer && ranges_overlap(offset, size, batch_updates[i].offset, batch_updates[i].size)) return 1;
+    return 0;
+}
+static void encode_updates(id<MTLCommandBuffer> cb, const struct batch_update *u, NSUInteger n) {
+    id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder]; e.label = @"NVN UpdateUniformBuffer";
+    for (NSUInteger i = 0; i < n; i++) [e copyFromBuffer:u[i].staging sourceOffset:u[i].staging_offset toBuffer:u[i].buffer destinationOffset:u[i].offset size:u[i].size];
+    [e endEncoding];
+}
+// Copies that turn `window` (a copy of [offset, offset + size) of `src` made as the pass starts) into what the bytes
+// are after the batch's updates so far. Returns the number added, or -1 when more than `room` would be needed.
+static int draw_ubo_patch(__unsafe_unretained id<MTLBuffer> src, NSUInteger offset, NSUInteger size, __unsafe_unretained id<MTLBuffer> window, NSUInteger window_offset,
+                          struct draw_copy *out, int room) {
+    int n = 0;
+    for (int i = 0; i < batch_nupdates; i++) {
+        const struct batch_update *u = &batch_updates[i];
+        if (u->buffer != src || !ranges_overlap(offset, size, u->offset, u->size)) continue;
+        if (n == room) return -1;
+        NSUInteger lo = MAX(offset, u->offset), hi = MIN(offset + size, u->offset + u->size);
+        out[n++] = (struct draw_copy){u->staging, u->staging_offset + (lo - u->offset), window, window_offset + (lo - offset), hi - lo, hi - lo};
+    }
+    return n;
+}
+
 // ---------- Deferred operation queue and load/store planning (tbdr_plan.c) ----------
 // A closed batch, a full clear (host_graphics.m wonder_host_clear_color / _depth_stencil) and a buffer fill / update wait in
 // a queue. Anything else that needs the command buffer (compute, copies, scissored clears, readback, present, commit)
@@ -701,6 +751,33 @@ static void batch_close_for(int reason) {
     q->copies = batch_ncopies ? [NSData dataWithBytes:batch_copies length:sizeof *batch_copies * (size_t)batch_ncopies] : nil; q->reads = [batch_reads copy];
     batch_pass = nil; [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0; batch_reads.length = 0;
     queue_push(q);
+    if (batch_nupdates) {   // the batch's updates, right after its pass (the block retains the buffers)
+        NSData *updates = [NSData dataWithBytes:batch_updates length:sizeof *batch_updates * (size_t)batch_nupdates];
+        NSMutableArray *keep = [NSMutableArray arrayWithCapacity:2 * (NSUInteger)batch_nupdates];
+        for (int i = 0; i < batch_nupdates; i++) { [keep addObject:batch_updates[i].buffer]; [keep addObject:batch_updates[i].staging]; }
+        batch_nupdates = 0;
+        WonderQueuedOp *w = [WonderQueuedOp new]; w->kind = TBDR_OP_NEUTRAL;
+        w->work = ^(id<MTLCommandBuffer> cb) { (void)keep; encode_updates(cb, updates.bytes, updates.length / sizeof(struct batch_update)); };
+        queue_push(w);
+    }
+}
+// UpdateUniformBuffer (host_graphics.m wonder_host_write_buffer, replay lock held).
+void wonder_host_draw_update_buffer_locked(id<MTLBuffer> buffer, NSUInteger offset, const void *data, NSUInteger size) {
+    if (ubo_inline < 0) { const char *e = getenv("WONDER_UBO_INLINE"); ubo_inline = !(e && !strcmp(e, "0")); }
+    NSUInteger staging_offset; id<MTLBuffer> staging = upload_bytes(data, size, &staging_offset);
+    if (ubo_inline && batch_pass) {
+        if (batch_nupdates == batch_ucap) {
+            batch_ucap = MAX(64, batch_ucap * 2);
+            struct batch_update *grown = realloc(batch_updates, sizeof *grown * (size_t)batch_ucap); if (!grown) wonder_nvn_stop("NVN_DRAW_UNSUPPORTED batch update list allocation failed");
+            batch_updates = grown;
+        }
+        batch_updates[batch_nupdates++] = (struct batch_update){buffer, staging, offset, size, staging_offset};
+        [batch_buffers addObject:buffer]; [batch_buffers addObject:staging]; ubo_updates_inline++;
+        return;
+    }
+    ubo_updates_queued++;
+    struct batch_update u = {buffer, staging, offset, size, staging_offset}; id<MTLBuffer> keep_b = buffer, keep_s = staging;
+    wonder_host_draw_queue_work_locked(^(id<MTLCommandBuffer> cb) { (void)keep_b; (void)keep_s; encode_updates(cb, &u, 1); });
 }
 void wonder_host_draw_queue_clear_locked(void *render_pass) {
     batch_close_for(CLOSE_CLEAR);
@@ -788,6 +865,9 @@ void wonder_host_tbdr_window(char *out, size_t size) {
              s.dontcare_stores - last.dontcare_stores, s.stores - last.stores, direct_ubos - last_direct, copied_ubos - last_copied);
     last = s; last_drains = queue_drains; last_ops = queue_ops_total; last_direct = direct_ubos; last_copied = copied_ubos;
     size_t at = strlen(out);   // round234: pass closes by reason (single-draw ones in brackets) and copies by reason
+    { static unsigned li, lq, lp;
+      at += (size_t)snprintf(out + at, size > at ? size - at : 0, " ubo_updates inline=%u queued=%u patched=%u", ubo_updates_inline - li, ubo_updates_queued - lq, ubo_patches - lp);
+      li = ubo_updates_inline; lq = ubo_updates_queued; lp = ubo_patches; }
     at += (size_t)snprintf(out + at, size > at ? size - at : 0, " closes targets=%u[%u] sampled=%u[%u] self=%u[%u] storage=%u[%u] clear=%u[%u] work=%u[%u] flush=%u[%u] copies dynamic=%u past=%u stream=%u",
         close_counts[0] - last_close[0], close_single[0] - last_single[0], close_counts[1] - last_close[1], close_single[1] - last_single[1],
         close_counts[2] - last_close[2], close_single[2] - last_single[2], close_counts[3] - last_close[3], close_single[3] - last_single[3],
@@ -1085,8 +1165,23 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     // Translated shaders declare every c[n] as 64 KiB; Maxwell returns 0 past the bound size, Metal would read the next pool
     // bytes (or past the pool's MTLBuffer). Each read uniform buffer is copied on the GPU into a zero-filled 64 KiB window,
     // in command order: the batch's copies run in one blit encoder ahead of its render encoder, and every operation that
-    // could change their sources (UpdateUniformBuffer, fills, other encoders, a draw writing storage) flushes the batch first.
-    struct draw_copy copies[2 * 14 + 16]; int ncopies = 0;
+    // could change their sources (fills, other encoders, a draw writing storage) flushes the batch first; UpdateUniformBuffer
+    // is applied after the pass and patched into the copies of later draws (round243).
+    // round243: a read of bytes the open batch updated other than through a uniform binding ends the batch first (the
+    // update is then in place); uniform reads of them get a patched copy below.
+    wonder_host_replay_lock();
+    if (batch_nupdates) {
+        int other = d->index_type >= 0 && d->index.buffer && batch_update_hits((__bridge id<MTLBuffer>)d->index.buffer, d->index.offset, MAX(d->index.size, (size_t)1));
+        for (int s = 0; s < 16 && !other; s++) if (d->stream_mask >> s & 1)
+            other = batch_update_hits((__bridge id<MTLBuffer>)d->stream[s].span.buffer, d->stream[s].span.offset, MAX((NSUInteger)d->stream[s].span.size, (NSUInteger)d->stream[s].fetch_size));
+        for (int stage = 0; stage < 2 && !other; stage++) {
+            for (int i = 0; i < refl[stage]->nsbuf && !other; i++) { const struct wonder_host_span *sb = &d->sbuf[stage][refl[stage]->sbuf[i].slot]; other = batch_update_hits((__bridge id<MTLBuffer>)sb->buffer, sb->offset, MAX(sb->size, (size_t)1)); }
+            for (int i = 0; i < 40 && !other; i++) if ((d->tex_mask[stage] >> i & 1) && d->tex[stage][i].storage_buffer)
+                other = batch_update_hits((__bridge id<MTLBuffer>)d->tex[stage][i].storage_buffer, (NSUInteger)d->tex[stage][i].storage_buffer_offset, MAX((NSUInteger)d->tex[stage][i].storage_size, (NSUInteger)1));
+        }
+        if (other) batch_close_for(CLOSE_WORK);
+    }
+    struct draw_copy copies[2 * 14 + 16 + 64]; int ncopies = 0;
     id<MTLBuffer> ubo_copies[2][14] = {{nil}}; NSUInteger ubo_offsets[2][14] = {{0}}; uint32_t ubo_sizes[2][14] = {{0}};
     for (int stage = 0; stage < 2; stage++) for (int i = 0; i < refl[stage]->ncbuf; i++) {
         int slot = refl[stage]->cbuf[i].slot; const struct wonder_host_span *u = &d->ubo[stage][slot];
@@ -1098,15 +1193,27 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
         // round234: computed-index reads check the bound size themselves (cbufdyn, the size table at cbsz), so such a
         // buffer is bound in place too when its literal reads fit.
         uint32_t extent = refl[stage]->cbuf[i].extent; int dynamic = refl[stage]->cbuf[i].dynamic;
+        const int room = (int)(sizeof copies / sizeof *copies) - ncopies - 1 - 16;   // keep room for the stream copies
         if (extent && extent <= n && (!dynamic || (refl[stage]->cbsz_buffer >= 0 && n >= 16 && u->offset + ((n + 15) & ~(NSUInteger)15) <= src.length))) {
+            if (batch_update_hits(src, u->offset, n)) {   // round243: the bound bytes as the pass starts, then the batch's updates
+                NSUInteger offset; id<MTLBuffer> window = scratch_window((n + 15) & ~(NSUInteger)15, &offset);
+                int k = draw_ubo_patch(src, u->offset, n, window, offset, copies + ncopies + 1, room);
+                if (k < 0) unsupported(d, "uniform buffer with more batch updates than the copy list holds, slot", slot);
+                copies[ncopies] = (struct draw_copy){src, u->offset, window, offset, n, (n + 15) & ~(NSUInteger)15}; ncopies += 1 + k; ubo_patches++;
+                ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset; ubo_sizes[stage][slot] = (uint32_t)n; continue;
+            }
             ubo_copies[stage][slot] = src; ubo_offsets[stage][slot] = u->offset; ubo_sizes[stage][slot] = (uint32_t)n; direct_ubos++; continue;
         }
         // The window covers what the stage reads: its extent when known (round226), else the whole 64 KiB a c[n] declares.
         if (extent) copy_past++; else copy_dynamic++;
         NSUInteger span = extent ? (NSUInteger)extent : 0x10000, offset; id<MTLBuffer> window = scratch_window(span, &offset);
-        copies[ncopies++] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; copied_ubos++; ubo_sizes[stage][slot] = (uint32_t)span;
+        int k = draw_ubo_patch(src, u->offset, MIN(n, span), window, offset, copies + ncopies + 1, room);
+        if (k < 0) unsupported(d, "uniform buffer with more batch updates than the copy list holds, slot", slot);
+        if (k) ubo_patches++;
+        copies[ncopies] = (struct draw_copy){src, u->offset, window, offset, MIN(n, span), span}; ncopies += 1 + k; copied_ubos++; ubo_sizes[stage][slot] = (uint32_t)span;
         ubo_copies[stage][slot] = window; ubo_offsets[stage][slot] = offset;
     }
+    wonder_host_replay_unlock();
     // Streams the draw reads past their bound size: zero-filled copies (Maxwell returns zeros there).
     id<MTLBuffer> stream_copies[16] = {nil}; NSUInteger stream_offsets[16] = {0};
     for (int s = 0; s < 16; s++) if ((d->stream_mask >> s & 1) && d->stream[s].fetch_size > d->stream[s].span.size) {
