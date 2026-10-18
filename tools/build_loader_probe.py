@@ -121,7 +121,7 @@ def build(work, profile_path, bundle_id, xcodegen=None, stage="sdk", extended_va
                 'runtime/game_thread.c', 'runtime/module_inits.c',
                 'runtime/applet_state.c', 'runtime/applet_hooks.c',
                 'runtime/romfs.c', 'runtime/romfs_hooks.c',
-                'runtime/savedata.c', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
+                'runtime/savedata.c', 'runtime/user_admin.c', 'runtime/host_users.m', 'runtime/fs_save_hooks.c', 'runtime/online_hooks.c',
                 'runtime/ngc_service.c', 'runtime/ngc_hooks.c',
                 'runtime/nvn_draw_census.c', 'runtime/shader_library.c', 'runtime/metal3_draw.m', 'runtime/tbdr_plan.c', 'runtime/rt_declare.c', 'runtime/profile_image.c', 'runtime/texture_storage.c', 'runtime/settings_service.c', 'runtime/settings_hooks.c', 'runtime/os_hooks.c',
                 'runtime/graphics_gate.c', 'runtime/metal3_probe.m', 'runtime/host_input.m', 'runtime/host_audio.m', 'runtime/audio_sink.c', 'runtime/page_guard.c', 'runtime/gpu_gate.c', 'runtime/access_watch.c', 'runtime/log_throttle.c', 'runtime/command_store.c', 'runtime/input_script.c',

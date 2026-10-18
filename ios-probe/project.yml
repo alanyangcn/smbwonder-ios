@@ -39,6 +39,8 @@ targets:
       - path: '${SMBW_REFERENCE}/runtime/romfs.c'
       - path: '${SMBW_REFERENCE}/runtime/romfs_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/savedata.c'
+      - path: '${SMBW_REFERENCE}/runtime/user_admin.c'
+      - path: '${SMBW_REFERENCE}/runtime/host_users.m'
       - path: '${SMBW_REFERENCE}/runtime/fs_save_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/online_hooks.c'
       - path: '${SMBW_REFERENCE}/runtime/ngc_service.c'

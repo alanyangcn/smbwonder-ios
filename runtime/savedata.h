@@ -10,6 +10,7 @@ _Noreturn void wonder_save_fatal(const char *format, ...) __attribute__((format(
 int wonder_save_configure(const char *root);                        // errno; root must exist
 uint32_t wonder_save_ensure(const uint64_t uid[2]);                  // create empty save data if missing
 uint32_t wonder_save_exists(int *out, const uint64_t uid[2]);
+uint32_t wonder_save_remove(const uint64_t uid[2]);                 // whole user directory; TARGET_NOT_FOUND if none
 uint32_t wonder_save_mount(const char *name, const uint64_t uid[2]);
 uint32_t wonder_save_commit(const char *name);
 uint32_t wonder_save_unmount(const char *name);                     // NOT_MOUNTED when the name is not a save mount

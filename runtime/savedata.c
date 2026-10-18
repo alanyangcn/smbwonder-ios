@@ -129,6 +129,18 @@ uint32_t wonder_save_exists(int *out, const uint64_t uid[2]) {
     pthread_mutex_unlock(&lock);
     return 0;
 }
+// Delete the user's whole save directory (the settings panel; applied at launch, before the game can mount it).
+uint32_t wonder_save_remove(const uint64_t uid[2]) {
+    if (!uid) return FS_NULLPTR_ARGUMENT;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < MAX_MOUNTS; i++)
+        if (mounts[i].used && mounts[i].uid[0] == uid[0] && mounts[i].uid[1] == uid[1]) wonder_save_fatal("save remove while mounted as %s", mounts[i].name);
+    char dir[PATH_MAX]; user_dir(dir, uid);
+    int found = exists(dir, 1);
+    if (found) { remove_tree(dir); sync_path(save_root); }
+    pthread_mutex_unlock(&lock);
+    return found ? 0 : FS_TARGET_NOT_FOUND;
+}
 static int valid_mount_name(const char *name) {
     size_t n = name ? strlen(name) : 0;
     return n && n < sizeof mounts[0].name && !strpbrk(name, ":/\\");

@@ -12,6 +12,8 @@ extern int wonder_fps_current(void);   // runtime/fps_meter.h
 #import "../runtime/host_graphics.h"
 #include "../runtime/sdk_services.h"
 #include "../runtime/gpu_gate.h"
+#include "../runtime/user_admin.h"
+#import "../runtime/host_users.h"
 #if !defined(__aarch64__)
 #error This probe requires a physical ARM64 iOS device, not an Intel simulator.
 #endif
@@ -197,19 +199,30 @@ uint64_t wonder_host_language(void) {
     UIView *controls = wonder_input_controls();
     controls.translatesAutoresizingMaskIntoConstraints = NO;
     UIView *root = controller.view;
-    // Frame rate in the top-left corner (the side bar of the 16:9 picture), updated twice a second from the presents
-    // (runtime/fps_meter.h). WONDER_FPS=0 hides it. A UILabel takes no touches, so the controls below still work.
+    // The 16:9 picture leaves bars at the sides of the 19.5:9 screen. Right bar: the frame rate, updated twice a second
+    // from the presents (runtime/fps_meter.h); WONDER_FPS=0 hides it, and a UILabel takes no touches. Left bar: the users
+    // button (runtime/host_users.h), above the touch controls so it gets its taps. Both sit at a fifth of the height:
+    // clear of the rounded corners, the Dynamic Island (vertical middle of one side) and the shoulder buttons / stick.
     UILabel *fps = [UILabel new];
-    fps.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightSemibold];
+    fps.font = [UIFont monospacedDigitSystemFontOfSize:12 weight:UIFontWeightSemibold];
     fps.textColor = UIColor.whiteColor; fps.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
-    fps.textAlignment = NSTextAlignmentCenter; fps.layer.cornerRadius = 4; fps.layer.masksToBounds = YES;
+    fps.textAlignment = NSTextAlignmentCenter; fps.numberOfLines = 2; fps.layer.cornerRadius = 6; fps.layer.masksToBounds = YES;
     fps.translatesAutoresizingMaskIntoConstraints = NO; fps.hidden = YES;
     const char *fps_env = getenv("WONDER_FPS"); BOOL show_fps = !(fps_env && !strcmp(fps_env, "0"));
-    [root addSubview:surface]; [root addSubview:controls]; [root addSubview:gText]; [root addSubview:fps];
+    UIButton *usersButton = [UIButton buttonWithType:UIButtonTypeSystem primaryAction:[UIAction actionWithHandler:^(UIAction *a) {
+        (void)a; if (!controller.presentedViewController) [controller presentViewController:wonder_users_panel() animated:YES completion:nil];
+    }]];
+    [usersButton setImage:[UIImage systemImageNamed:@"person.2.fill" withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold]] forState:UIControlStateNormal];
+    usersButton.tintColor = UIColor.whiteColor; usersButton.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+    usersButton.layer.cornerRadius = 20; usersButton.accessibilityLabel = @"用户与存档";
+    usersButton.translatesAutoresizingMaskIntoConstraints = NO;
+    UILayoutGuide *leftBar = [UILayoutGuide new], *rightBar = [UILayoutGuide new];
+    [root addLayoutGuide:leftBar]; [root addLayoutGuide:rightBar];
+    [root addSubview:surface]; [root addSubview:controls]; [root addSubview:gText]; [root addSubview:fps]; [root addSubview:usersButton];
     if (show_fps) [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *timer) {
         (void)timer; int tenths = wonder_fps_current();
         fps.hidden = tenths < 0;
-        if (tenths >= 0) fps.text = [NSString stringWithFormat:@" %d.%d FPS ", tenths / 10, tenths % 10];
+        if (tenths >= 0) fps.text = [NSString stringWithFormat:@"%d.%d\nFPS", tenths / 10, tenths % 10];
     }];
     NSLayoutConstraint *fillHeight = [surface.heightAnchor constraintEqualToAnchor:root.heightAnchor]; fillHeight.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
@@ -226,8 +239,14 @@ uint64_t wonder_host_language(void) {
         [gText.trailingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.trailingAnchor constant:-8],
         [gText.topAnchor constraintEqualToAnchor:root.topAnchor constant:8],
         [gText.heightAnchor constraintEqualToAnchor:root.heightAnchor multiplier:0.45],
-        [fps.leadingAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.leadingAnchor constant:4],
-        [fps.topAnchor constraintEqualToAnchor:root.safeAreaLayoutGuide.topAnchor constant:4]
+        [leftBar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor], [leftBar.trailingAnchor constraintEqualToAnchor:surface.leadingAnchor],
+        [rightBar.leadingAnchor constraintEqualToAnchor:surface.trailingAnchor], [rightBar.trailingAnchor constraintEqualToAnchor:root.trailingAnchor],
+        [usersButton.centerXAnchor constraintEqualToAnchor:leftBar.centerXAnchor],
+        [NSLayoutConstraint constraintWithItem:usersButton attribute:NSLayoutAttributeCenterY relatedBy:NSLayoutRelationEqual toItem:root attribute:NSLayoutAttributeCenterY multiplier:0.4 constant:0],
+        [usersButton.widthAnchor constraintEqualToConstant:40], [usersButton.heightAnchor constraintEqualToConstant:40],
+        [fps.centerXAnchor constraintEqualToAnchor:rightBar.centerXAnchor],
+        [NSLayoutConstraint constraintWithItem:fps attribute:NSLayoutAttributeCenterY relatedBy:NSLayoutRelationEqual toItem:root attribute:NSLayoutAttributeCenterY multiplier:0.4 constant:0],
+        [fps.widthAnchor constraintEqualToConstant:46], [fps.heightAnchor constraintEqualToConstant:36]
     ]];
     self.window.rootViewController = controller;
     [self.window makeKeyAndVisible];
@@ -241,7 +260,14 @@ uint64_t wonder_host_language(void) {
     for(NSString *k in [NSProcessInfo.processInfo.environment.allKeys sortedArrayUsingSelector:@selector(compare:)])
         if([k hasPrefix:@"WONDER_"]) report([NSString stringWithFormat:@"PROBE_ENV %@=%@",k,NSProcessInfo.processInfo.environment[k]]);
     UIApplication.sharedApplication.idleTimerDisabled=YES;
-    report(@"PROBE_START: no existing game saves or source assets will be modified");
+    {   // Users first, on the main thread before the game exists: queued save/user deletions run now (user_admin.h).
+        NSString *root=[documents stringByAppendingPathComponent:@"WonderSDK"];
+        [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
+        int error=wonder_users_startup(root.fileSystemRepresentation);
+        report([NSString stringWithFormat:@"HOST_USERS ready=%d users=%d",error,wonder_account_list(NULL,0)]);
+        if(error)die("HOST_USERS startup failed error=%d",error);
+    }
+    report(@"PROBE_START: no game saves or source assets are modified except deletions queued in the users panel");
     void (^gameTask)(void)=^{
         @autoreleasepool {
             size_t stackSize=pthread_get_stacksize_np(pthread_self());
