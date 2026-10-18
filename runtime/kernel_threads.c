@@ -157,6 +157,7 @@ static void finish_exit_on_host(struct thr *t) __attribute__((noreturn));
 static void *thread_main(void *p) {
     struct thr *t = p;
     pthread_setspecific(key_thread, t);
+    { char name[32]; snprintf(name, sizeof name, "g%x p%d c%d", t->handle, t->prio, t->core); pthread_setname_np(name); }   // HOST_ENERGY / Instruments
     if (prepare_hook) prepare_hook();   // guest TLS / TLR / gate keys
     pthread_mutex_lock(&G);
     while (!t->started && !t->closed) pthread_cond_wait(&t->cv, &G);

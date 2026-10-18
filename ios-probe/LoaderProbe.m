@@ -47,6 +47,7 @@ static pthread_t gameThread;
 void wonder_game_thread_set_reporter(void (*)(const char *));
 static void *run_game_thread(void *context) {
     void (^task)(void)=(__bridge_transfer id)context;
+    pthread_setname_np("game-main");
     @autoreleasepool { task(); }
     return NULL;
 }

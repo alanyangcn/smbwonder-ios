@@ -119,3 +119,4 @@ Round240 3567081F: touch controls restyled (gradient glass, rim, shadow, rounded
 Round240 confirmed by the player: new look and stronger haptic both good.
 Round241 11DFB51B: floating left stick after zelda-la-android touchpad.c (zone: left 45% below L; buttons win; base centred on the touch, clamped on screen; 12% dead zone; rests bottom-left).
 Round241 confirmed by the player: floating stick feels right.
+Round242 5951E002: HOST_ENERGY (energy_stats.m; named threads). thermal=serious from boot. GPU ~10-12 ms/frame at 60 fps. CPU 0.3-0.6 cores, heavier scene (~250 draws, 51 passes/frame) 1.1-1.5 cores: replay 0.46-0.61, game-main ~0.17, g1037-g103b (p44) 0.06-0.15 each. ~28 pass closes/frame from UpdateUniformBuffer work (8503/300). xctrace Power Profiler: no data (attach cannot find process; all-processes save hangs). Next: keep passes open across UpdateUniformBuffer, then real GPU timestamps.

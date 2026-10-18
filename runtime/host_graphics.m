@@ -296,6 +296,7 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
    memcpy(l_n,n6,sizeof n6);
    l_fin=fin; l_fn=fn; l_cb=cb; l_dr=dr; l_idle=idle; l_gpu=gpu; l_cbs=cbs;
   }
+  { extern void wonder_energy_report(double); wonder_energy_report(last_t>0?now-last_t:0); }
   last_hv=wonder_host_draw_sampled_validations();
   last_bd=bd; last_bp=bp; last_t=now;
  }
@@ -353,6 +354,7 @@ static _Atomic mach_port_t replay_port;
 static void *replay_thread_main(void *unused){
  (void)unused;
  atomic_store(&replay_port,pthread_mach_thread_np(pthread_self()));
+ pthread_setname_np("replay");
  for(;;){
   pthread_mutex_lock(&job_lock); uint64_t ti=now_ns(); while(!job_head) pthread_cond_wait(&job_ready,&job_lock); atomic_fetch_add(&acct_idle_ns,now_ns()-ti);
   struct replay_job *j=job_head; pthread_mutex_unlock(&job_lock);
