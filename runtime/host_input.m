@@ -1,6 +1,7 @@
 // Host input front end (host_input.h). Two sources, merged on the main thread and published with wonder_hid_publish:
 // - on-screen touch controls floating over the landscape game: ZL/L and R/ZR in the top corners, -/+ top centre, left
-//   stick above the D-pad on the left, A/B/X/Y (Switch layout) on the right; translucent, light haptic on press;
+//   stick on the left (no touch D-pad: Wonder accepts the stick wherever it accepts the D-pad), A/B/X/Y (Switch
+//   layout) on the right; translucent, light haptic on press;
 // - GameController pads (Xbox / PlayStation / MFi), mapped by position: south = B, east = A, west = Y, north = X,
 //   as the Switch's own layout (a Nintendo-layout pad therefore keeps its printed labels).
 // Buttons are OR-ed; a pad stick outside its dead zone wins over the touch stick.
@@ -61,8 +62,6 @@ static void publish(void) {
     [self button:@"ZL" mask:WONDER_BTN_ZL round:NO]; [self button:@"L" mask:WONDER_BTN_L round:NO];
     [self button:@"−" mask:WONDER_BTN_MINUS round:YES]; [self button:@"+" mask:WONDER_BTN_PLUS round:YES];
     [self button:@"R" mask:WONDER_BTN_R round:NO]; [self button:@"ZR" mask:WONDER_BTN_ZR round:NO];
-    [self button:@"▲" mask:WONDER_BTN_UP round:NO]; [self button:@"◀" mask:WONDER_BTN_LEFT round:NO];
-    [self button:@"▶" mask:WONDER_BTN_RIGHT round:NO]; [self button:@"▼" mask:WONDER_BTN_DOWN round:NO];
     [self button:@"X" mask:WONDER_BTN_X round:YES]; [self button:@"Y" mask:WONDER_BTN_Y round:YES];
     [self button:@"A" mask:WONDER_BTN_A round:YES]; [self button:@"B" mask:WONDER_BTN_B round:YES];
     return self;
@@ -83,17 +82,12 @@ static void publish(void) {
     CGFloat small = sh;
     [self buttonFor:WONDER_BTN_MINUS].frame = CGRectMake(w / 2 - gap - small, top, small, small);
     [self buttonFor:WONDER_BTN_PLUS].frame = CGRectMake(w / 2 + gap, top, small, small);
-    // Left: stick (middle height) and D-pad (bottom, further in). Right: face buttons at the bottom.
-    CGFloat radius = b * 0.95, d = b * 0.78, f = b * 0.9;
+    // Left: stick (middle height). Right: face buttons at the bottom.
+    CGFloat radius = b * 0.95, f = b * 0.9;
     CGPoint stick = CGPointMake(left + sw / 2 + radius * 0.6, top + 2 * sh + gap * 3 + radius);
     stickBase.frame = CGRectMake(stick.x - radius, stick.y - radius, 2 * radius, 2 * radius); stickBase.layer.cornerRadius = radius;
     CGFloat knob = radius * 0.9; stickKnob.bounds = CGRectMake(0, 0, knob, knob); stickKnob.layer.cornerRadius = knob / 2;
     if (!stickTouch) stickKnob.center = stickBase.center;
-    CGPoint dpad = CGPointMake(stick.x + radius + 1.2 * d, bottom - 1.5 * d);
-    [self buttonFor:WONDER_BTN_UP].frame = CGRectMake(dpad.x - d / 2, dpad.y - 1.5 * d, d, d);
-    [self buttonFor:WONDER_BTN_DOWN].frame = CGRectMake(dpad.x - d / 2, dpad.y + 0.5 * d, d, d);
-    [self buttonFor:WONDER_BTN_LEFT].frame = CGRectMake(dpad.x - 1.5 * d, dpad.y - d / 2, d, d);
-    [self buttonFor:WONDER_BTN_RIGHT].frame = CGRectMake(dpad.x + 0.5 * d, dpad.y - d / 2, d, d);
     CGPoint face = CGPointMake(right - 1.5 * f, bottom - 1.5 * f);
     [self buttonFor:WONDER_BTN_X].frame = CGRectMake(face.x - f / 2, face.y - 1.5 * f, f, f);
     [self buttonFor:WONDER_BTN_B].frame = CGRectMake(face.x - f / 2, face.y + 0.5 * f, f, f);
