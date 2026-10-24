@@ -270,7 +270,8 @@ int wonder_host_present(void *texture,const int crop[4],int interval){
  {  // on-screen frame rate (fps_meter.h; LoaderProbe.m shows it)
   static struct wonder_fps_meter meter; int fps=wonder_fps_meter_present(&meter,CACurrentMediaTime()); if(fps>=0) wonder_fps_publish(fps);
  }
- static unsigned presents; if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
+ static unsigned presents; { extern void wonder_host_draw_frame_mark(unsigned); wonder_host_draw_frame_mark(presents+1); }   // WONDER_PASS_TRACE
+ if(++presents%300==0){   // memory evidence: iOS stops the app at the high watermark (round95: 2098 MB)
   task_vm_info_data_t vm; mach_msg_type_number_t n=TASK_VM_INFO_COUNT; uint64_t footprint=task_info(mach_task_self(),TASK_VM_INFO,(task_info_t)&vm,&n)==KERN_SUCCESS?vm.phys_footprint:0;
   pthread_mutex_lock(&replay_mutex); unsigned targets=wonder_storage_count(); pthread_mutex_unlock(&replay_mutex);
   if(presents%1800==0){   // every ~30 s: guest threads blocked >= 5 s (a stalled load names its waiter)

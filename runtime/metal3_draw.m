@@ -744,9 +744,45 @@ enum { CLOSE_TARGETS, CLOSE_SAMPLED, CLOSE_SELF, CLOSE_STORAGE, CLOSE_CLEAR, CLO
 static unsigned close_counts[CLOSE_REASONS], close_single[CLOSE_REASONS], copy_dynamic, copy_past, copy_stream;
 static void batch_close_for(int reason);
 static void batch_close(void) { batch_close_for(CLOSE_FLUSH); }
+// round244 diagnostic, WONDER_PASS_TRACE=1: every 1800 presents one whole frame's passes and clears, in order, as
+// PASS_TRACE lines: close reason, draw count, attachments and sampled textures as per-frame ids (T<n>, size and Metal
+// pixel format on first sight), the first draw's shader keys. Shows which targets the single-draw passes write and
+// whether later passes sample them.
+static int pass_trace = -1, pass_tracing; static unsigned pass_trace_frame, pass_trace_n; static NSMutableArray *pass_trace_ids; static char batch_key[40];
+static const char *const close_names[CLOSE_REASONS] = {"targets", "sampled", "self", "storage", "clear", "work", "flush"};
+static void trace_tex(char *out, size_t size, size_t *at, const char *label, id<MTLTexture> t, NSUInteger level, NSUInteger slice) {
+    if (!t) return;
+    id<MTLTexture> r = texture_root(t); NSUInteger k = [pass_trace_ids indexOfObjectIdenticalTo:r]; int first = k == NSNotFound;
+    if (first) { k = pass_trace_ids.count; [pass_trace_ids addObject:r]; }
+    *at += (size_t)snprintf(out + *at, size > *at ? size - *at : 0, " %s=T%lu", label, (unsigned long)k);
+    if (level || slice) *at += (size_t)snprintf(out + *at, size > *at ? size - *at : 0, "[l%lu s%lu]", (unsigned long)level, (unsigned long)slice);
+    if (first) *at += (size_t)snprintf(out + *at, size > *at ? size - *at : 0, "(%lux%lu f%lu%s)", (unsigned long)r.width, (unsigned long)r.height, (unsigned long)r.pixelFormat,
+                                       r.textureType == MTLTextureType2D ? "" : r.textureType == MTLTextureType2DArray ? " array" : r.textureType == MTLTextureTypeCube ? " cube" : " other");
+}
+static void trace_op(const char *kind, MTLRenderPassDescriptor *p, NSUInteger draws, NSData *reads) {
+    char line[2048]; size_t at = (size_t)snprintf(line, sizeof line, "PASS_TRACE frame=%u #%u %s", pass_trace_frame, pass_trace_n++, kind);
+    if (draws) at += (size_t)snprintf(line + at, sizeof line - at, " draws=%lu", (unsigned long)draws);
+    for (int i = 0; i < 8; i++) { char l[4]; snprintf(l, sizeof l, "c%d", i); trace_tex(line, sizeof line, &at, l, p.colorAttachments[i].texture, p.colorAttachments[i].level, p.colorAttachments[i].slice); }
+    trace_tex(line, sizeof line, &at, "z", p.depthAttachment.texture, p.depthAttachment.level, p.depthAttachment.slice);
+    if (p.stencilAttachment.texture && p.stencilAttachment.texture != p.depthAttachment.texture) trace_tex(line, sizeof line, &at, "s", p.stencilAttachment.texture, p.stencilAttachment.level, p.stencilAttachment.slice);
+    const uintptr_t *r = reads.bytes; NSUInteger n = reads.length / sizeof *r;
+    for (NSUInteger i = 0; i < n; i++) trace_tex(line, sizeof line, &at, "reads", (__bridge id<MTLTexture>)(void *)r[i], 0, 0);
+    if (draws) snprintf(line + at, sizeof line - at, " key=%s", batch_key);
+    fprintf(stderr, "%s\n", line);
+}
+// host_graphics.m, every present: starts and ends the traced frame.
+void wonder_host_draw_frame_mark(unsigned presents) {
+    if (pass_trace < 0) { const char *e = getenv("WONDER_PASS_TRACE"); pass_trace = e && !strcmp(e, "1"); }
+    if (!pass_trace) return;
+    wonder_host_replay_lock();
+    if (pass_tracing) { pass_tracing = 0; fprintf(stderr, "PASS_TRACE frame=%u end ops=%u textures=%lu\n", pass_trace_frame, pass_trace_n, (unsigned long)pass_trace_ids.count); }
+    else if (presents % 1800 == 0) { pass_tracing = 1; pass_trace_frame = presents; pass_trace_n = 0; pass_trace_ids = [NSMutableArray array]; }
+    wonder_host_replay_unlock();
+}
 static void batch_close_for(int reason) {
     if (!batch_pass) return;
     close_counts[reason]++; if (batch_blocks.count == 1) close_single[reason]++;
+    if (pass_tracing) { char k[24]; snprintf(k, sizeof k, "pass(%s)", close_names[reason]); trace_op(k, batch_pass, batch_blocks.count, batch_reads); }
     WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_PASS; q->pass = batch_pass; q->blocks = [batch_blocks copy]; q->buffers = [batch_buffers copy];
     q->copies = batch_ncopies ? [NSData dataWithBytes:batch_copies length:sizeof *batch_copies * (size_t)batch_ncopies] : nil; q->reads = [batch_reads copy];
     batch_pass = nil; [batch_blocks removeAllObjects]; [batch_buffers removeAllObjects]; batch_ncopies = 0; batch_reads.length = 0;
@@ -781,6 +817,7 @@ void wonder_host_draw_update_buffer_locked(id<MTLBuffer> buffer, NSUInteger offs
 }
 void wonder_host_draw_queue_clear_locked(void *render_pass) {
     batch_close_for(CLOSE_CLEAR);
+    if (pass_tracing) trace_op("clear", (__bridge MTLRenderPassDescriptor *)render_pass, 0, nil);
     WonderQueuedOp *q = [WonderQueuedOp new]; q->kind = TBDR_OP_CLEAR; q->pass = (__bridge MTLRenderPassDescriptor *)render_pass; queue_push(q);
 }
 void wonder_host_draw_queue_work_locked(void (^work)(id<MTLCommandBuffer>)) {
@@ -1313,9 +1350,10 @@ int wonder_host_draw(const struct wonder_host_draw *d) {
     else if (draw_batch_open() && (draw_batch_attachment_sampled(textures[0], refl[0]->ntex) || draw_batch_attachment_sampled(textures[1], refl[1]->ntex))) batch_close_for(CLOSE_SAMPLED);
     if (!draw_batch_open() && (draw_batch_attachment_sampled_by(pass, textures[0], refl[0]->ntex) || draw_batch_attachment_sampled_by(pass, textures[1], refl[1]->ntex))) {
         // The draw samples one of its own attachments: a pass of its own, as before batching.
+        snprintf(batch_key, sizeof batch_key, "%s/%s", d->vs_key, d->fs_key);
         draw_batch_begin(pass); draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex); batch_close_for(CLOSE_SELF);
     } else {
-        if (!draw_batch_open()) draw_batch_begin(pass);
+        if (!draw_batch_open()) { snprintf(batch_key, sizeof batch_key, "%s/%s", d->vs_key, d->fs_key); draw_batch_begin(pass); }
         draw_batch_add(copies, ncopies, encode); batch_note_reads(textures[0], refl[0]->ntex); batch_note_reads(textures[1], refl[1]->ntex);
         if (writes) batch_close_for(CLOSE_STORAGE);
     }
